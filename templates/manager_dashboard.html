@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manager Dashboard - Hotel Security System</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-gray-100">
+
+  <!-- Header -->
+  <header class="bg-slate-800 text-white py-4 px-6 shadow-lg">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <i class="fas fa-shield-alt text-2xl"></i>
+        <div>
+          <h1 class="text-xl font-semibold">Grand Palace Hotel</h1>
+          <p class="text-sm text-gray-300">Manager Dashboard</p>
+        </div>
+      </div>
+      
+      <div class="flex items-center gap-4">
+        <span class="text-sm text-gray-300">
+          <i class="far fa-clock mr-1"></i>
+          <span id="currentTime"></span>
+        </span>
+        <div class="flex items-center gap-2 bg-slate-700 px-4 py-2 rounded-lg">
+          <i class="fas fa-user-tie text-blue-400"></i>
+          <span class="font-semibold">Manager: John Smith</span>
+        </div>
+        <a href="/logout" class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg transition-colors">
+          <i class="fas fa-sign-out-alt mr-2"></i>
+          Logout
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <div class="flex">
+    <!-- Sidebar -->
+    <aside class="w-64 bg-white h-screen shadow-lg">
+      <nav class="p-4">
+        <a href="/manager/dashboard" class="flex items-center gap-3 px-4 py-3 bg-blue-50 text-blue-600 rounded-lg mb-2">
+          <i class="fas fa-chart-line w-5"></i>
+          <span class="font-semibold">Dashboard</span>
+        </a>
+        <a href="/manager/cameras" class="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg mb-2">
+          <i class="fas fa-video w-5"></i>
+          <span>My Cameras</span>
+        </a>
+        <a href="/manager/detections" class="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg mb-2">
+          <i class="fas fa-exclamation-triangle w-5"></i>
+          <span>Detections</span>
+        </a>
+        <a href="/manager/reports" class="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg mb-2">
+          <i class="fas fa-file-alt w-5"></i>
+          <span>Reports</span>
+        </a>
+        <a href="/manager/profile" class="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg">
+          <i class="fas fa-user-cog w-5"></i>
+          <span>Profile</span>
+        </a>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 p-8">
+      
+      <!-- Hotel Info Banner -->
+      <div class="bg-gradient-to-r from-blue-600 to-blue-800 rounded-lg shadow-lg p-6 text-white mb-8">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-4">
+            <div class="bg-white/20 p-4 rounded-lg">
+              <i class="fas fa-hotel text-4xl"></i>
+            </div>
+            <div>
+              <h2 class="text-2xl font-bold mb-1">Grand Palace Hotel</h2>
+              <p class="text-blue-100">New York, USA • 5 Star Rating</p>
+            </div>
+          </div>
+          <div class="text-right">
+            <p class="text-sm text-blue-100 mb-1">Your Role</p>
+            <p class="text-xl font-semibold">Hotel Manager</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <!-- Total Cameras -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm mb-1">Total Cameras</p>
+              <p class="text-3xl font-bold text-gray-800">12</p>
+              <p class="text-green-600 text-sm mt-2">
+                <i class="fas fa-check-circle mr-1"></i>
+                11 online
+              </p>
+            </div>
+            <div class="bg-purple-100 p-4 rounded-lg">
+              <i class="fas fa-video text-purple-600 text-3xl"></i>
+            </div>
+          </div>
+        </div>
+
+        <!-- Today's Detections -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm mb-1">Today's Detections</p>
+              <p class="text-3xl font-bold text-gray-800">23</p>
+              <p class="text-orange-600 text-sm mt-2">
+                <i class="fas fa-exclamation-circle mr-1"></i>
+                2 high priority
+              </p>
+            </div>
+            <div class="bg-orange-100 p-4 rounded-lg">
+              <i class="fas fa-bell text-orange-600 text-3xl"></i>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cash Detections -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm mb-1">Cash Transactions</p>
+              <p class="text-3xl font-bold text-gray-800">18</p>
+              <p class="text-green-600 text-sm mt-2">
+                <i class="fas fa-money-bill-wave mr-1"></i>
+                All reviewed
+              </p>
+            </div>
+            <div class="bg-green-100 p-4 rounded-lg">
+              <i class="fas fa-money-bill-wave text-green-600 text-3xl"></i>
+            </div>
+          </div>
+        </div>
+
+        <!-- Incidents -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm mb-1">Incidents</p>
+              <p class="text-3xl font-bold text-gray-800">5</p>
+              <p class="text-red-600 text-sm mt-2">
+                <i class="fas fa-exclamation-triangle mr-1"></i>
+                Needs review
+              </p>
+            </div>
+            <div class="bg-red-100 p-4 rounded-lg">
+              <i class="fas fa-exclamation-triangle text-red-600 text-3xl"></i>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detection Types -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        <!-- Detection by Type -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+          <h3 class="text-lg font-bold text-gray-800 mb-4">
+            <i class="fas fa-chart-pie text-blue-600 mr-2"></i>
+            Detections by Type (Today)
+          </h3>
+          <div class="space-y-3">
+            <a href="/manager/detections?type=cash" class="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition-colors group cursor-pointer">
+              <div class="flex items-center gap-3">
+                <div class="bg-green-100 group-hover:bg-green-200 p-2 rounded-lg transition-colors">
+                  <i class="fas fa-money-bill-wave text-green-600 text-xl"></i>
+                </div>
+                <div>
+                  <p class="font-semibold text-gray-800">Cash Detection</p>
+                  <p class="text-sm text-gray-500">Money transactions</p>
+                </div>
+              </div>
+              <div class="text-right">
+                <p class="text-2xl font-bold text-gray-800">18</p>
+                <i class="fas fa-arrow-right text-gray-400 group-hover:text-blue-600"></i>
+              </div>
+            </a>
+
+            <a href="/manager/detections?type=fire" class="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition-colors group cursor-pointer">
+              <div class="flex items-center gap-3">
+                <div class="bg-red-100 group-hover:bg-red-200 p-2 rounded-lg transition-colors">
+                  <i class="fas fa-fire text-red-600 text-xl"></i>
+                </div>
+                <div>
+                  <p class="font-semibold text-gray-800">Fire Detection</p>
+                  <p class="text-sm text-gray-500">Smoke & flames</p>
+                </div>
+              </div>
+              <div class="text-right">
+                <p class="text-2xl font-bold text-gray-800">0</p>
+                <i class="fas fa-arrow-right text-gray-400 group-hover:text-blue-600"></i>
+              </div>
+            </a>
+
+            <a href="/manager/detections?type=fight" class="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition-colors group cursor-pointer">
+              <div class="flex items-center gap-3">
+                <div class="bg-orange-100 group-hover:bg-orange-200 p-2 rounded-lg transition-colors">
+                  <i class="fas fa-fist-raised text-orange-600 text-xl"></i>
+                </div>
+                <div>
+                  <p class="font-semibold text-gray-800">Fight Detection</p>
+                  <p class="text-sm text-gray-500">Physical altercations</p>
+                </div>
+              </div>
+              <div class="text-right">
+                <p class="text-2xl font-bold text-gray-800">3</p>
+                <i class="fas fa-arrow-right text-gray-400 group-hover:text-blue-600"></i>
+              </div>
+            </a>
+
+            <a href="/manager/detections?type=violence" class="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition-colors group cursor-pointer">
+              <div class="flex items-center gap-3">
+                <div class="bg-purple-100 group-hover:bg-purple-200 p-2 rounded-lg transition-colors">
+                  <i class="fas fa-user-injured text-purple-600 text-xl"></i>
+                </div>
+                <div>
+                  <p class="font-semibold text-gray-800">Violence Detection</p>
+                  <p class="text-sm text-gray-500">Aggressive behavior</p>
+                </div>
+              </div>
+              <div class="text-right">
+                <p class="text-2xl font-bold text-gray-800">2</p>
+                <i class="fas fa-arrow-right text-gray-400 group-hover:text-blue-600"></i>
+              </div>
+            </a>
+          </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+          <h3 class="text-lg font-bold text-gray-800 mb-4">
+            <i class="fas fa-history text-blue-600 mr-2"></i>
+            Recent Activity
+          </h3>
+          <div class="space-y-4">
+            <div class="flex items-start gap-3 pb-3 border-b border-gray-100">
+              <div class="bg-green-100 p-2 rounded-lg">
+                <i class="fas fa-money-bill-wave text-green-600"></i>
+              </div>
+              <div class="flex-1">
+                <p class="text-sm font-semibold text-gray-800">Cash Transaction Detected</p>
+                <p class="text-xs text-gray-500">Camera 1 • Lobby</p>
+                <p class="text-xs text-gray-400 mt-1">5 minutes ago</p>
+              </div>
+              <a href="/manager/detections/123" class="text-blue-600 hover:text-blue-800">
+                <i class="fas fa-arrow-right"></i>
+              </a>
+            </div>
+
+            <div class="flex items-start gap-3 pb-3 border-b border-gray-100">
+              <div class="bg-orange-100 p-2 rounded-lg">
+                <i class="fas fa-fist-raised text-orange-600"></i>
+              </div>
+              <div class="flex-1">
+                <p class="text-sm font-semibold text-gray-800">Fight Detected</p>
+                <p class="text-xs text-gray-500">Camera 5 • Bar Area</p>
+                <p class="text-xs text-gray-400 mt-1">2 hours ago</p>
+              </div>
+              <a href="/manager/detections/122" class="text-blue-600 hover:text-blue-800">
+                <i class="fas fa-arrow-right"></i>
+              </a>
+            </div>
+
+            <div class="flex items-start gap-3 pb-3">
+              <div class="bg-green-100 p-2 rounded-lg">
+                <i class="fas fa-money-bill-wave text-green-600"></i>
+              </div>
+              <div class="flex-1">
+                <p class="text-sm font-semibold text-gray-800">Cash Transaction Detected</p>
+                <p class="text-xs text-gray-500">Camera 3 • Reception</p>
+                <p class="text-xs text-gray-400 mt-1">3 hours ago</p>
+              </div>
+              <a href="/manager/detections/121" class="text-blue-600 hover:text-blue-800">
+                <i class="fas fa-arrow-right"></i>
+              </a>
+            </div>
+          </div>
+          <a href="/manager/detections" class="block text-center text-blue-600 hover:text-blue-800 text-sm font-semibold mt-4 pt-4 border-t border-gray-100">
+            View All Detections <i class="fas fa-arrow-right ml-1"></i>
+          </a>
+        </div>
+      </div>
+
+      <!-- Camera Status -->
+      <div class="bg-white rounded-lg shadow-md p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold text-gray-800">
+            <i class="fas fa-video text-purple-600 mr-2"></i>
+            Camera Status
+          </h3>
+          <a href="/manager/cameras" class="text-blue-600 hover:text-blue-800 text-sm font-semibold">
+            Manage Cameras <i class="fas fa-arrow-right ml-1"></i>
+          </a>
+        </div>
+        
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div class="border border-gray-200 rounded-lg p-4 hover:border-blue-500 transition-colors cursor-pointer">
+            <div class="flex items-center justify-between mb-2">
+              <span class="font-semibold text-gray-800">Camera 1</span>
+              <span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs">Online</span>
+            </div>
+            <p class="text-sm text-gray-500">Lobby</p>
+          </div>
+
+          <div class="border border-gray-200 rounded-lg p-4 hover:border-blue-500 transition-colors cursor-pointer">
+            <div class="flex items-center justify-between mb-2">
+              <span class="font-semibold text-gray-800">Camera 2</span>
+              <span class="bg-red-100 text-red-800 px-2 py-1 rounded text-xs">Offline</span>
+            </div>
+            <p class="text-sm text-gray-500">Parking</p>
+          </div>
+
+          <div class="border border-gray-200 rounded-lg p-4 hover:border-blue-500 transition-colors cursor-pointer">
+            <div class="flex items-center justify-between mb-2">
+              <span class="font-semibold text-gray-800">Camera 3</span>
+              <span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs">Online</span>
+            </div>
+            <p class="text-sm text-gray-500">Reception</p>
+          </div>
+
+          <div class="border border-gray-200 rounded-lg p-4 hover:border-blue-500 transition-colors cursor-pointer">
+            <div class="flex items-center justify-between mb-2">
+              <span class="font-semibold text-gray-800">Camera 4</span>
+              <span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs">Online</span>
+            </div>
+            <p class="text-sm text-gray-500">Restaurant</p>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script>
+    // Update time
+    function updateTime() {
+      const now = new Date();
+      document.getElementById('currentTime').textContent = now.toLocaleString('en-US');
+    }
+    updateTime();
+    setInterval(updateTime, 1000);
+  </script>
+
+</body>
+</html>
+

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hotels Management - Hotel Security System</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-gray-100">
+
+  <!-- Header -->
+  <header class="bg-slate-800 text-white py-4 px-6 shadow-lg">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <i class="fas fa-shield-alt text-2xl"></i>
+        <div>
+          <h1 class="text-xl font-semibold">Hotel Security System</h1>
+          <p class="text-sm text-gray-300">Hotels Management</p>
+        </div>
+      </div>
+      
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2 bg-slate-700 px-4 py-2 rounded-lg">
+          <i class="fas fa-crown text-yellow-400"></i>
+          <span class="font-semibold">Admin</span>
+        </div>
+        <a href="/logout" class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg transition-colors">
+          <i class="fas fa-sign-out-alt mr-2"></i>
+          Logout
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <div class="flex">
+    <!-- Sidebar -->
+    <aside class="w-64 bg-white h-screen shadow-lg">
+      <nav class="p-4">
+        <a href="/admin/dashboard" class="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg mb-2">
+          <i class="fas fa-chart-line w-5"></i>
+          <span>Dashboard</span>
+        </a>
+        <a href="/admin/hotels" class="flex items-center gap-3 px-4 py-3 bg-blue-50 text-blue-600 rounded-lg mb-2">
+          <i class="fas fa-hotel w-5"></i>
+          <span class="font-semibold">Hotels</span>
+        </a>
+        <a href="/admin/managers" class="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg mb-2">
+          <i class="fas fa-users w-5"></i>
+          <span>Managers</span>
+        </a>
+        <a href="/admin/cameras" class="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg mb-2">
+          <i class="fas fa-video w-5"></i>
+          <span>Cameras</span>
+        </a>
+        <a href="/admin/detections" class="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg mb-2">
+          <i class="fas fa-exclamation-triangle w-5"></i>
+          <span>All Detections</span>
+        </a>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 p-8">
+      
+      <!-- Page Header -->
+      <div class="flex items-center justify-between mb-8">
+        <div>
+          <h2 class="text-3xl font-bold text-gray-800 mb-2">
+            <i class="fas fa-hotel text-blue-600 mr-2"></i>
+            Hotels Management
+          </h2>
+          <p class="text-gray-600">Manage all registered hotels and their configurations</p>
+        </div>
+        <button onclick="openAddHotelModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-3 rounded-lg transition-colors">
+          <i class="fas fa-plus mr-2"></i>
+          Add New Hotel
+        </button>
+      </div>
+
+      <!-- Filters -->
+      <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-2">Search</label>
+            <input type="text" placeholder="Hotel name or location..." class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-2">Status</label>
+            <select class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option>All Status</option>
+              <option>Active</option>
+              <option>Inactive</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-2">Sort By</label>
+            <select class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option>Newest First</option>
+              <option>Name A-Z</option>
+              <option>Most Cameras</option>
+            </select>
+          </div>
+          <div class="flex items-end">
+            <button class="w-full bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold px-4 py-2 rounded-lg transition-colors">
+              <i class="fas fa-filter mr-2"></i>
+              Apply Filters
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Hotels Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        
+        <!-- Hotel Card 1 -->
+        <div class="bg-white rounded-lg shadow-md hover:shadow-xl transition-shadow overflow-hidden">
+          <div class="relative h-48 bg-gradient-to-br from-blue-500 to-blue-700">
+            <div class="absolute top-4 right-4">
+              <span class="bg-green-500 text-white px-3 py-1 rounded-full text-sm font-semibold">
+                <i class="fas fa-check-circle mr-1"></i>Active
+              </span>
+            </div>
+            <div class="absolute bottom-4 left-4 text-white">
+              <h3 class="text-2xl font-bold mb-1">Grand Palace Hotel</h3>
+              <p class="text-blue-100">
+                <i class="fas fa-map-marker-alt mr-1"></i>
+                New York, USA
+              </p>
+            </div>
+          </div>
+          
+          <div class="p-6">
+            <div class="grid grid-cols-2 gap-4 mb-4">
+              <div>
+                <p class="text-sm text-gray-500 mb-1">Cameras</p>
+                <p class="text-lg font-bold text-gray-800">
+                  <i class="fas fa-video text-purple-600 mr-1"></i>
+                  12
+                </p>
+              </div>
+              <div>
+                <p class="text-sm text-gray-500 mb-1">Manager</p>
+                <p class="text-lg font-bold text-gray-800">
+                  <i class="fas fa-user-tie text-blue-600 mr-1"></i>
+                  John Smith
+                </p>
+              </div>
+            </div>
+
+            <div class="mb-4">
+              <p class="text-sm text-gray-500 mb-1">Today's Detections</p>
+              <div class="flex items-center gap-2">
+                <span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs">
+                  <i class="fas fa-money-bill-wave mr-1"></i>18 Cash
+                </span>
+                <span class="bg-red-100 text-red-800 px-2 py-1 rounded text-xs">
+                  <i class="fas fa-fire mr-1"></i>0 Fire
+                </span>
+                <span class="bg-orange-100 text-orange-800 px-2 py-1 rounded text-xs">
+                  <i class="fas fa-fist-raised mr-1"></i>2 Fight
+                </span>
+              </div>
+            </div>
+
+            <div class="flex gap-2">
+              <a href="/admin/hotels/1" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-center py-2 rounded-lg transition-colors">
+                <i class="fas fa-eye mr-1"></i>View
+              </a>
+              <button onclick="editHotel(1)" class="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg transition-colors">
+                <i class="fas fa-edit mr-1"></i>Edit
+              </button>
+              <button onclick="deleteHotel(1)" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Hotel Card 2 -->
+        <div class="bg-white rounded-lg shadow-md hover:shadow-xl transition-shadow overflow-hidden">
+          <div class="relative h-48 bg-gradient-to-br from-purple-500 to-purple-700">
+            <div class="absolute top-4 right-4">
+              <span class="bg-green-500 text-white px-3 py-1 rounded-full text-sm font-semibold">
+                <i class="fas fa-check-circle mr-1"></i>Active
+              </span>
+            </div>
+            <div class="absolute bottom-4 left-4 text-white">
+              <h3 class="text-2xl font-bold mb-1">Royal Resort</h3>
+              <p class="text-purple-100">
+                <i class="fas fa-map-marker-alt mr-1"></i>
+                Los Angeles, USA
+              </p>
+            </div>
+          </div>
+          
+          <div class="p-6">
+            <div class="grid grid-cols-2 gap-4 mb-4">
+              <div>
+                <p class="text-sm text-gray-500 mb-1">Cameras</p>
+                <p class="text-lg font-bold text-gray-800">
+                  <i class="fas fa-video text-purple-600 mr-1"></i>
+                  8
+                </p>
+              </div>
+              <div>
+                <p class="text-sm text-gray-500 mb-1">Manager</p>
+                <p class="text-lg font-bold text-gray-800">
+                  <i class="fas fa-user-tie text-blue-600 mr-1"></i>
+                  Jane Doe
+                </p>
+              </div>
+            </div>
+
+            <div class="mb-4">
+              <p class="text-sm text-gray-500 mb-1">Today's Detections</p>
+              <div class="flex items-center gap-2">
+                <span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs">
+                  <i class="fas fa-money-bill-wave mr-1"></i>12 Cash
+                </span>
+                <span class="bg-red-100 text-red-800 px-2 py-1 rounded text-xs">
+                  <i class="fas fa-fire mr-1"></i>0 Fire
+                </span>
+                <span class="bg-orange-100 text-orange-800 px-2 py-1 rounded text-xs">
+                  <i class="fas fa-fist-raised mr-1"></i>1 Fight
+                </span>
+              </div>
+            </div>
+
+            <div class="flex gap-2">
+              <a href="/admin/hotels/2" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-center py-2 rounded-lg transition-colors">
+                <i class="fas fa-eye mr-1"></i>View
+              </a>
+              <button onclick="editHotel(2)" class="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg transition-colors">
+                <i class="fas fa-edit mr-1"></i>Edit
+              </button>
+              <button onclick="deleteHotel(2)" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add more hotel cards as needed -->
+
+      </div>
+
+    </main>
+  </div>
+
+  <script>
+    function openAddHotelModal() {
+      alert('Add Hotel Modal (to be implemented)');
+    }
+
+    function editHotel(id) {
+      alert('Edit Hotel ID: ' + id + ' (to be implemented)');
+    }
+
+    function deleteHotel(id) {
+      if (confirm('Are you sure you want to delete this hotel?')) {
+        alert('Delete Hotel ID: ' + id + ' (to be implemented)');
+      }
+    }
+  </script>
+
+</body>
+</html>
+
