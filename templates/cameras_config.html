@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Camera Configuration - Hotel Security System</title>
+  <title>카메라 설정 - 호텔 보안 시스템</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
@@ -15,15 +15,15 @@
       <div class="flex items-center gap-4">
         <i class="fas fa-shield-alt text-2xl"></i>
         <div>
-          <h1 class="text-xl font-semibold">Grand Palace Hotel</h1>
-          <p class="text-sm text-gray-300">Camera Configuration</p>
+          <h1 class="text-xl font-semibold">그랜드 팰리스 호텔</h1>
+          <p class="text-sm text-gray-300">카메라 설정</p>
         </div>
       </div>
       
       <div class="flex items-center gap-4">
         <a href="/manager/dashboard" class="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg transition-colors">
           <i class="fas fa-arrow-left mr-2"></i>
-          Back to Dashboard
+          대시보드로 돌아가기
         </a>
       </div>
     </div>
@@ -35,36 +35,36 @@
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
       <h2 class="text-2xl font-bold text-gray-800 mb-4">
         <i class="fas fa-video text-purple-600 mr-2"></i>
-        Select Camera
+        카메라 선택
       </h2>
       
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
         <button onclick="selectCamera(1)" class="camera-btn bg-blue-50 border-2 border-blue-500 rounded-lg p-4 hover:bg-blue-100 transition-colors">
           <i class="fas fa-video text-blue-600 text-2xl mb-2"></i>
-          <p class="font-semibold text-gray-800">Camera 1</p>
-          <p class="text-sm text-gray-500">Lobby</p>
-          <span class="inline-block bg-green-500 text-white px-2 py-1 rounded-full text-xs mt-2">Online</span>
+          <p class="font-semibold text-gray-800">카메라 1</p>
+          <p class="text-sm text-gray-500">로비</p>
+          <span class="inline-block bg-green-500 text-white px-2 py-1 rounded-full text-xs mt-2">온라인</span>
         </button>
 
         <button onclick="selectCamera(2)" class="camera-btn border-2 border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
           <i class="fas fa-video text-gray-600 text-2xl mb-2"></i>
-          <p class="font-semibold text-gray-800">Camera 2</p>
-          <p class="text-sm text-gray-500">Parking</p>
-          <span class="inline-block bg-red-500 text-white px-2 py-1 rounded-full text-xs mt-2">Offline</span>
+          <p class="font-semibold text-gray-800">카메라 2</p>
+          <p class="text-sm text-gray-500">주차장</p>
+          <span class="inline-block bg-red-500 text-white px-2 py-1 rounded-full text-xs mt-2">오프라인</span>
         </button>
 
         <button onclick="selectCamera(3)" class="camera-btn border-2 border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
           <i class="fas fa-video text-gray-600 text-2xl mb-2"></i>
-          <p class="font-semibold text-gray-800">Camera 3</p>
-          <p class="text-sm text-gray-500">Reception</p>
-          <span class="inline-block bg-green-500 text-white px-2 py-1 rounded-full text-xs mt-2">Online</span>
+          <p class="font-semibold text-gray-800">카메라 3</p>
+          <p class="text-sm text-gray-500">프론트</p>
+          <span class="inline-block bg-green-500 text-white px-2 py-1 rounded-full text-xs mt-2">온라인</span>
         </button>
 
         <button onclick="selectCamera(4)" class="camera-btn border-2 border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
           <i class="fas fa-video text-gray-600 text-2xl mb-2"></i>
-          <p class="font-semibold text-gray-800">Camera 4</p>
-          <p class="text-sm text-gray-500">Restaurant</p>
-          <span class="inline-block bg-green-500 text-white px-2 py-1 rounded-full text-xs mt-2">Online</span>
+          <p class="font-semibold text-gray-800">카메라 4</p>
+          <p class="text-sm text-gray-500">레스토랑</p>
+          <span class="inline-block bg-green-500 text-white px-2 py-1 rounded-full text-xs mt-2">온라인</span>
         </button>
       </div>
     </div>
@@ -74,9 +74,9 @@
       <div class="flex items-center justify-between mb-6">
         <h2 class="text-2xl font-bold text-gray-800">
           <i class="fas fa-cog text-blue-600 mr-2"></i>
-          Camera 1 Configuration
+          카메라 1 설정
         </h2>
-        <span class="text-sm text-gray-500">Last updated: 2 hours ago</span>
+        <span class="text-sm text-gray-500">마지막 업데이트: 2시간 전</span>
       </div>
 
       <form>
@@ -84,18 +84,18 @@
         <div class="mb-8">
           <h3 class="text-lg font-semibold text-gray-800 mb-4 pb-2 border-b">
             <i class="fas fa-info-circle text-blue-600 mr-2"></i>
-            Basic Settings
+            기본 설정
           </h3>
           
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-2">Camera Name</label>
-              <input type="text" value="Camera 1" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <label class="block text-sm font-semibold text-gray-700 mb-2">카메라 이름</label>
+              <input type="text" value="카메라 1" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
             
             <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-2">Location</label>
-              <input type="text" value="Lobby" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <label class="block text-sm font-semibold text-gray-700 mb-2">위치</label>
+              <input type="text" value="로비" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
           </div>
         </div>
@@ -104,7 +104,7 @@
         <div class="mb-8">
           <h3 class="text-lg font-semibold text-gray-800 mb-4 pb-2 border-b">
             <i class="fas fa-toggle-on text-green-600 mr-2"></i>
-            Detection Types
+            감지 유형
           </h3>
           
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -114,8 +114,8 @@
                   <i class="fas fa-money-bill-wave text-green-600 text-xl"></i>
                 </div>
                 <div>
-                  <p class="font-semibold text-gray-800">Cash Detection</p>
-                  <p class="text-sm text-gray-500">Detect money transactions</p>
+                  <p class="font-semibold text-gray-800">현금 감지</p>
+                  <p class="text-sm text-gray-500">현금 거래 감지</p>
                 </div>
               </div>
               <input type="checkbox" checked class="w-5 h-5 text-blue-600">
@@ -127,8 +127,8 @@
                   <i class="fas fa-fire text-red-600 text-xl"></i>
                 </div>
                 <div>
-                  <p class="font-semibold text-gray-800">Fire Detection</p>
-                  <p class="text-sm text-gray-500">Detect smoke & flames</p>
+                  <p class="font-semibold text-gray-800">화재 감지</p>
+                  <p class="text-sm text-gray-500">연기 및 불꽃 감지</p>
                 </div>
               </div>
               <input type="checkbox" checked class="w-5 h-5 text-blue-600">
@@ -140,8 +140,8 @@
                   <i class="fas fa-fist-raised text-orange-600 text-xl"></i>
                 </div>
                 <div>
-                  <p class="font-semibold text-gray-800">Fight Detection</p>
-                  <p class="text-sm text-gray-500">Detect physical altercations</p>
+                  <p class="font-semibold text-gray-800">싸움 감지</p>
+                  <p class="text-sm text-gray-500">물리적 충돌 감지</p>
                 </div>
               </div>
               <input type="checkbox" class="w-5 h-5 text-blue-600">
@@ -153,8 +153,8 @@
                   <i class="fas fa-user-injured text-purple-600 text-xl"></i>
                 </div>
                 <div>
-                  <p class="font-semibold text-gray-800">Violence Detection</p>
-                  <p class="text-sm text-gray-500">Detect aggressive behavior</p>
+                  <p class="font-semibold text-gray-800">폭력 감지</p>
+                  <p class="text-sm text-gray-500">공격적 행동 감지</p>
                 </div>
               </div>
               <input type="checkbox" class="w-5 h-5 text-blue-600">
@@ -166,44 +166,44 @@
         <div class="mb-8">
           <h3 class="text-lg font-semibold text-gray-800 mb-4 pb-2 border-b">
             <i class="fas fa-sliders-h text-blue-600 mr-2"></i>
-            Cash Detection Parameters
+            현금 감지 매개변수
           </h3>
           
           <div class="space-y-6">
             <div>
               <div class="flex items-center justify-between mb-2">
-                <label class="text-sm font-semibold text-gray-700">Hand Touch Distance (pixels)</label>
+                <label class="text-sm font-semibold text-gray-700">손 근접 거리 (픽셀)</label>
                 <span class="text-sm font-bold text-blue-600" id="distanceValue">100</span>
               </div>
               <input type="range" min="50" max="150" value="100" class="w-full" oninput="document.getElementById('distanceValue').textContent = this.value">
-              <p class="text-xs text-gray-500 mt-1">Distance threshold for detecting hand proximity</p>
+              <p class="text-xs text-gray-500 mt-1">손 근접 감지 임계값</p>
             </div>
 
             <div>
               <div class="flex items-center justify-between mb-2">
-                <label class="text-sm font-semibold text-gray-700">Pose Confidence</label>
+                <label class="text-sm font-semibold text-gray-700">포즈 신뢰도</label>
                 <span class="text-sm font-bold text-blue-600" id="confidenceValue">0.5</span>
               </div>
               <input type="range" min="0.1" max="1.0" step="0.1" value="0.5" class="w-full" oninput="document.getElementById('confidenceValue').textContent = this.value">
-              <p class="text-xs text-gray-500 mt-1">Minimum confidence for person detection</p>
+              <p class="text-xs text-gray-500 mt-1">사람 감지를 위한 최소 신뢰도</p>
             </div>
 
             <div>
               <div class="flex items-center justify-between mb-2">
-                <label class="text-sm font-semibold text-gray-700">Minimum Transaction Frames</label>
+                <label class="text-sm font-semibold text-gray-700">최소 거래 프레임 수</label>
                 <span class="text-sm font-bold text-blue-600" id="framesValue">1</span>
               </div>
               <input type="range" min="1" max="10" value="1" class="w-full" oninput="document.getElementById('framesValue').textContent = this.value">
-              <p class="text-xs text-gray-500 mt-1">Minimum frames for valid transaction</p>
+              <p class="text-xs text-gray-500 mt-1">유효한 거래를 위한 최소 프레임 수</p>
             </div>
 
             <div>
               <div class="flex items-center justify-between mb-2">
-                <label class="text-sm font-semibold text-gray-700">Cashier Overlap Threshold</label>
+                <label class="text-sm font-semibold text-gray-700">계산대 영역 중첩 임계값</label>
                 <span class="text-sm font-bold text-blue-600" id="overlapValue">0.7</span>
               </div>
               <input type="range" min="0.1" max="1.0" step="0.1" value="0.7" class="w-full" oninput="document.getElementById('overlapValue').textContent = this.value">
-              <p class="text-xs text-gray-500 mt-1">Percentage of person in cashier zone (70%)</p>
+              <p class="text-xs text-gray-500 mt-1">계산대 영역 내 사람의 비율 (70%)</p>
             </div>
           </div>
         </div>
@@ -212,38 +212,38 @@
         <div class="mb-8">
           <h3 class="text-lg font-semibold text-gray-800 mb-4 pb-2 border-b">
             <i class="fas fa-draw-polygon text-purple-600 mr-2"></i>
-            Cashier Zone Definition
+            계산대 영역 설정
           </h3>
           
           <div class="bg-blue-50 border-2 border-blue-200 rounded-lg p-4 mb-4">
             <p class="text-sm text-blue-800 mb-2">
               <i class="fas fa-info-circle mr-2"></i>
-              Define the rectangular area where cashiers are located
+              계산원이 위치한 사각형 영역을 정의하세요
             </p>
           </div>
 
           <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-2">X Position</label>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">X 위치</label>
               <input type="number" value="0" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
             <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-2">Y Position</label>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">Y 위치</label>
               <input type="number" value="300" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
             <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-2">Width</label>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">너비</label>
               <input type="number" value="900" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
             <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-2">Height</label>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">높이</label>
               <input type="number" value="430" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
           </div>
 
           <button type="button" class="mt-4 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors">
             <i class="fas fa-mouse-pointer mr-2"></i>
-            Visual Zone Editor
+            시각적 영역 편집기
           </button>
         </div>
 
@@ -251,15 +251,15 @@
         <div class="flex items-center justify-end gap-4 pt-6 border-t">
           <button type="button" class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">
             <i class="fas fa-times mr-2"></i>
-            Cancel
+            취소
           </button>
           <button type="button" class="px-6 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors">
             <i class="fas fa-undo mr-2"></i>
-            Reset to Default
+            기본값으로 초기화
           </button>
           <button type="submit" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
             <i class="fas fa-save mr-2"></i>
-            Save Configuration
+            설정 저장
           </button>
         </div>
       </form>
@@ -269,11 +269,10 @@
 
   <script>
     function selectCamera(id) {
-      alert('Load configuration for Camera ' + id);
+      alert('카메라 ' + id + ' 설정 불러오기');
       // In real implementation, this would load the camera config via AJAX
     }
   </script>
 
 </body>
 </html>
-
