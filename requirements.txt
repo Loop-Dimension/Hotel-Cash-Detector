@@ -3,4 +3,5 @@ ultralytics
 opencv-python
 numpy
 Werkzeug
+waitress
 

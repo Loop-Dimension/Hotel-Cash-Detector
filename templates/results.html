@@ -109,10 +109,23 @@
                     <i class="fas fa-stopwatch mr-1"></i>
                     Duration: {{ clip.duration }}s ({{ clip.frames }} frames)
                   </p>
+                  {% if clip.merged_count and clip.merged_count > 1 %}
+                  <p class="text-xs text-blue-600 mt-1">
+                    <i class="fas fa-layer-group mr-1"></i>
+                    {{ clip.merged_count }} detections merged
+                  </p>
+                  {% endif %}
                 </div>
-                <span class="bg-green-100 text-green-800 text-xs font-semibold px-2 py-1 rounded">
-                  Detected
-                </span>
+                <div class="flex flex-col gap-1">
+                  <span class="bg-green-100 text-green-800 text-xs font-semibold px-2 py-1 rounded">
+                    Detected
+                  </span>
+                  {% if clip.merged_count and clip.merged_count > 1 %}
+                  <span class="bg-blue-100 text-blue-600 text-xs font-semibold px-2 py-1 rounded">
+                    Merged
+                  </span>
+                  {% endif %}
+                </div>
               </div>
 
               <div class="flex gap-2">

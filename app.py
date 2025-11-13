@@ -64,6 +64,17 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
 
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    """Handle file too large errors"""
+    max_size = APP_CONFIG.get('MAX_FILE_SIZE_MB', 500)
+    return jsonify({
+        'error': 'File too large',
+        'message': f'파일 크기가 너무 큽니다. 최대 허용 크기: {max_size}MB',
+        'max_size_mb': max_size
+    }), 413
+
+
 class TransactionClipExtractor:
     """Extract clips around detected transactions using the EXACT logic from main.py"""
     
@@ -83,10 +94,12 @@ class TransactionClipExtractor:
         # Clip extraction settings from config
         self.SECONDS_BEFORE = config_dict.get('SECONDS_BEFORE_TRANSACTION', 2)
         self.SECONDS_AFTER = config_dict.get('SECONDS_AFTER_TRANSACTION', 2)
+        self.MERGE_THRESHOLD = config_dict.get('MERGE_CLIPS_WITHIN_SECONDS', 0.5)
         
         print(f"🤖 Model: {self.config.POSE_MODEL}")
         print(f"👋 Hand touch distance: {self.config.HAND_TOUCH_DISTANCE}px")
         print(f"⏱️  Clip padding: {self.SECONDS_BEFORE}s before, {self.SECONDS_AFTER}s after")
+        print(f"🔗 Merge clips within: {self.MERGE_THRESHOLD}s")
         if self.config.CASHIER_ZONE:
             print(f"🎯 Cashier Zone: {self.config.CASHIER_ZONE}")
         print()
@@ -198,8 +211,56 @@ class TransactionClipExtractor:
         merged.append(current)
         return merged
     
+    def _merge_overlapping_clips(self, transactions, fps):
+        """Merge transactions that would create overlapping clips"""
+        if not transactions:
+            return []
+        
+        # Add margins and create clip ranges
+        clip_ranges = []
+        for trans in transactions:
+            start_frame = max(0, trans['start_frame'] - int(self.SECONDS_BEFORE * fps))
+            end_frame = trans['end_frame'] + int(self.SECONDS_AFTER * fps)
+            clip_ranges.append({
+                'start_frame': start_frame,
+                'end_frame': end_frame,
+                'start_time': start_frame / fps,
+                'end_time': end_frame / fps,
+                'p1_id': trans['p1_id'],
+                'p2_id': trans['p2_id'],
+                'hand_type': trans.get('hand_type', 'N/A'),
+                'transactions': [trans]  # Track which transactions are in this clip
+            })
+        
+        # Sort by start frame
+        clip_ranges.sort(key=lambda x: x['start_frame'])
+        
+        # Merge overlapping ranges
+        merged = []
+        current = clip_ranges[0]
+        
+        for clip in clip_ranges[1:]:
+            # Check if clips overlap or are very close
+            overlap_threshold = int(self.MERGE_THRESHOLD * fps)
+            
+            if clip['start_frame'] <= current['end_frame'] + overlap_threshold:
+                # Merge: extend current clip
+                current['end_frame'] = max(current['end_frame'], clip['end_frame'])
+                current['end_time'] = current['end_frame'] / fps
+                current['transactions'].extend(clip['transactions'])
+                print(f"  🔗 Merging overlapping clips: {current['start_time']:.1f}s - {current['end_time']:.1f}s")
+            else:
+                # No overlap: save current and start new
+                merged.append(current)
+                current = clip
+        
+        merged.append(current)
+        
+        print(f"  ✅ Merged {len(clip_ranges)} detections into {len(merged)} clips")
+        return merged
+    
     def extract_clips(self, video_path, transactions, fps, output_folder, progress_callback=None):
-        """Extract video clips around transactions"""
+        """Extract video clips around transactions (merging overlapping ones)"""
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return []
@@ -207,16 +268,27 @@ class TransactionClipExtractor:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
+        # Merge overlapping clips first
+        merged_clips = self._merge_overlapping_clips(transactions, fps)
+        
         clips = []
         
-        for idx, trans in enumerate(transactions):
-            # Calculate clip boundaries
-            start_frame = max(0, trans['start_frame'] - int(self.SECONDS_BEFORE * fps))
-            end_frame = trans['end_frame'] + int(self.SECONDS_AFTER * fps)
+        for idx, clip_info in enumerate(merged_clips):
+            start_frame = clip_info['start_frame']
+            end_frame = clip_info['end_frame']
+            start_time = clip_info['start_time']
+            end_time = clip_info['end_time']
             
             # Create output path
             video_name = Path(video_path).stem
-            clip_name = f"{video_name}_transaction_{idx+1}_P{trans['p1_id']}_P{trans['p2_id']}_{int(trans['start_time'])}s.mp4"
+            
+            # If multiple transactions merged, show range
+            if len(clip_info['transactions']) > 1:
+                clip_name = f"{video_name}_transaction_{idx+1}_merged_{len(clip_info['transactions'])}txns_{int(start_time)}s.mp4"
+            else:
+                trans = clip_info['transactions'][0]
+                clip_name = f"{video_name}_transaction_{idx+1}_P{trans['p1_id']}_P{trans['p2_id']}_{int(start_time)}s.mp4"
+            
             clip_path = os.path.join(output_folder, clip_name)
             
             # Extract clip
@@ -238,19 +310,21 @@ class TransactionClipExtractor:
             clips.append({
                 'filename': clip_name,
                 'path': clip_path,
-                'start_time': round(trans['start_time'], 2),
-                'end_time': round(trans['end_time'], 2),
-                'duration': round(trans['end_time'] - trans['start_time'], 2),
-                'p1_id': trans['p1_id'],
-                'p2_id': trans['p2_id'],
-                'hand_type': trans.get('hand_type', 'N/A'),
-                'frames': frames_written
+                'start_time': round(start_time, 2),
+                'end_time': round(end_time, 2),
+                'duration': round(end_time - start_time, 2),
+                'p1_id': clip_info['p1_id'],
+                'p2_id': clip_info['p2_id'],
+                'hand_type': clip_info['hand_type'],
+                'frames': frames_written,
+                'merged_count': len(clip_info['transactions'])  # How many transactions merged
             })
             
             if progress_callback:
-                progress_callback(int((idx + 1) / len(transactions) * 100))
+                progress_callback(int((idx + 1) / len(merged_clips) * 100))
             
-            print(f"  📎 Clip {idx+1}: {clip_name} ({frames_written} frames)")
+            merge_info = f" (merged {len(clip_info['transactions'])} detections)" if len(clip_info['transactions']) > 1 else ""
+            print(f"  📎 Clip {idx+1}: {clip_name} ({frames_written} frames){merge_info}")
         
         cap.release()
         return clips
@@ -383,6 +457,8 @@ if __name__ == '__main__':
     print("="*70)
     print("Using EXACT same detection logic as main.py")
     print("Open your browser: http://localhost:5000")
+    print(f"📏 Max file size: {APP_CONFIG.get('MAX_FILE_SIZE_MB', 2048)}MB")
     print("="*70 + "\n")
     
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Run with threaded=True for better handling of large uploads
+    app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
