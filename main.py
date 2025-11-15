@@ -31,6 +31,17 @@ class SimpleHandTouchConfig:
     DRAW_CONNECTIONS = True
     DEBUG_MODE = True  # Show all distances even when not detecting
     
+    # Cash Color Detection (Korean Won Bills)
+    DETECT_CASH_COLOR = True  # Enable color-based cash detection
+    CASH_COLOR_THRESHOLD = 200  # Minimum pixels of cash color to confirm money
+    # Color ranges for Korean currency (HSV format)
+    CASH_COLORS = {
+        '50000_won': {'lower': [15, 100, 100], 'upper': [30, 255, 255], 'name': '50,000원 (Yellow)'},
+        '10000_won': {'lower': [40, 50, 50], 'upper': [80, 255, 255], 'name': '10,000원 (Green)'},
+        '5000_won': {'lower': [0, 100, 100], 'upper': [15, 255, 255], 'name': '5,000원 (Red/Pink)'},
+        '1000_won': {'lower': [100, 50, 50], 'upper': [130, 255, 255], 'name': '1,000원 (Blue)'}
+    }
+    
     # Camera calibration settings
     CAMERA_NAME = "default"
     CALIBRATION_SCALE = 1.0  # Pixel to real-world distance scale
@@ -108,7 +119,9 @@ class SimpleHandTouchDetector:
         self.stats = {
             'frames': 0,
             'transactions': 0,
-            'confirmed_transactions': 0
+            'confirmed_transactions': 0,
+            'cash_detections': 0,
+            'cash_types': {}  # Count each type of bill detected
         }
         
         # Temporal tracking - track transactions over time
@@ -289,6 +302,18 @@ class SimpleHandTouchDetector:
                     if c_hand and n_hand:
                         dist = self._distance(c_hand, n_hand)
                         if dist <= self.config.HAND_TOUCH_DISTANCE and dist < closest_distance:
+                            # Check for cash color between hands (with debug visualization)
+                            cash_detected, cash_type, cash_bbox, pixel_count = self._detect_cash_color(frame, c_hand, n_hand, draw_debug=True)
+                            
+                            # Debug: Print when hands are close but NO cash detected
+                            if self.config.DETECT_CASH_COLOR and not cash_detected and self.config.DEBUG_MODE:
+                                if dist < closest_distance:  # Only print for closest pair
+                                    print(f"  ⚠️  Hands close ({dist:.0f}px) but NO CASH detected - P{cashier['id']}↔P{customer['id']} ({hand_type})")
+                            
+                            # Only confirm if BOTH hand proximity AND cash color detected
+                            if self.config.DETECT_CASH_COLOR and not cash_detected:
+                                continue  # Skip this if cash color not found
+                            
                             closest_distance = dist
                             closest_transaction = {
                                 'p1_id': cashier['id'],
@@ -297,7 +322,11 @@ class SimpleHandTouchDetector:
                                 'p2_hand': n_hand,
                                 'hand_type': hand_type,
                                 'distance': dist,
-                                'cashier_customer_pair': f"C{cashier['id']}-P{customer['id']}"
+                                'cashier_customer_pair': f"C{cashier['id']}-P{customer['id']}",
+                                'cash_detected': cash_detected,
+                                'cash_type': cash_type,
+                                'cash_bbox': cash_bbox,
+                                'cash_pixels': pixel_count
                             }
                 
                 # Add transaction if found for this pair
@@ -327,6 +356,26 @@ class SimpleHandTouchDetector:
                 # Count as confirmed transaction (only once when first confirmed)
                 if self.transaction_history[pair_key] == self.config.MIN_TRANSACTION_FRAMES:
                     self.stats['confirmed_transactions'] += 1
+                    
+                    # Debug: Print cash detection details
+                    if self.config.DETECT_CASH_COLOR and trans.get('cash_detected'):
+                        self.stats['cash_detections'] += 1
+                        
+                        # Track cash type
+                        cash_type = trans.get('cash_type', 'Unknown')
+                        if cash_type not in self.stats['cash_types']:
+                            self.stats['cash_types'][cash_type] = 0
+                        self.stats['cash_types'][cash_type] += 1
+                        
+                        print(f"\n  💵 CASH DETECTED!")
+                        print(f"     Type: {cash_type}")
+                        print(f"     Pixels: {trans.get('cash_pixels', 0)}")
+                        if trans.get('cash_bbox'):
+                            cx1, cy1, cx2, cy2 = trans['cash_bbox']
+                            print(f"     Location: ({cx1}, {cy1}) to ({cx2}, {cy2})")
+                            print(f"     Size: {cx2-cx1}x{cy2-cy1} pixels")
+                        print(f"     Between: P{trans['p1_id']} ↔ P{trans['p2_id']} ({trans['hand_type']})")
+                        print()
             else:
                 trans['confirmed'] = False
                 trans['duration'] = self.transaction_history[pair_key]
@@ -413,6 +462,100 @@ class SimpleHandTouchDetector:
     def _distance(self, point1, point2):
         """Calculate distance between two points"""
         return math.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
+    
+    def _detect_cash_color(self, frame, hand1, hand2, draw_debug=False):
+        """
+        Detect Korean won bill colors in the region between two hands
+        Focus on the MIDDLE AREA between hands (where cash actually is)
+        Returns: (detected, cash_type, cash_bbox, pixel_count)
+        """
+        if not self.config.DETECT_CASH_COLOR:
+            return False, None, None, 0
+        
+        # Create region of interest (ROI) CENTERED between two hands
+        x1, y1 = int(hand1[0]), int(hand1[1])
+        x2, y2 = int(hand2[0]), int(hand2[1])
+        
+        # Calculate midpoint between hands
+        mid_x = (x1 + x2) // 2
+        mid_y = (y1 + y2) // 2
+        
+        # Calculate distance between hands
+        hand_distance = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        
+        # Create SMALL focused box around midpoint (where cash actually is)
+        # Box size scales with hand distance but stays reasonable
+        box_size = min(int(hand_distance * 0.8), 150)  # Max 150px, 80% of hand distance
+        
+        roi_x1 = max(0, mid_x - box_size)
+        roi_y1 = max(0, mid_y - box_size)
+        roi_x2 = min(frame.shape[1], mid_x + box_size)
+        roi_y2 = min(frame.shape[0], mid_y + box_size)
+        
+        # Debug: Draw search area (dashed yellow rectangle) and midpoint
+        if draw_debug and self.config.DEBUG_MODE:
+            # Draw SMALL focused search box (yellow dashed)
+            dash_length = 10
+            for i in range(roi_x1, roi_x2, dash_length * 2):
+                cv2.line(frame, (i, roi_y1), (min(i + dash_length, roi_x2), roi_y1), (0, 255, 255), 2)
+                cv2.line(frame, (i, roi_y2), (min(i + dash_length, roi_x2), roi_y2), (0, 255, 255), 2)
+            for i in range(roi_y1, roi_y2, dash_length * 2):
+                cv2.line(frame, (roi_x1, i), (roi_x1, min(i + dash_length, roi_y2)), (0, 255, 255), 2)
+                cv2.line(frame, (roi_x2, i), (roi_x2, min(i + dash_length, roi_y2)), (0, 255, 255), 2)
+            
+            # Draw midpoint (where we're looking for cash)
+            cv2.circle(frame, (mid_x, mid_y), 8, (0, 255, 255), -1)  # Yellow dot
+            cv2.circle(frame, (mid_x, mid_y), 8, (0, 0, 0), 2)  # Black border
+            
+            # Draw label
+            cv2.putText(frame, "CASH SEARCH", (roi_x1 + 5, roi_y1 - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+        
+        # Extract ROI
+        roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+        
+        if roi.size == 0:
+            return False, None, None, 0
+        
+        # Convert to HSV for better color detection
+        hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        
+        # Check for each Korean won bill color
+        best_match = None
+        max_pixels = 0
+        cash_mask = None
+        
+        for bill_type, color_info in self.config.CASH_COLORS.items():
+            lower = np.array(color_info['lower'])
+            upper = np.array(color_info['upper'])
+            
+            # Create mask for this color
+            mask = cv2.inRange(hsv_roi, lower, upper)
+            
+            # Count pixels matching this color
+            pixel_count = np.count_nonzero(mask)
+            
+            if pixel_count > max_pixels and pixel_count > self.config.CASH_COLOR_THRESHOLD:
+                max_pixels = pixel_count
+                best_match = color_info['name']
+                cash_mask = mask
+        
+        # If cash detected, find its bounding box
+        if best_match and cash_mask is not None:
+            # Find contours of cash
+            contours, _ = cv2.findContours(cash_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if contours:
+                # Get largest contour (main cash bill)
+                largest_contour = max(contours, key=cv2.contourArea)
+                x, y, w, h = cv2.boundingRect(largest_contour)
+                
+                # Convert back to frame coordinates
+                cash_bbox = (roi_x1 + x, roi_y1 + y, roi_x1 + x + w, roi_y1 + y + h)
+                
+                return True, best_match, cash_bbox, max_pixels
+        
+        return False, None, None, 0
     
     def _bbox_overlaps_zone(self, bbox, zone, min_overlap_ratio=0.3):
         """
@@ -678,6 +821,31 @@ class SimpleHandTouchDetector:
                 # Draw thick line between touching hands (GREEN)
                 cv2.line(frame, trans['p1_hand'], trans['p2_hand'], (0, 255, 0), 4)
                 
+                # Draw CASH BOX if detected (BRIGHT CYAN SQUARE)
+                if trans.get('cash_detected') and trans.get('cash_bbox'):
+                    cx1, cy1, cx2, cy2 = trans['cash_bbox']
+                    # Draw bright cyan rectangle around cash
+                    cv2.rectangle(frame, (cx1, cy1), (cx2, cy2), (255, 255, 0), 3)  # Bright cyan
+                    
+                    # Draw cash type label
+                    cash_label = trans.get('cash_type', 'CASH')
+                    cash_label_size = cv2.getTextSize(cash_label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                    
+                    # Background for cash label
+                    cv2.rectangle(frame, (cx1, cy1 - 25), (cx1 + cash_label_size[0] + 10, cy1), 
+                                 (255, 255, 0), -1)  # Cyan background
+                    cv2.rectangle(frame, (cx1, cy1 - 25), (cx1 + cash_label_size[0] + 10, cy1), 
+                                 (0, 0, 0), 2)  # Black border
+                    
+                    # Draw cash label text
+                    cv2.putText(frame, cash_label, (cx1 + 5, cy1 - 8),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                    
+                    # Draw pixel count
+                    pixel_text = f"{trans.get('cash_pixels', 0)} px"
+                    cv2.putText(frame, pixel_text, (cx1 + 5, cy2 + 20),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 2)
+                
                 # Calculate midpoint for label
                 mid_x = (trans['p1_hand'][0] + trans['p2_hand'][0]) // 2
                 mid_y = (trans['p1_hand'][1] + trans['p2_hand'][1]) // 2
@@ -706,6 +874,22 @@ class SimpleHandTouchDetector:
         cv2.putText(frame, counter_text, (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         
+        # Show cash detection status
+        if self.config.DETECT_CASH_COLOR:
+            cash_status = "Cash Detection: ON"
+            cash_color = (0, 255, 255)  # Yellow
+            cv2.putText(frame, cash_status, (frame.shape[1] - 250, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, cash_color, 2)
+            
+            # Show detected cash types in this frame
+            if transactions:
+                for idx, trans in enumerate(transactions):
+                    if trans.get('cash_detected'):
+                        cash_label = f"💵 {trans.get('cash_type', 'Cash')}"
+                        y_pos = 60 + (idx * 25)
+                        cv2.putText(frame, cash_label, (frame.shape[1] - 250, y_pos),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+        
         # Always show frame number to indicate processing is active
         frame_text = f"Frame: {self.stats['frames']}"
         cv2.putText(frame, frame_text, (10, frame.shape[0] - 10),
@@ -723,7 +907,9 @@ class SimpleHandTouchDetector:
         self.stats = {
             'frames': 0,
             'transactions': 0,
-            'confirmed_transactions': 0
+            'confirmed_transactions': 0,
+            'cash_detections': 0,
+            'cash_types': {}
         }
         
         print(f"\n{'='*70}")
@@ -803,6 +989,18 @@ class SimpleHandTouchDetector:
         print(f"Total hand touches detected: {self.stats['transactions']}")
         print(f"✅ CONFIRMED TRANSACTIONS (5+ frames): {self.stats['confirmed_transactions']}")
         print(f"Average per frame: {self.stats['transactions']/frame_num:.2f}")
+        
+        # Print cash detection statistics
+        if self.config.DETECT_CASH_COLOR:
+            print(f"\n💵 CASH DETECTION SUMMARY:")
+            print(f"   Total cash detections: {self.stats['cash_detections']}")
+            if self.stats['cash_types']:
+                print(f"   Detected bills:")
+                for cash_type, count in sorted(self.stats['cash_types'].items(), key=lambda x: x[1], reverse=True):
+                    print(f"      • {cash_type}: {count}x")
+            else:
+                print(f"   No cash detected in video")
+        
         print(f"{'='*70}")
         print(f"💾 Saved: {output_path}")
         print()

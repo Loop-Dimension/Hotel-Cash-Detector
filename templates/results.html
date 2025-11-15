@@ -82,6 +82,19 @@
 
     <!-- Extracted Clips -->
     {% if status.clips and status.clips|length > 0 %}
+      <!-- Video Viewing Info -->
+      <div class="bg-green-50 border-l-4 border-green-500 p-4 mb-4">
+        <div class="flex items-start">
+          <i class="fas fa-check-circle text-green-500 text-xl mr-3 mt-1"></i>
+          <div>
+            <p class="font-semibold text-green-900">✅ MP4 형식 - 브라우저 재생 지원</p>
+            <p class="text-sm text-green-700 mt-1">
+              "미리보기" 버튼을 클릭하면 브라우저에서 바로 재생됩니다. MP4 (H.264) 형식으로 모든 브라우저와 호환됩니다.
+            </p>
+          </div>
+        </div>
+      </div>
+      
       <div class="bg-white rounded-lg shadow-md p-6">
         <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
           <i class="fas fa-film text-blue-600 mr-3"></i>
@@ -266,7 +279,17 @@
         </video>
         <div id="videoError" class="hidden mt-3 text-center text-red-400">
           <i class="fas fa-exclamation-triangle mr-2"></i>
-          비디오를 로드할 수 없습니다. 다운로드를 시도하세요.
+          브라우저 재생 실패. 아래 다운로드 버튼을 사용하세요.
+        </div>
+        <div class="mt-3 text-center text-gray-400 text-sm">
+          <i class="fas fa-info-circle mr-1"></i>
+          MP4 (H.264) - 모든 브라우저에서 재생 가능
+        </div>
+        <div class="mt-3 text-center">
+          <a id="downloadLink" href="" download class="inline-block bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg transition-colors">
+            <i class="fas fa-download mr-2"></i>
+            다운로드하여 보기
+          </a>
         </div>
       </div>
       
@@ -291,15 +314,35 @@
       const videoSource = document.getElementById('videoSource');
       const modalTitle = document.getElementById('modalTitle');
       const videoError = document.getElementById('videoError');
+      const downloadLink = document.getElementById('downloadLink');
       
       // Hide error message
       videoError.classList.add('hidden');
       
-      // Set video source
-      const videoUrl = `/download/${jobId}/${filename}`;
+      // Determine MIME type from file extension
+      const ext = filename.split('.').pop().toLowerCase();
+      const mimeTypes = {
+        'webm': 'video/webm',
+        'mp4': 'video/mp4',
+        'avi': 'video/x-msvideo',
+        'mkv': 'video/x-matroska'
+      };
+      const mimeType = mimeTypes[ext] || 'video/x-msvideo';
+      
+      // Set video source (try streaming with ?stream parameter)
+      const videoUrl = `/download/${jobId}/${filename}?stream=1`;
+      const downloadUrl = `/download/${jobId}/${filename}`;
+      
+      videoSource.type = mimeType;
       videoSource.src = videoUrl;
       videoPlayer.src = videoUrl;  // Also set on video element directly
       modalTitle.textContent = filename;
+      
+      // Set download link
+      downloadLink.href = downloadUrl;
+      downloadLink.download = filename;
+      
+      console.log(`Loading video: ${filename} (${mimeType})`);
       
       // Add error handler
       videoPlayer.onerror = function() {
@@ -319,7 +362,9 @@
       // Try to play after a short delay
       setTimeout(() => {
         videoPlayer.play().catch(err => {
-          console.log('Autoplay prevented:', err);
+          console.log('Autoplay prevented or codec not supported:', err);
+          // Show error if playback fails
+          videoError.classList.remove('hidden');
         });
       }, 100);
       

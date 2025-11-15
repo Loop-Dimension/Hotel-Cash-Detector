@@ -12,6 +12,31 @@
   "DRAW_HANDS": true,
   "DRAW_CONNECTIONS": true,
   "DEBUG_MODE": true,
+  
+  "DETECT_CASH_COLOR": true,
+  "CASH_COLOR_THRESHOLD": 150,
+  "CASH_COLORS": {
+    "50000_won": {
+      "lower": [15, 100, 100],
+      "upper": [30, 255, 255],
+      "name": "50,000원 (Yellow)"
+    },
+    "10000_won": {
+      "lower": [40, 50, 50],
+      "upper": [80, 255, 255],
+      "name": "10,000원 (Green)"
+    },
+    "5000_won": {
+      "lower": [0, 100, 100],
+      "upper": [15, 255, 255],
+      "name": "5,000원 (Red/Pink)"
+    },
+    "1000_won": {
+      "lower": [100, 50, 50],
+      "upper": [130, 255, 255],
+      "name": "1,000원 (Blue)"
+    }
+  },
   "SECONDS_BEFORE_TRANSACTION": 2,
   "SECONDS_AFTER_TRANSACTION": 2,
   "MERGE_CLIPS_WITHIN_SECONDS": 0.5,

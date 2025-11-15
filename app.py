@@ -17,12 +17,60 @@ from ultralytics import YOLO
 import numpy as np
 import math
 import time
+import subprocess
+import shutil
 
 # Import the detection classes
 from main import SimpleHandTouchConfig, SimpleHandTouchDetector
 from multi_detector import MultiEventDetector
 
 app = Flask(__name__)
+
+# Check if ffmpeg is available for video conversion
+def check_ffmpeg():
+    """Check if ffmpeg is available on the system"""
+    return shutil.which('ffmpeg') is not None
+
+FFMPEG_AVAILABLE = check_ffmpeg()
+if FFMPEG_AVAILABLE:
+    print("✅ FFmpeg detected - will use for video conversion")
+else:
+    print("⚠️  FFmpeg not found - using OpenCV codecs only")
+
+def convert_avi_to_mp4(avi_path):
+    """Convert AVI file to browser-compatible MP4 using ffmpeg"""
+    if not FFMPEG_AVAILABLE:
+        return None
+    
+    mp4_path = avi_path.replace('.avi', '.mp4')
+    
+    try:
+        # Use ffmpeg to convert with H.264 codec (browser compatible)
+        cmd = [
+            'ffmpeg',
+            '-i', avi_path,
+            '-c:v', 'libx264',  # H.264 video codec
+            '-preset', 'fast',   # Encoding speed
+            '-crf', '23',        # Quality (lower = better, 23 is good)
+            '-y',                # Overwrite output file
+            mp4_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        
+        if result.returncode == 0 and os.path.exists(mp4_path):
+            # Delete original AVI file
+            try:
+                os.remove(avi_path)
+            except:
+                pass
+            return mp4_path
+        else:
+            print(f"⚠️  FFmpeg conversion failed: {result.stderr}")
+            return None
+    except Exception as e:
+        print(f"⚠️  FFmpeg error: {e}")
+        return None
 
 # Load configuration from config.json
 CONFIG_FILE = 'config.json'
@@ -90,6 +138,7 @@ class TransactionClipExtractor:
         self.MERGE_THRESHOLD = config_dict.get('MERGE_CLIPS_WITHIN_SECONDS', 0.5)
         
         self.detection_types = config_dict.get('DETECTION_TYPES', {})
+        self.video_extension = '.avi'  # Will be set based on available codec
         
         print(f"⏱️  Clip padding: {self.SECONDS_BEFORE}s before, {self.SECONDS_AFTER}s after")
         print(f"🔗 Merge clips within: {self.MERGE_THRESHOLD}s")
@@ -107,16 +156,46 @@ class TransactionClipExtractor:
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
         # Create temporary annotated video with browser-compatible codec
-        temp_annotated_path = video_path.replace('.mp4', '_annotated_temp.mp4')
+        temp_annotated_path = video_path.replace('.mp4', '_annotated_temp.avi')  # Use AVI for compatibility
         
-        # Try H.264 codec first (best browser compatibility)
-        fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264 codec
-        annotated_writer = cv2.VideoWriter(temp_annotated_path, fourcc, fps, (width, height))
+        # Try codecs in order of reliability (MJPEG works everywhere)
+        fourcc_options = [
+            ('MJPG', 'Motion JPEG (universal browser support)', '.avi'),
+            ('XVID', 'XVID (good compatibility)', '.avi'),
+            ('VP80', 'VP8 WebM (if available)', '.webm'),
+            ('VP90', 'VP9 WebM (if available)', '.webm'),
+        ]
         
-        # Fallback to mp4v if avc1 fails
-        if not annotated_writer.isOpened():
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        annotated_writer = None
+        actual_extension = '.avi'  # Default to AVI
+        for codec, description, ext in fourcc_options:
+            try:
+                test_path = video_path.replace('.mp4', f'_annotated_temp{ext}')
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+                annotated_writer = cv2.VideoWriter(test_path, fourcc, fps, (width, height))
+                if annotated_writer.isOpened():
+                    print(f"✅ Using codec: {codec} ({description})")
+                    temp_annotated_path = test_path
+                    actual_extension = ext
+                    break
+                else:
+                    # Clean up failed attempt
+                    if os.path.exists(test_path):
+                        os.remove(test_path)
+            except Exception as e:
+                continue
+        
+        if annotated_writer is None or not annotated_writer.isOpened():
+            # Last resort: raw AVI (very large but always works)
+            print("⚠️  Warning: Using uncompressed AVI (large file)")
+            temp_annotated_path = video_path.replace('.mp4', '_annotated_temp.avi')
+            actual_extension = '.avi'
+            fourcc = 0  # Uncompressed
             annotated_writer = cv2.VideoWriter(temp_annotated_path, fourcc, fps, (width, height))
+        
+        # Store the extension for use in extract_clips
+        self.video_extension = actual_extension
+        print(f"📹 Output format: {actual_extension}")
         
         # Reset cash detector state if it exists
         if 'CASH_EXCHANGE' in self.detector.detectors:
@@ -125,7 +204,13 @@ class TransactionClipExtractor:
             cash_detector.person_id_map = {}
             cash_detector.next_stable_id = 1
             cash_detector.cashier_persistence = {}
-            cash_detector.stats = {'frames': 0, 'transactions': 0, 'confirmed_transactions': 0}
+            cash_detector.stats = {
+                'frames': 0, 
+                'transactions': 0, 
+                'confirmed_transactions': 0,
+                'cash_detections': 0,
+                'cash_types': {}
+            }
         
         all_events = []  # Store all detected events
         current_events = {}  # Track ongoing events by type
@@ -335,21 +420,37 @@ class TransactionClipExtractor:
             label = self.detection_types.get(event_type, {}).get('label', event_type)
             
             # Generate filename based on event type and content
+            # Use the same extension as the annotated temp video
+            base_name = f"{video_name}_{event_type}"
             if event_type == 'CASH_EXCHANGE' and clip_info.get('p1_id'):
-                clip_name = f"{video_name}_{event_type}_P{clip_info['p1_id']}_P{clip_info['p2_id']}_{int(start_time)}s.mp4"
-            else:
-                clip_name = f"{video_name}_{event_type}_{int(start_time)}s.mp4"
+                base_name += f"_P{clip_info['p1_id']}_P{clip_info['p2_id']}"
+            base_name += f"_{int(start_time)}s"
+            clip_name = base_name + self.video_extension
             
             clip_path = os.path.join(output_folder, clip_name)
             
-            # Extract clip from annotated video with browser-compatible codec
-            fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264 codec for browser compatibility
+            # Use same codec as the temp annotated video
+            # Extract from the pre-encoded annotated video (no re-encoding needed!)
+            # We'll just copy frames directly, which is fast
+            if self.video_extension == '.avi':
+                fourcc = cv2.VideoWriter_fourcc(*'MJPG')  # Motion JPEG
+            elif self.video_extension == '.webm':
+                fourcc = cv2.VideoWriter_fourcc(*'VP80')  # VP8
+            else:
+                fourcc = cv2.VideoWriter_fourcc(*'MJPG')  # Default to MJPEG
+            
             out = cv2.VideoWriter(clip_path, fourcc, fps, (width, height))
             
-            # Fallback to mp4v if avc1 fails
             if not out.isOpened():
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                # Fallback to MJPEG
+                print(f"⚠️  Warning: Primary codec failed, trying MJPEG fallback...")
+                fourcc = cv2.VideoWriter_fourcc(*'MJPG')
                 out = cv2.VideoWriter(clip_path, fourcc, fps, (width, height))
+                
+                if not out.isOpened():
+                    # Last resort: uncompressed
+                    fourcc = 0
+                    out = cv2.VideoWriter(clip_path, fourcc, fps, (width, height))
             
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
             
@@ -365,9 +466,22 @@ class TransactionClipExtractor:
             
             out.release()
             
+            # Convert AVI to browser-compatible MP4 if ffmpeg is available
+            final_path = clip_path
+            final_name = clip_name
+            if FFMPEG_AVAILABLE and clip_path.endswith('.avi'):
+                print(f"  🔄 Converting to MP4...")
+                mp4_path = convert_avi_to_mp4(clip_path)
+                if mp4_path:
+                    final_path = mp4_path
+                    final_name = clip_name.replace('.avi', '.mp4')
+                    print(f"  ✅ Converted to MP4")
+                else:
+                    print(f"  ⚠️  MP4 conversion failed, keeping AVI")
+            
             clips.append({
-                'filename': clip_name,
-                'path': clip_path,
+                'filename': final_name,
+                'path': final_path,
                 'start_time': round(start_time, 2),
                 'end_time': round(end_time, 2),
                 'duration': round(end_time - start_time, 2),
@@ -387,7 +501,7 @@ class TransactionClipExtractor:
                 progress_callback(int((idx + 1) / len(merged_clips) * 100))
             
             merge_info = f" (merged {len(clip_info['events'])} detections)" if len(clip_info['events']) > 1 else ""
-            print(f"  📎 Clip {idx+1}: {label} - {clip_name} ({frames_written} frames){merge_info}")
+            print(f"  📎 Clip {idx+1}: {label} - {final_name} ({frames_written} frames){merge_info}")
         
         cap.release()
         return clips
@@ -513,9 +627,29 @@ def get_status(job_id):
 
 @app.route('/download/<job_id>/<filename>')
 def download_clip(job_id, filename):
-    """Download extracted clip"""
+    """Download or stream extracted clip"""
     output_folder = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
-    return send_from_directory(output_folder, filename, as_attachment=True)
+    
+    # Determine MIME type based on file extension
+    if filename.endswith('.mp4'):
+        mimetype = 'video/mp4'
+    elif filename.endswith('.avi'):
+        mimetype = 'video/x-msvideo'
+    elif filename.endswith('.webm'):
+        mimetype = 'video/webm'
+    else:
+        mimetype = 'video/mp4'  # Default
+    
+    # Check if request wants to stream (for video player) or download
+    # Video players send Range requests for streaming
+    if request.args.get('stream') or request.headers.get('Range'):
+        # Stream for browser video player (no attachment)
+        return send_from_directory(output_folder, filename, 
+                                   as_attachment=False,
+                                   mimetype=mimetype)
+    else:
+        # Force download
+        return send_from_directory(output_folder, filename, as_attachment=True)
 
 
 @app.route('/results/<job_id>')
