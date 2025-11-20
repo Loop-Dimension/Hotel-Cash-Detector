@@ -134,6 +134,10 @@ class SimpleHandTouchDetector:
         # Cashier persistence - keep cashier status for N frames after leaving zone
         self.cashier_persistence = {}  # {stable_id: frames_remaining}
         self.persistence_frames = self.config.CASHIER_PERSISTENCE_FRAMES
+        
+        # Hand velocity tracking for violence detection
+        self.hand_history = {}  # {person_id: {'left': [(x,y, frame)], 'right': [(x,y, frame)]}}
+        self.max_history_frames = 5  # Track last 5 frames for velocity calculation
     
     def detect_hand_touches(self, frame):
         """
@@ -302,17 +306,82 @@ class SimpleHandTouchDetector:
                     if c_hand and n_hand:
                         dist = self._distance(c_hand, n_hand)
                         if dist <= self.config.HAND_TOUCH_DISTANCE and dist < closest_distance:
-                            # Check for cash color between hands (with debug visualization)
-                            cash_detected, cash_type, cash_bbox, pixel_count = self._detect_cash_color(frame, c_hand, n_hand, draw_debug=True)
+                            # Calculate hand velocities for violence detection
+                            c_hand_type = hand_type.split('-')[0]  # 'L' or 'R'
+                            n_hand_type = hand_type.split('-')[1]  # 'L' or 'R'
+                            c_velocity, c_angle = self._calculate_hand_velocity(cashier['id'], c_hand, c_hand_type.lower(), self.stats['frames'])
+                            n_velocity, n_angle = self._calculate_hand_velocity(customer['id'], n_hand, n_hand_type.lower(), self.stats['frames'])
                             
-                            # Debug: Print when hands are close but NO cash detected
-                            if self.config.DETECT_CASH_COLOR and not cash_detected and self.config.DEBUG_MODE:
+                            # Check for violence: Fast hand movement (>150 px/frame)
+                            is_violent = False
+                            violence_reason = None
+                            if self.config.DETECT_HAND_VELOCITY:
+                                violence_threshold = self.config.VIOLENCE_VELOCITY_THRESHOLD
+                                if c_velocity > violence_threshold:
+                                    is_violent = True
+                                    violence_reason = f"Cashier hand moving fast: {c_velocity:.0f} px/frame"
+                                elif n_velocity > violence_threshold:
+                                    is_violent = True
+                                    violence_reason = f"Customer hand moving fast: {n_velocity:.0f} px/frame"
+                            
+                            # If violent movement detected, mark as violence instead of cash
+                            if is_violent:
+                                print(f"  ⚠️  🚨 VIOLENCE DETECTED: {violence_reason}")
+                                print(f"     Between: P{cashier['id']} ↔ P{customer['id']} ({hand_type})")
+                                closest_distance = dist
+                                closest_transaction = {
+                                    'p1_id': cashier['id'],
+                                    'p2_id': customer['id'],
+                                    'p1_hand': c_hand,
+                                    'p2_hand': n_hand,
+                                    'hand_type': hand_type,
+                                    'distance': dist,
+                                    'cashier_customer_pair': f"C{cashier['id']}-P{customer['id']}",
+                                    'cash_detected': True,  # Mark as detected
+                                    'cash_type': '🚨 Violence (Fast Movement)',  # Violence label
+                                    'cash_bbox': None,
+                                    'cash_pixels': 0,
+                                    'analysis_scores': {'velocity': max(c_velocity, n_velocity), 'reason': violence_reason},
+                                    'is_violence': True  # NEW: Flag for violence
+                                }
+                                continue  # Skip material analysis
+                            
+                            # Check for cash/card with 3-Phase Handover Zone Analysis
+                            material_detected, material_type, material_bbox, analysis_scores = self._analyze_handover_zone(frame, c_hand, n_hand, draw_debug=True)
+                            
+                            # Apply confidence threshold (default 0.65)
+                            confidence_threshold = self.config.CASH_DETECTION_CONFIDENCE
+                            if material_detected:
+                                # Calculate overall confidence from analysis scores
+                                geom = analysis_scores.get('geometric', 0)
+                                glare = analysis_scores.get('photometric', 0)
+                                color = analysis_scores.get('chromatic', 0)
+                                
+                                # Confidence is high if scores support the material type
+                                if '💳' in material_type or 'Card' in material_type:
+                                    # Card: high geometric + high glare + low color
+                                    confidence = (geom + glare + (1 - color)) / 3
+                                else:
+                                    # Cash: low geometric + low glare + high color
+                                    confidence = ((1 - geom) + (1 - glare) + color) / 3
+                                
+                                # Apply threshold
+                                if confidence < confidence_threshold:
+                                    material_detected = False
+                                    if self.config.DEBUG_MODE:
+                                        print(f"  ⚠️  Material rejected (confidence {confidence:.2f} < {confidence_threshold:.2f}) - P{cashier['id']}↔P{customer['id']}")
+                            
+                            # Debug: Print when hands are close but NO material detected
+                            if self.config.DETECT_CASH_COLOR and not material_detected and self.config.DEBUG_MODE:
                                 if dist < closest_distance:  # Only print for closest pair
-                                    print(f"  ⚠️  Hands close ({dist:.0f}px) but NO CASH detected - P{cashier['id']}↔P{customer['id']} ({hand_type})")
+                                    geom = analysis_scores.get('geometric', 0)
+                                    glare = analysis_scores.get('photometric', 0)
+                                    color = analysis_scores.get('chromatic', 0)
+                                    print(f"  ⚠️  Hands close ({dist:.0f}px) but NO MATERIAL - P{cashier['id']}↔P{customer['id']} ({hand_type}) [G:{geom:.2f} L:{glare:.2f} C:{color:.2f}]")
                             
-                            # Only confirm if BOTH hand proximity AND cash color detected
-                            if self.config.DETECT_CASH_COLOR and not cash_detected:
-                                continue  # Skip this if cash color not found
+                            # Only confirm if BOTH hand proximity AND material detected
+                            if self.config.DETECT_CASH_COLOR and not material_detected:
+                                continue  # Skip this if no cash/card found
                             
                             closest_distance = dist
                             closest_transaction = {
@@ -323,10 +392,13 @@ class SimpleHandTouchDetector:
                                 'hand_type': hand_type,
                                 'distance': dist,
                                 'cashier_customer_pair': f"C{cashier['id']}-P{customer['id']}",
-                                'cash_detected': cash_detected,
-                                'cash_type': cash_type,
-                                'cash_bbox': cash_bbox,
-                                'cash_pixels': pixel_count
+                                'cash_detected': material_detected,
+                                'cash_type': material_type,  # Now includes "💵 10,000원" or "💳 Card"
+                                'cash_bbox': material_bbox,
+                                'cash_pixels': 0,  # Deprecated, kept for compatibility
+                                'analysis_scores': analysis_scores,  # NEW: Full analysis data
+                                'velocities': {'cashier': c_velocity, 'customer': n_velocity},  # NEW: Velocity data
+                                'is_violence': False  # Normal transaction
                             }
                 
                 # Add transaction if found for this pair
@@ -357,24 +429,30 @@ class SimpleHandTouchDetector:
                 if self.transaction_history[pair_key] == self.config.MIN_TRANSACTION_FRAMES:
                     self.stats['confirmed_transactions'] += 1
                     
-                    # Debug: Print cash detection details
+                    # Debug: Print material detection details (Cash or Card)
                     if self.config.DETECT_CASH_COLOR and trans.get('cash_detected'):
                         self.stats['cash_detections'] += 1
                         
-                        # Track cash type
-                        cash_type = trans.get('cash_type', 'Unknown')
-                        if cash_type not in self.stats['cash_types']:
-                            self.stats['cash_types'][cash_type] = 0
-                        self.stats['cash_types'][cash_type] += 1
+                        # Track material type (Cash or Card)
+                        material_type = trans.get('cash_type', 'Unknown')
+                        if material_type not in self.stats['cash_types']:
+                            self.stats['cash_types'][material_type] = 0
+                        self.stats['cash_types'][material_type] += 1
                         
-                        print(f"\n  💵 CASH DETECTED!")
-                        print(f"     Type: {cash_type}")
-                        print(f"     Pixels: {trans.get('cash_pixels', 0)}")
+                        # Get analysis scores
+                        scores = trans.get('analysis_scores', {})
+                        
+                        print(f"\n  🎯 MATERIAL DETECTED!")
+                        print(f"     Type: {material_type}")
+                        print(f"     📊 Analysis Scores:")
+                        print(f"        - Geometric (shape): {scores.get('geometric', 0):.2f}")
+                        print(f"        - Photometric (glare): {scores.get('photometric', 0):.2f}")
+                        print(f"        - Chromatic (color): {scores.get('chromatic', 0):.2f}")
                         if trans.get('cash_bbox'):
                             cx1, cy1, cx2, cy2 = trans['cash_bbox']
-                            print(f"     Location: ({cx1}, {cy1}) to ({cx2}, {cy2})")
-                            print(f"     Size: {cx2-cx1}x{cy2-cy1} pixels")
-                        print(f"     Between: P{trans['p1_id']} ↔ P{trans['p2_id']} ({trans['hand_type']})")
+                            print(f"     📍 Location: ({cx1}, {cy1}) to ({cx2}, {cy2})")
+                            print(f"     📏 Size: {cx2-cx1}x{cy2-cy1} pixels")
+                        print(f"     👥 Between: P{trans['p1_id']} ↔ P{trans['p2_id']} ({trans['hand_type']})")
                         print()
             else:
                 trans['confirmed'] = False
@@ -463,99 +541,328 @@ class SimpleHandTouchDetector:
         """Calculate distance between two points"""
         return math.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
     
-    def _detect_cash_color(self, frame, hand1, hand2, draw_debug=False):
+    def _analyze_handover_zone(self, frame, hand1, hand2, draw_debug=False):
         """
-        Detect Korean won bill colors in the region between two hands
-        Focus on the MIDDLE AREA between hands (where cash actually is)
-        Returns: (detected, cash_type, cash_bbox, pixel_count)
+        ═══════════════════════════════════════════════════════════════
+        🎯 3-PHASE HANDOVER ZONE ANALYSIS SYSTEM
+        ═══════════════════════════════════════════════════════════════
+        
+        Phase 1: Zone Creation (WHERE?)
+        - Create precise handover zone between two hands
+        - Exclude wrists, sleeves, only fingertips + object
+        
+        Phase 2: Material Analysis (WHAT?)
+        - Filter A: Geometric Logic (Shape)
+        - Filter B: Photometric Logic (Glare)
+        - Filter C: Chromatic Logic (Color)
+        
+        Returns: (detected, material_type, bbox, confidence_scores)
+        ═══════════════════════════════════════════════════════════════
         """
         if not self.config.DETECT_CASH_COLOR:
-            return False, None, None, 0
+            return False, None, None, {}
         
-        # Create region of interest (ROI) CENTERED between two hands
+        # ═══════════════════════════════════════════════════════════════
+        # PHASE 1: ZONE CREATION (Create Handover Zone)
+        # ═══════════════════════════════════════════════════════════════
+        
         x1, y1 = int(hand1[0]), int(hand1[1])
         x2, y2 = int(hand2[0]), int(hand2[1])
         
-        # Calculate midpoint between hands
+        # Calculate exact midpoint between hands
         mid_x = (x1 + x2) // 2
         mid_y = (y1 + y2) // 2
         
-        # Calculate distance between hands
+        # Calculate hand distance
         hand_distance = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
         
-        # Create SMALL focused box around midpoint (where cash actually is)
-        # Box size scales with hand distance but stays reasonable
-        box_size = min(int(hand_distance * 0.8), 150)  # Max 150px, 80% of hand distance
+        # Create TINY zone (40% of hand distance) - ONLY fingertips + object
+        # This excludes wrists and sleeves mathematically
+        zone_size = max(int(hand_distance * 0.4), 30)  # Min 30px, 40% of distance
         
-        roi_x1 = max(0, mid_x - box_size)
-        roi_y1 = max(0, mid_y - box_size)
-        roi_x2 = min(frame.shape[1], mid_x + box_size)
-        roi_y2 = min(frame.shape[0], mid_y + box_size)
+        roi_x1 = max(0, mid_x - zone_size)
+        roi_y1 = max(0, mid_y - zone_size)
+        roi_x2 = min(frame.shape[1], mid_x + zone_size)
+        roi_y2 = min(frame.shape[0], mid_y + zone_size)
         
-        # Debug: Draw search area (dashed yellow rectangle) and midpoint
+        # Extract handover zone
+        handover_zone = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+        
+        if handover_zone.size == 0 or handover_zone.shape[0] < 10 or handover_zone.shape[1] < 10:
+            return False, None, None, {}
+        
+        # ═══════════════════════════════════════════════════════════════
+        # PHASE 2: MATERIAL ANALYSIS (Detect Cash vs Card vs Nothing)
+        # ═══════════════════════════════════════════════════════════════
+        
+        # Convert zone to different color spaces
+        hsv_zone = cv2.cvtColor(handover_zone, cv2.COLOR_BGR2HSV)
+        gray_zone = cv2.cvtColor(handover_zone, cv2.COLOR_BGR2GRAY)
+        
+        # --- FILTER A: GEOMETRIC LOGIC (Shape Analysis) ---
+        geometric_score = self._filter_geometric_shape(handover_zone, gray_zone)
+        
+        # --- FILTER B: PHOTOMETRIC LOGIC (Glare Detection) ---
+        photometric_score = self._filter_photometric_glare(gray_zone)
+        
+        # --- FILTER C: CHROMATIC LOGIC (Color Saturation) ---
+        chromatic_score, detected_bill = self._filter_chromatic_color(hsv_zone)
+        
+        # ═══════════════════════════════════════════════════════════════
+        # DECISION LOGIC: Combine all filters
+        # ═══════════════════════════════════════════════════════════════
+        
+        scores = {
+            'geometric': geometric_score,      # > 0.7 = Card, < 0.3 = Cash
+            'photometric': photometric_score,  # > 0.5 = Card (glare), < 0.5 = Cash (matte)
+            'chromatic': chromatic_score,      # > 0.6 = Cash (colorful), < 0.4 = Card (gray)
+            'bill_type': detected_bill
+        }
+        
+        # Decision tree (prioritize strong signals)
+        material_type = None
+        confidence = 0
+        
+        # Strong Card signal: High glare + Low color + Rectangular shape
+        if photometric_score > 0.5 and chromatic_score < 0.4 and geometric_score > 0.6:
+            material_type = "💳 Card"
+            confidence = (photometric_score + geometric_score + (1 - chromatic_score)) / 3
+        
+        # Strong Cash signal: High color + Low glare + Detected bill type
+        elif chromatic_score > 0.6 and photometric_score < 0.5 and detected_bill:
+            material_type = f"💵 {detected_bill}"
+            confidence = chromatic_score
+        
+        # Weak Cash signal: Just high color
+        elif chromatic_score > 0.5 and detected_bill:
+            material_type = f"💵 {detected_bill}"
+            confidence = chromatic_score * 0.8  # Lower confidence
+        
+        # Nothing detected or ambiguous
+        else:
+            material_type = None
+            confidence = 0
+        
+        # Add confidence to scores dictionary
+        scores['confidence'] = confidence
+        
+        # Debug visualization
         if draw_debug and self.config.DEBUG_MODE:
-            # Draw SMALL focused search box (yellow dashed)
-            dash_length = 10
-            for i in range(roi_x1, roi_x2, dash_length * 2):
-                cv2.line(frame, (i, roi_y1), (min(i + dash_length, roi_x2), roi_y1), (0, 255, 255), 2)
-                cv2.line(frame, (i, roi_y2), (min(i + dash_length, roi_x2), roi_y2), (0, 255, 255), 2)
-            for i in range(roi_y1, roi_y2, dash_length * 2):
-                cv2.line(frame, (roi_x1, i), (roi_x1, min(i + dash_length, roi_y2)), (0, 255, 255), 2)
-                cv2.line(frame, (roi_x2, i), (roi_x2, min(i + dash_length, roi_y2)), (0, 255, 255), 2)
-            
-            # Draw midpoint (where we're looking for cash)
-            cv2.circle(frame, (mid_x, mid_y), 8, (0, 255, 255), -1)  # Yellow dot
-            cv2.circle(frame, (mid_x, mid_y), 8, (0, 0, 0), 2)  # Black border
-            
-            # Draw label
-            cv2.putText(frame, "CASH SEARCH", (roi_x1 + 5, roi_y1 - 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+            self._draw_handover_debug(frame, roi_x1, roi_y1, roi_x2, roi_y2, 
+                                     mid_x, mid_y, scores, material_type, confidence)
         
-        # Extract ROI
-        roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+        # Only return detection if confidence is sufficient (internal threshold)
+        if material_type and confidence > 0.5:
+            bbox = (roi_x1, roi_y1, roi_x2, roi_y2)
+            return True, material_type, bbox, scores
         
-        if roi.size == 0:
-            return False, None, None, 0
+        return False, None, None, scores
+    
+    def _filter_geometric_shape(self, zone_bgr, zone_gray):
+        """
+        FILTER A: Geometric Logic (Shape Analysis)
         
-        # Convert to HSV for better color detection
-        hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        Logic:
+        - Card: Rigid rectangle (fixed aspect ratio ~1.6:1)
+        - Cash: Flexible, often folded/bent (irregular shape)
         
-        # Check for each Korean won bill color
-        best_match = None
+        Returns: geometric_score (0.0-1.0)
+        - High score (>0.7) = Card-like (rectangular)
+        - Low score (<0.3) = Cash-like (irregular)
+        """
+        # Find edges in zone
+        edges = cv2.Canny(zone_gray, 50, 150)
+        
+        # Find contours
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return 0.0
+        
+        # Get largest contour (assumed to be the object)
+        largest = max(contours, key=cv2.contourArea)
+        
+        # Check if contour is too small (noise)
+        if cv2.contourArea(largest) < 100:
+            return 0.0
+        
+        # Fit minimum area rectangle
+        rect = cv2.minAreaRect(largest)
+        width, height = rect[1]
+        
+        if width == 0 or height == 0:
+            return 0.0
+        
+        # Calculate aspect ratio
+        aspect_ratio = max(width, height) / min(width, height)
+        
+        # Standard credit card aspect ratio is 1.586:1 (85.6mm × 53.98mm)
+        card_aspect = 1.586
+        aspect_diff = abs(aspect_ratio - card_aspect)
+        
+        # Card-like score: closer to card aspect = higher score
+        # 0.0 diff = 1.0 score, 1.0 diff = 0.0 score
+        geometric_score = max(0, 1.0 - aspect_diff)
+        
+        return geometric_score
+    
+    def _filter_photometric_glare(self, zone_gray):
+        """
+        FILTER B: Photometric Logic (Glare Detection)
+        
+        Logic:
+        - Card: Plastic reflects light → bright glare spots
+        - Cash: Paper absorbs light → matte/dull appearance
+        
+        Returns: photometric_score (0.0-1.0)
+        - High score (>0.5) = Card-like (has glare)
+        - Low score (<0.5) = Cash-like (matte)
+        """
+        # Find very bright pixels (potential glare)
+        # Threshold at 240 (nearly white)
+        _, bright_mask = cv2.threshold(zone_gray, 240, 255, cv2.THRESH_BINARY)
+        
+        # Count bright pixels
+        total_pixels = zone_gray.shape[0] * zone_gray.shape[1]
+        bright_pixels = np.count_nonzero(bright_mask)
+        bright_ratio = bright_pixels / total_pixels
+        
+        # Card typically has 5-20% glare pixels
+        # Normalize: 0% = 0.0, 10% = 1.0, >20% = 1.0
+        photometric_score = min(1.0, bright_ratio / 0.10)
+        
+        return photometric_score
+    
+    def _filter_chromatic_color(self, zone_hsv):
+        """
+        FILTER C: Chromatic Logic (Color Saturation)
+        
+        Logic:
+        - Card: White/Gray/Black (Low saturation)
+        - Cash (Korean Won): Green/Yellow/Pink (High saturation)
+        
+        Returns: (chromatic_score, detected_bill_type)
+        - High score (>0.6) = Cash-like (colorful)
+        - Low score (<0.4) = Card-like (grayscale)
+        """
+        # Extract saturation channel (S in HSV)
+        saturation = zone_hsv[:, :, 1]
+        
+        # Calculate average saturation
+        avg_saturation = np.mean(saturation)
+        
+        # Normalize: 0-255 → 0.0-1.0
+        chromatic_score = avg_saturation / 255.0
+        
+        # Also check for specific Korean Won bill colors
+        detected_bill = None
         max_pixels = 0
-        cash_mask = None
         
         for bill_type, color_info in self.config.CASH_COLORS.items():
             lower = np.array(color_info['lower'])
             upper = np.array(color_info['upper'])
             
-            # Create mask for this color
-            mask = cv2.inRange(hsv_roi, lower, upper)
-            
-            # Count pixels matching this color
+            # Create mask for this bill color
+            mask = cv2.inRange(zone_hsv, lower, upper)
             pixel_count = np.count_nonzero(mask)
             
-            if pixel_count > max_pixels and pixel_count > self.config.CASH_COLOR_THRESHOLD:
+            # Check if this bill color is prominent
+            if pixel_count > max_pixels and pixel_count > 50:  # At least 50 pixels
                 max_pixels = pixel_count
-                best_match = color_info['name']
-                cash_mask = mask
+                detected_bill = color_info['name']
         
-        # If cash detected, find its bounding box
-        if best_match and cash_mask is not None:
-            # Find contours of cash
-            contours, _ = cv2.findContours(cash_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            if contours:
-                # Get largest contour (main cash bill)
-                largest_contour = max(contours, key=cv2.contourArea)
-                x, y, w, h = cv2.boundingRect(largest_contour)
-                
-                # Convert back to frame coordinates
-                cash_bbox = (roi_x1 + x, roi_y1 + y, roi_x1 + x + w, roi_y1 + y + h)
-                
-                return True, best_match, cash_bbox, max_pixels
+        # Boost chromatic score if specific bill detected
+        if detected_bill and max_pixels > 100:
+            chromatic_score = max(chromatic_score, 0.7)
         
-        return False, None, None, 0
+        return chromatic_score, detected_bill
+    
+    def _draw_handover_debug(self, frame, x1, y1, x2, y2, mid_x, mid_y, 
+                            scores, material_type, confidence):
+        """Draw debug visualization for handover zone analysis"""
+        # Draw handover zone (cyan dashed rectangle)
+        dash_length = 8
+        color = (255, 255, 0)  # Cyan for zone
+        
+        for i in range(x1, x2, dash_length * 2):
+            cv2.line(frame, (i, y1), (min(i + dash_length, x2), y1), color, 2)
+            cv2.line(frame, (i, y2), (min(i + dash_length, x2), y2), color, 2)
+        for i in range(y1, y2, dash_length * 2):
+            cv2.line(frame, (x1, i), (x1, min(i + dash_length, y2)), color, 2)
+            cv2.line(frame, (x2, i), (x2, min(i + dash_length, y2)), color, 2)
+        
+        # Draw midpoint
+        cv2.circle(frame, (mid_x, mid_y), 6, (255, 255, 0), -1)
+        cv2.circle(frame, (mid_x, mid_y), 6, (0, 0, 0), 2)
+        
+        # Draw label
+        label = "HANDOVER ZONE"
+        cv2.putText(frame, label, (x1 + 5, y1 - 5),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+        
+        # Draw analysis results (below zone)
+        y_offset = y2 + 20
+        cv2.putText(frame, f"Geometric: {scores['geometric']:.2f}", 
+                   (x1, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+        cv2.putText(frame, f"Glare: {scores['photometric']:.2f}", 
+                   (x1, y_offset + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+        cv2.putText(frame, f"Color: {scores['chromatic']:.2f}", 
+                   (x1, y_offset + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+        
+        # Draw final detection
+        if material_type:
+            cv2.putText(frame, f"{material_type} ({confidence:.0%})", 
+                       (x1, y_offset + 50), cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 255, 0), 2)
+    
+    # Alias for backward compatibility
+    def _detect_cash_color(self, frame, hand1, hand2, draw_debug=False):
+        """Legacy method - redirects to new handover zone analysis"""
+        return self._analyze_handover_zone(frame, hand1, hand2, draw_debug)
+    
+    def _calculate_hand_velocity(self, person_id, hand_pos, hand_type, current_frame):
+        """
+        Calculate hand velocity (pixels/frame) for violence detection
+        
+        Fast hand movements toward cashier = potential violence
+        Returns: velocity (pixels/frame), direction
+        """
+        if not self.config.DETECT_HAND_VELOCITY:
+            return 0, None
+        
+        # Initialize history for this person if needed
+        if person_id not in self.hand_history:
+            self.hand_history[person_id] = {'left': [], 'right': []}
+        
+        # Add current hand position to history
+        self.hand_history[person_id][hand_type].append((hand_pos[0], hand_pos[1], current_frame))
+        
+        # Keep only recent history (last N frames)
+        if len(self.hand_history[person_id][hand_type]) > self.max_history_frames:
+            self.hand_history[person_id][hand_type] = self.hand_history[person_id][hand_type][-self.max_history_frames:]
+        
+        # Need at least 2 positions to calculate velocity
+        history = self.hand_history[person_id][hand_type]
+        if len(history) < 2:
+            return 0, None
+        
+        # Calculate velocity between first and last position
+        (x1, y1, frame1) = history[0]
+        (x2, y2, frame2) = history[-1]
+        
+        frame_diff = frame2 - frame1
+        if frame_diff == 0:
+            return 0, None
+        
+        # Calculate distance traveled
+        distance = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        
+        # Velocity = distance / time
+        velocity = distance / frame_diff
+        
+        # Calculate direction (angle in degrees, 0 = right, 90 = down, 180 = left, 270 = up)
+        angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+        
+        return velocity, angle
     
     def _bbox_overlaps_zone(self, bbox, zone, min_overlap_ratio=0.3):
         """
@@ -821,48 +1128,67 @@ class SimpleHandTouchDetector:
                 # Draw thick line between touching hands (GREEN)
                 cv2.line(frame, trans['p1_hand'], trans['p2_hand'], (0, 255, 0), 4)
                 
-                # Draw CASH BOX if detected (BRIGHT CYAN SQUARE)
+                # Draw MATERIAL BOX if detected (Cash = Green, Card = Blue)
                 if trans.get('cash_detected') and trans.get('cash_bbox'):
                     cx1, cy1, cx2, cy2 = trans['cash_bbox']
-                    # Draw bright cyan rectangle around cash
-                    cv2.rectangle(frame, (cx1, cy1), (cx2, cy2), (255, 255, 0), 3)  # Bright cyan
+                    material_type = trans.get('cash_type', 'MATERIAL')
                     
-                    # Draw cash type label
-                    cash_label = trans.get('cash_type', 'CASH')
-                    cash_label_size = cv2.getTextSize(cash_label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                    # Choose color based on material type
+                    if '💳' in material_type or 'Card' in material_type:
+                        box_color = (255, 100, 0)  # Blue for card
+                        bg_color = (255, 100, 0)
+                    else:
+                        box_color = (0, 255, 0)  # Green for cash
+                        bg_color = (0, 255, 0)
                     
-                    # Background for cash label
-                    cv2.rectangle(frame, (cx1, cy1 - 25), (cx1 + cash_label_size[0] + 10, cy1), 
-                                 (255, 255, 0), -1)  # Cyan background
-                    cv2.rectangle(frame, (cx1, cy1 - 25), (cx1 + cash_label_size[0] + 10, cy1), 
-                                 (0, 0, 0), 2)  # Black border
+                    # Draw rectangle around detected material
+                    cv2.rectangle(frame, (cx1, cy1), (cx2, cy2), box_color, 3)
                     
-                    # Draw cash label text
-                    cv2.putText(frame, cash_label, (cx1 + 5, cy1 - 8),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                    # Draw material type label
+                    material_label = material_type
+                    label_size = cv2.getTextSize(material_label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
                     
-                    # Draw pixel count
-                    pixel_text = f"{trans.get('cash_pixels', 0)} px"
-                    cv2.putText(frame, pixel_text, (cx1 + 5, cy2 + 20),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 2)
+                    # Background for label
+                    cv2.rectangle(frame, (cx1, cy1 - 25), (cx1 + label_size[0] + 10, cy1), 
+                                 bg_color, -1)
+                    cv2.rectangle(frame, (cx1, cy1 - 25), (cx1 + label_size[0] + 10, cy1), 
+                                 (0, 0, 0), 2)
+                    
+                    # Draw label text
+                    cv2.putText(frame, material_label, (cx1 + 5, cy1 - 8),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                    
+                    # Draw analysis scores below box
+                    scores = trans.get('analysis_scores', {})
+                    score_text = f"G:{scores.get('geometric', 0):.1f} L:{scores.get('photometric', 0):.1f} C:{scores.get('chromatic', 0):.1f}"
+                    cv2.putText(frame, score_text, (cx1 + 5, cy2 + 20),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.35, box_color, 2)
                 
                 # Calculate midpoint for label
                 mid_x = (trans['p1_hand'][0] + trans['p2_hand'][0]) // 2
                 mid_y = (trans['p1_hand'][1] + trans['p2_hand'][1]) // 2
                 
-                # Draw "CASH TRANSACTION" label above the line
+                # Draw transaction label above the line (shows material type)
                 label_y = min(trans['p1_hand'][1], trans['p2_hand'][1]) - 15
                 
+                # Determine label text and color based on material
+                material_type = trans.get('cash_type', 'EXCHANGE')
+                if '💳' in material_type or 'Card' in material_type:
+                    text = "CARD TRANSACTION"
+                    label_color = (255, 100, 0)  # Blue
+                else:
+                    text = "CASH TRANSACTION"
+                    label_color = (0, 255, 0)  # Green
+                
                 # Background box for label
-                text = "CASH TRANSACTION"
                 text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
                 box_x1 = mid_x - text_size[0]//2 - 5
                 box_y1 = label_y - text_size[1] - 5
                 box_x2 = mid_x + text_size[0]//2 + 5
                 box_y2 = label_y + 5
                 
-                # Draw green background box
-                cv2.rectangle(frame, (box_x1, box_y1), (box_x2, box_y2), (0, 255, 0), -1)
+                # Draw background box
+                cv2.rectangle(frame, (box_x1, box_y1), (box_x2, box_y2), label_color, -1)
                 cv2.rectangle(frame, (box_x1, box_y1), (box_x2, box_y2), (0, 0, 0), 2)
                 
                 # Draw text
@@ -874,21 +1200,28 @@ class SimpleHandTouchDetector:
         cv2.putText(frame, counter_text, (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         
-        # Show cash detection status
+        # Show material analysis status
         if self.config.DETECT_CASH_COLOR:
-            cash_status = "Cash Detection: ON"
-            cash_color = (0, 255, 255)  # Yellow
-            cv2.putText(frame, cash_status, (frame.shape[1] - 250, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, cash_color, 2)
+            status_text = "Material Analysis: ON"
+            status_color = (0, 255, 255)  # Yellow
+            cv2.putText(frame, status_text, (frame.shape[1] - 280, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
             
-            # Show detected cash types in this frame
+            # Show detected materials in this frame (Cash or Card)
             if transactions:
                 for idx, trans in enumerate(transactions):
                     if trans.get('cash_detected'):
-                        cash_label = f"💵 {trans.get('cash_type', 'Cash')}"
+                        material_type = trans.get('cash_type', 'MATERIAL')
+                        
+                        # Color code: Blue for card, Yellow for cash
+                        if '💳' in material_type or 'Card' in material_type:
+                            display_color = (255, 100, 0)  # Blue
+                        else:
+                            display_color = (0, 255, 0)  # Green
+                        
                         y_pos = 60 + (idx * 25)
-                        cv2.putText(frame, cash_label, (frame.shape[1] - 250, y_pos),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                        cv2.putText(frame, material_type, (frame.shape[1] - 280, y_pos),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, display_color, 2)
         
         # Always show frame number to indicate processing is active
         frame_text = f"Frame: {self.stats['frames']}"

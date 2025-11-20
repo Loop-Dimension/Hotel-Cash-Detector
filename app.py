@@ -19,6 +19,11 @@ import math
 import time
 import subprocess
 import shutil
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 # Import the detection classes
 from main import SimpleHandTouchConfig, SimpleHandTouchDetector
@@ -155,47 +160,11 @@ class TransactionClipExtractor:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # Create temporary annotated video with browser-compatible codec
-        temp_annotated_path = video_path.replace('.mp4', '_annotated_temp.avi')  # Use AVI for compatibility
-        
-        # Try codecs in order of reliability (MJPEG works everywhere)
-        fourcc_options = [
-            ('MJPG', 'Motion JPEG (universal browser support)', '.avi'),
-            ('XVID', 'XVID (good compatibility)', '.avi'),
-            ('VP80', 'VP8 WebM (if available)', '.webm'),
-            ('VP90', 'VP9 WebM (if available)', '.webm'),
-        ]
-        
-        annotated_writer = None
-        actual_extension = '.avi'  # Default to AVI
-        for codec, description, ext in fourcc_options:
-            try:
-                test_path = video_path.replace('.mp4', f'_annotated_temp{ext}')
-                fourcc = cv2.VideoWriter_fourcc(*codec)
-                annotated_writer = cv2.VideoWriter(test_path, fourcc, fps, (width, height))
-                if annotated_writer.isOpened():
-                    print(f"✅ Using codec: {codec} ({description})")
-                    temp_annotated_path = test_path
-                    actual_extension = ext
-                    break
-                else:
-                    # Clean up failed attempt
-                    if os.path.exists(test_path):
-                        os.remove(test_path)
-            except Exception as e:
-                continue
-        
-        if annotated_writer is None or not annotated_writer.isOpened():
-            # Last resort: raw AVI (very large but always works)
-            print("⚠️  Warning: Using uncompressed AVI (large file)")
-            temp_annotated_path = video_path.replace('.mp4', '_annotated_temp.avi')
-            actual_extension = '.avi'
-            fourcc = 0  # Uncompressed
-            annotated_writer = cv2.VideoWriter(temp_annotated_path, fourcc, fps, (width, height))
-        
-        # Store the extension for use in extract_clips
-        self.video_extension = actual_extension
-        print(f"📹 Output format: {actual_extension}")
+        # SKIP temporary video for large files - process on demand instead
+        print(f"⚡ Using on-demand processing (no temp video)")
+        print(f"   This is faster for large videos and uses less disk space")
+        temp_annotated_path = None  # No temp video
+        self.video_extension = '.mp4'  # Will convert later
         
         # Reset cash detector state if it exists
         if 'CASH_EXCHANGE' in self.detector.detectors:
@@ -216,48 +185,105 @@ class TransactionClipExtractor:
         current_events = {}  # Track ongoing events by type
         frame_num = 0
         
+        # Get frame skip setting (process every Nth frame for speed)
+        frame_skip = self.config_dict.get('FRAME_SKIP', 2)
+        effective_frames = total_frames // frame_skip
+        
         print(f"📹 Analyzing video: {total_frames} frames at {fps} FPS")
+        print(f"⏱️  Estimated duration: {total_frames/fps/60:.1f} minutes")
+        print(f"⚡ Speed optimization: Processing every {frame_skip} frames ({effective_frames} frames)")
+        
+        # Debug counters
+        hands_close_count = 0
+        cash_seen_count = 0
         
         while True:
             ret, frame = cap.read()
             if not ret:
+                if frame_num < total_frames * 0.9:  # Less than 90% processed
+                    print(f"\n⚠️  Video reading stopped early at frame {frame_num}/{total_frames}")
                 break
             
             frame_num += 1
             
-            # Progress update
-            if progress_callback and frame_num % 30 == 0:
+            # Skip frames for speed (but always update progress)
+            if frame_num % frame_skip != 0:
+                continue
+            
+            # Progress update every 300 frames (every 20 seconds at 15fps)
+            if progress_callback and frame_num % 300 == 0:
                 progress_callback(int(frame_num / total_frames * 100))
+                print(f"  ⚡ Progress: {frame_num}/{total_frames} frames ({100*frame_num/total_frames:.1f}%)")
             
-            # Run ALL detectors on this frame (pass FPS for violence detector)
-            output_frame, detections_dict = self.detector.detect_all(frame, fps=fps)
-            
-            # Save annotated frame
-            annotated_writer.write(output_frame)
+            try:
+                # Run detection (no need to save output_frame since we don't store temp video)
+                _, detections_dict = self.detector.detect_all(frame, fps=fps)
+            except Exception as e:
+                print(f"⚠️  Error processing frame {frame_num}: {e}")
+                continue
             
             # Process each detection type
             for det_type, detections in detections_dict.items():
                 if det_type == 'CASH_EXCHANGE':
                     # Handle cash transactions
+                    if detections:
+                        hands_close_count += 1
                     for trans in detections:
-                        trans_key = f"{trans['p1_id']}-{trans['p2_id']}"
-                        event_key = f"CASH_{trans_key}"
+                        if trans.get('cash_detected'):
+                            cash_seen_count += 1
                         
-                        if event_key not in current_events:
-                            current_events[event_key] = {
-                                'type': 'CASH_EXCHANGE',
-                                'key': trans_key,
-                                'start_frame': frame_num,
-                                'end_frame': frame_num,
-                                'start_time': frame_num / fps,
-                                'end_time': frame_num / fps,
-                                'p1_id': trans['p1_id'],
-                                'p2_id': trans['p2_id'],
-                                'hand_type': trans['hand_type']
-                            }
+                        # Check if this is actually violence (fast movement or long duration)
+                        is_violence = trans.get('is_violence', False)
+                        
+                        trans_key = f"{trans['p1_id']}-{trans['p2_id']}"
+                        
+                        # If violence flagged, treat as violence event
+                        if is_violence:
+                            event_key = f"VIOLENCE_{trans_key}"
+                            if event_key not in current_events:
+                                current_events[event_key] = {
+                                    'type': 'VIOLENCE',
+                                    'key': trans_key,
+                                    'start_frame': frame_num,
+                                    'end_frame': frame_num,
+                                    'start_time': frame_num / fps,
+                                    'end_time': frame_num / fps,
+                                    'p1_id': trans['p1_id'],
+                                    'p2_id': trans['p2_id'],
+                                    'description': trans.get('cash_type', 'Fast Movement'),
+                                    'velocities': trans.get('velocities', {})
+                                }
+                            else:
+                                current_events[event_key]['end_frame'] = frame_num
+                                current_events[event_key]['end_time'] = frame_num / fps
                         else:
-                            current_events[event_key]['end_frame'] = frame_num
-                            current_events[event_key]['end_time'] = frame_num / fps
+                            # Normal cash transaction
+                            event_key = f"CASH_{trans_key}"
+                            
+                            if event_key not in current_events:
+                                current_events[event_key] = {
+                                    'type': 'CASH_EXCHANGE',
+                                    'key': trans_key,
+                                    'start_frame': frame_num,
+                                    'end_frame': frame_num,
+                                    'start_time': frame_num / fps,
+                                    'end_time': frame_num / fps,
+                                    'p1_id': trans['p1_id'],
+                                    'p2_id': trans['p2_id'],
+                                    'hand_type': trans['hand_type']
+                                }
+                            else:
+                                current_events[event_key]['end_frame'] = frame_num
+                                current_events[event_key]['end_time'] = frame_num / fps
+                                
+                                # Check if event is too long (>5 seconds) - reclassify as violence
+                                duration = current_events[event_key]['end_time'] - current_events[event_key]['start_time']
+                                max_cash_duration = self.config_dict.get('MAX_CASH_TRANSACTION_SECONDS', 5)
+                                if duration > max_cash_duration:
+                                    print(f"  ⚠️  🚨 RECLASSIFYING as VIOLENCE: Transaction too long ({duration:.1f}s > {max_cash_duration}s)")
+                                    # Change type to violence
+                                    current_events[event_key]['type'] = 'VIOLENCE'
+                                    current_events[event_key]['description'] = f'Extended interaction ({duration:.1f}s)'
                 
                 else:
                     # Handle violence/fire detections
@@ -293,16 +319,31 @@ class TransactionClipExtractor:
             all_events.append(event)
         
         cap.release()
-        annotated_writer.release()
         
         # Merge close events
         merged_events = self._merge_close_events(all_events, fps)
         
+        print(f"\n📊 DETECTION SUMMARY:")
+        print(f"  Total frames analyzed: {frame_num}")
+        print(f"  Frames with hands close: {hands_close_count}")
+        print(f"  Frames with cash visible: {cash_seen_count}")
         print(f"✅ Detection complete: Found {len(merged_events)} event(s)")
-        for event in merged_events:
-            det_type = event.get('type', 'UNKNOWN')
-            label = self.detection_types.get(det_type, {}).get('label', det_type)
-            print(f"  • {label}: {event['start_time']:.1f}s - {event['end_time']:.1f}s")
+        
+        if len(merged_events) == 0:
+            print(f"\n⚠️  NO EVENTS DETECTED - Possible reasons:")
+            if hands_close_count == 0:
+                print(f"     ❌ No hands detected close enough (<100px)")
+                print(f"     💡 Try: Increase HAND_TOUCH_DISTANCE in config")
+            elif cash_seen_count == 0:
+                print(f"     ❌ Hands were close but NO CASH COLOR detected")
+                print(f"     💡 Try: Set DETECT_CASH_COLOR to false to disable")
+                print(f"     💡 Or: Adjust CASH_COLOR_THRESHOLD (currently 150)")
+            print()
+        else:
+            for event in merged_events:
+                det_type = event.get('type', 'UNKNOWN')
+                label = self.detection_types.get(det_type, {}).get('label', det_type)
+                print(f"  • {label}: {event['start_time']:.1f}s - {event['end_time']:.1f}s")
         
         return merged_events, fps, temp_annotated_path
     
@@ -394,9 +435,10 @@ class TransactionClipExtractor:
         print(f"  ✅ Merged {len(clip_ranges)} detections into {len(merged)} clips")
         return merged
     
-    def extract_clips(self, annotated_video_path, events, fps, output_folder, progress_callback=None):
-        """Extract video clips from pre-annotated video (FAST - no re-detection!)"""
-        cap = cv2.VideoCapture(annotated_video_path)
+    def extract_clips(self, source_video_path, events, fps, output_folder, progress_callback=None):
+        """Extract video clips by re-processing only needed frames"""
+        # Open original source video
+        cap = cv2.VideoCapture(source_video_path)
         if not cap.isOpened():
             return []
         
@@ -415,43 +457,35 @@ class TransactionClipExtractor:
             end_time = clip_info['end_time']
             
             # Create output path
-            video_name = Path(annotated_video_path).stem.replace('_annotated_temp', '')
+            video_name = Path(source_video_path).stem
             event_type = clip_info.get('type', 'CASH_EXCHANGE')
             label = self.detection_types.get(event_type, {}).get('label', event_type)
             
-            # Generate filename based on event type and content
-            # Use the same extension as the annotated temp video
+            # Generate filename
             base_name = f"{video_name}_{event_type}"
             if event_type == 'CASH_EXCHANGE' and clip_info.get('p1_id'):
                 base_name += f"_P{clip_info['p1_id']}_P{clip_info['p2_id']}"
             base_name += f"_{int(start_time)}s"
-            clip_name = base_name + self.video_extension
+            clip_name_avi = base_name + '.avi'
+            clip_path_avi = os.path.join(output_folder, clip_name_avi)
             
-            clip_path = os.path.join(output_folder, clip_name)
-            
-            # Use same codec as the temp annotated video
-            # Extract from the pre-encoded annotated video (no re-encoding needed!)
-            # We'll just copy frames directly, which is fast
-            if self.video_extension == '.avi':
-                fourcc = cv2.VideoWriter_fourcc(*'MJPG')  # Motion JPEG
-            elif self.video_extension == '.webm':
-                fourcc = cv2.VideoWriter_fourcc(*'VP80')  # VP8
-            else:
-                fourcc = cv2.VideoWriter_fourcc(*'MJPG')  # Default to MJPEG
-            
-            out = cv2.VideoWriter(clip_path, fourcc, fps, (width, height))
+            # Use MJPEG AVI (fast, reliable)
+            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+            out = cv2.VideoWriter(clip_path_avi, fourcc, fps, (width, height))
             
             if not out.isOpened():
-                # Fallback to MJPEG
-                print(f"⚠️  Warning: Primary codec failed, trying MJPEG fallback...")
-                fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-                out = cv2.VideoWriter(clip_path, fourcc, fps, (width, height))
-                
-                if not out.isOpened():
-                    # Last resort: uncompressed
-                    fourcc = 0
-                    out = cv2.VideoWriter(clip_path, fourcc, fps, (width, height))
+                print(f"⚠️  Warning: Could not create video writer for clip {idx+1}")
+                continue
             
+            # Reset detector state
+            if 'CASH_EXCHANGE' in self.detector.detectors:
+                cash_detector = self.detector.detectors['CASH_EXCHANGE']
+                cash_detector.transaction_history = {}
+                cash_detector.person_id_map = {}
+                cash_detector.next_stable_id = 1
+                cash_detector.cashier_persistence = {}
+            
+            # Seek to start frame and process
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
             
             frames_written = 0
@@ -460,21 +494,24 @@ class TransactionClipExtractor:
                 if not ret:
                     break
                 
-                # Frame is already annotated - just write it!
-                out.write(frame)
+                # Re-run detector on this frame to get annotations
+                annotated_frame, _ = self.detector.detect_all(frame, fps=fps)
+                
+                # Write annotated frame
+                out.write(annotated_frame)
                 frames_written += 1
             
             out.release()
             
             # Convert AVI to browser-compatible MP4 if ffmpeg is available
-            final_path = clip_path
-            final_name = clip_name
-            if FFMPEG_AVAILABLE and clip_path.endswith('.avi'):
+            final_path = clip_path_avi
+            final_name = clip_name_avi
+            if FFMPEG_AVAILABLE:
                 print(f"  🔄 Converting to MP4...")
-                mp4_path = convert_avi_to_mp4(clip_path)
+                mp4_path = convert_avi_to_mp4(clip_path_avi)
                 if mp4_path:
                     final_path = mp4_path
-                    final_name = clip_name.replace('.avi', '.mp4')
+                    final_name = clip_name_avi.replace('.avi', '.mp4')
                     print(f"  ✅ Converted to MP4")
                 else:
                     print(f"  ⚠️  MP4 conversion failed, keeping AVI")
@@ -526,7 +563,8 @@ def process_video(job_id, video_path, video_filename):
         processing_status[job_id]['stage'] = 'Detecting transactions...'
         
         def detection_progress(progress):
-            processing_status[job_id]['progress'] = progress // 2  # First 50%
+            # Detection is now the main task (90% of time), extraction is fast (10%)
+            processing_status[job_id]['progress'] = int(progress * 0.9)  # 0-90%
         
         transactions, fps, annotated_video_path = extractor.detect_transactions(video_path, detection_progress)
         
@@ -538,19 +576,17 @@ def process_video(job_id, video_path, video_filename):
             processing_status[job_id]['progress'] = 100
             processing_status[job_id]['clips'] = []
             processing_status[job_id]['message'] = 'No transactions detected'
-            # Clean up annotated video
-            if annotated_video_path and os.path.exists(annotated_video_path):
-                os.remove(annotated_video_path)
             return
         
-        # Extract clips from annotated video (FAST!)
+        # Extract clips from original video (re-process frames on-demand)
         output_folder = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
         Path(output_folder).mkdir(exist_ok=True)
         
         def extraction_progress(progress):
-            processing_status[job_id]['progress'] = 50 + (progress // 2)  # Last 50%
+            processing_status[job_id]['progress'] = 90 + int(progress * 0.1)  # Last 10%
         
-        clips = extractor.extract_clips(annotated_video_path, transactions, fps, output_folder, extraction_progress)
+        # Use original video path instead of non-existent annotated path
+        clips = extractor.extract_clips(video_path, transactions, fps, output_folder, extraction_progress)
         
         processing_status[job_id]['status'] = 'completed'
         processing_status[job_id]['progress'] = 100
@@ -564,15 +600,6 @@ def process_video(job_id, video_path, video_filename):
         processing_status[job_id]['error'] = str(e)
         processing_status[job_id]['progress'] = 0
         print(f"❌ Job {job_id} error: {e}")
-    
-    finally:
-        # Always clean up temporary annotated video
-        if annotated_video_path and os.path.exists(annotated_video_path):
-            try:
-                os.remove(annotated_video_path)
-                print(f"🧹 Cleaned up temporary annotated video")
-            except:
-                pass
 
 
 @app.route('/')
