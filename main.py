@@ -1100,6 +1100,7 @@ class SimpleHandTouchDetector:
             json_data = {
                 'video_source': video_name,
                 'group_id': temp_group_id,  # Temporary ID
+                'debug_mode': True,  # NEW: Flag for debug clips
                 'time_range': {
                     'start_frame': start_frame,
                     'end_frame': end_frame,
@@ -1108,39 +1109,80 @@ class SimpleHandTouchDetector:
                     'duration_seconds': round(duration, 2)
                 },
                 'event_count': len(valid_events),
-                'important_note': '✅ Continuous clips: 1s before + detection + 1s after. Frame numbers are ORIGINAL from main video.',
-                'how_to_use': 'Video shows "Original Frame: XXXX" continuously. Buffered frames have detection overlays, padding frames are clean.',
+                'important_note': '🔍 DEBUG MODE: Shows ALL hand interactions, NO filters applied',
+                'how_to_use': 'Analyze ALL scores to understand money behavior patterns. Green=Detected, Orange=Close but no material.',
                 'clip_info': {
-                    'padding_before': '1 second before detection',
-                    'padding_after': '1 second after detection',
-                    'continuous': 'All frames shown sequentially (e.g., 1000→1001→1002→1003...)'
+                    'mode': 'Full Debug - No Distance Filter',
+                    'hand_distance_limit': '300px (captures all interactions)',
+                    'min_frames': '1 frame (captures brief touches)',
+                    'material_analysis': 'Always enabled - check all scores'
+                },
+                'score_interpretation': {
+                    'geometric': {
+                        'description': 'Shape analysis (rectangular vs irregular)',
+                        'card_range': '> 0.7 (rigid rectangle)',
+                        'cash_range': '< 0.3 (bent/folded)',
+                        'neutral_range': '0.3 - 0.7'
+                    },
+                    'photometric': {
+                        'description': 'Glare/reflection detection',
+                        'card_indicator': '> 0.5 (plastic reflection)',
+                        'cash_indicator': '< 0.5 (matte paper)'
+                    },
+                    'chromatic': {
+                        'description': 'Color saturation analysis',
+                        'cash_indicator': '> 0.6 (colorful bills)',
+                        'card_indicator': '< 0.4 (gray/white)'
+                    }
+                },
+                'behavior_patterns': {
+                    'normal_cash_exchange': 'High color, low glare, irregular shape, 1-3 seconds',
+                    'card_transaction': 'Low color, high glare, rectangular, quick motion',
+                    'suspicious_long_contact': 'Any interaction > 5 seconds',
+                    'violence_indicators': 'Very fast movement (>200 px/frame), prolonged contact'
                 },
                 'events': []
             }
             
-            # Add each valid event in this group
+            # Add each valid event in this group with FULL DEBUG DATA
             for event in valid_events:
-                json_data['events'].append({
+                event_data = {
                     'frame_range': f"{event['start_frame']}-{event['end_frame']}",
                     'persons': f"P{event['p1_id']} ↔ P{event['p2_id']}",
                     'hand_type': event['hand_type'],
                     'distance_px': round(event['distance'], 1),
                     'frame_count': event['frame_count'],
+                    'duration_seconds': round(event['frame_count'] / fps, 2),
+                    
+                    # Material detection results
                     'material_detected': event.get('material_detected', False),
                     'material_type': event.get('material_type', 'None'),
                     'detection_confidence': round(event.get('confidence', 0.0), 3),
+                    
+                    # Detailed analysis scores
                     'material_scores': {
                         'geometric': round(event['avg_scores']['geometric'], 3),
                         'photometric': round(event['avg_scores']['photometric'], 3),
                         'chromatic': round(event['avg_scores']['chromatic'], 3)
                     },
+                    
+                    # Human-readable interpretation
                     'interpretation': {
-                        'geometric': 'Card-like' if event['avg_scores']['geometric'] > 0.7 else 'Cash-like' if event['avg_scores']['geometric'] < 0.3 else 'Neutral',
-                        'photometric': 'Glare detected' if event['avg_scores']['photometric'] > 0.5 else 'Matte surface',
-                        'chromatic': 'Colorful' if event['avg_scores']['chromatic'] > 0.6 else 'Grayscale' if event['avg_scores']['chromatic'] < 0.4 else 'Neutral'
+                        'shape': 'Card-like (rigid)' if event['avg_scores']['geometric'] > 0.7 else 'Cash-like (bent)' if event['avg_scores']['geometric'] < 0.3 else 'Neutral',
+                        'surface': 'Shiny/Glare (card)' if event['avg_scores']['photometric'] > 0.5 else 'Matte (cash)',
+                        'color': 'Colorful (cash)' if event['avg_scores']['chromatic'] > 0.6 else 'Grayscale (card)' if event['avg_scores']['chromatic'] < 0.4 else 'Neutral'
                     },
-                    'debug_note': '✅ DETECTED' if event.get('material_detected', False) else '⚠️ NOT DETECTED'
-                })
+                    
+                    # Behavior analysis
+                    'behavior_analysis': {
+                        'interaction_duration': 'Brief (<1s)' if event['frame_count'] / fps < 1 else 'Normal (1-3s)' if event['frame_count'] / fps < 3 else 'Extended (3-5s)' if event['frame_count'] / fps < 5 else 'Suspicious (>5s)',
+                        'distance_category': 'Very close (<30px)' if event['distance'] < 30 else 'Close (30-60px)' if event['distance'] < 60 else 'Moderate (60-100px)' if event['distance'] < 100 else 'Far (>100px)',
+                        'likely_scenario': self._interpret_behavior(event, fps)
+                    },
+                    
+                    'status': '✅ DETECTED' if event.get('material_detected', False) else '⚠️ NOT DETECTED (hands close, no material)'
+                }
+                json_data['events'].append(event_data)
             
             # Temp filenames (will be renamed if successful)
             temp_json_filename = f"possible_{video_name}_groupTEMP_{start_frame:06d}-{end_frame:06d}.json"
@@ -1153,8 +1195,8 @@ class SimpleHandTouchDetector:
             clip_end_frame = end_frame + int(padding_seconds * fps)
             
             try:
-                # Create clip from BUFFERED frames (EXACT frames that were detected!)
-                frames_used = self._create_clip_from_buffer(valid_events, temp_clip_path, fps, video_path, clip_start_frame, clip_end_frame)
+                # Use SAME METHOD as main detection - re-process frames directly
+                frames_used = self._extract_possible_clip(video_path, temp_clip_path, clip_start_frame, clip_end_frame, fps)
                 
                 if frames_used == 0:
                     continue
@@ -1184,116 +1226,43 @@ class SimpleHandTouchDetector:
         
         print(f"✅ Saved {saved_count} clip(s) to: {possible_dir}\n")
         
+        # Clear buffer (no longer needed since we re-process)
         self.possible_frame_buffer.clear()
     
-    def _create_clip_from_buffer(self, valid_events, output_path, fps, video_path, clip_start_frame, clip_end_frame):
+    def _interpret_behavior(self, event, fps):
         """
-        Create video clip from BUFFERED frames with padding to ensure minimum 5 seconds
-        Fills gaps between buffered frames from original video for continuity
+        Interpret behavior pattern based on event characteristics
+        Helps understand what type of interaction occurred
         """
-        # Padding: 1 second before detection, 1 second after detection
-        PADDING_BEFORE_SECONDS = 1
-        PADDING_AFTER_SECONDS = 1
-        PADDING_BEFORE_FRAMES = int(PADDING_BEFORE_SECONDS * fps)
-        PADDING_AFTER_FRAMES = int(PADDING_AFTER_SECONDS * fps)
+        duration = event['frame_count'] / fps
+        distance = event['distance']
+        material = event.get('material_detected', False)
+        scores = event['avg_scores']
         
-        # Collect all buffered frames for this group
-        buffered_frames_dict = {}  # {frame_num: annotated_frame}
-        for event in valid_events:
-            event_idx = event.get('event_index')
-            if event_idx and event_idx in self.possible_frame_buffer:
-                for frame_num, frame in self.possible_frame_buffer[event_idx]:
-                    buffered_frames_dict[frame_num] = frame
-        
-        if not buffered_frames_dict:
-            self._extract_possible_clip(video_path, output_path, clip_start_frame, clip_end_frame, fps)
-            return 0
-        
-        # Find the actual frame range from buffered frames
-        buffered_frame_numbers = sorted(buffered_frames_dict.keys())
-        actual_start = buffered_frame_numbers[0]
-        actual_end = buffered_frame_numbers[-1]
-        
-        # Add padding: 1 second before, 1 second after
-        clip_start_frame = max(0, actual_start - PADDING_BEFORE_FRAMES)
-        clip_end_frame = actual_end + PADDING_AFTER_FRAMES
-        
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise Exception(f"Cannot open video: {video_path}")
-        
-        first_frame = buffered_frames_dict[buffered_frame_numbers[0]]
-        height, width = first_frame.shape[:2]
-        
-        temp_avi_path = str(output_path).replace('.mp4', '_temp.avi')
-        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        out = cv2.VideoWriter(temp_avi_path, fourcc, fps, (width, height))
-        
-        if not out.isOpened():
-            cap.release()
-            raise Exception(f"Cannot create video writer: {output_path}")
-        
-        cap.set(cv2.CAP_PROP_POS_FRAMES, clip_start_frame)
-        
-        frames_written = 0
-        buffered_count = 0
-        
-        for current_frame in range(clip_start_frame, clip_end_frame + 1):
-            ret, frame = cap.read()
-            if not ret:
-                frame = np.zeros((height, width, 3), dtype=np.uint8)
-            else:
-                if frame.shape[:2] != (height, width):
-                    frame = cv2.resize(frame, (width, height))
-            
-            if current_frame in buffered_frames_dict:
-                overlay = buffered_frames_dict[current_frame].copy()
-                frame = cv2.addWeighted(frame, 0.3, overlay, 0.7, 0)
-                buffered_count += 1
-            
-            frame_text = f"Frame: {current_frame}"
-            cv2.putText(frame, frame_text, (width - 150, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-            
-            out.write(frame)
-            frames_written += 1
-        
-        cap.release()
-        out.release()
-        
-        # Convert to MP4
-        try:
-            import subprocess
-            import shutil
-            if shutil.which('ffmpeg'):
-                cmd = [
-                    'ffmpeg', '-i', temp_avi_path,
-                    '-c:v', 'libx264',
-                    '-preset', 'fast',
-                    '-crf', '23',
-                    '-y',
-                    str(output_path)
-                ]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                
-                if result.returncode == 0 and Path(output_path).exists():
-                    Path(temp_avi_path).unlink(missing_ok=True)
-                else:
-                    Path(temp_avi_path).rename(output_path.replace('.mp4', '.avi'))
-            else:
-                Path(temp_avi_path).rename(output_path.replace('.mp4', '.avi'))
-        except Exception as e:
-            print(f"      ⚠️  Conversion error, using AVI: {e}")
-            if Path(temp_avi_path).exists():
-                Path(temp_avi_path).rename(output_path.replace('.mp4', '.avi'))
-        
-        return frames_written
+        # Analyze pattern
+        if material and duration < 3 and scores['chromatic'] > 0.6:
+            return "💵 Normal cash exchange (colorful, brief)"
+        elif material and scores['photometric'] > 0.5 and scores['geometric'] > 0.7:
+            return "💳 Card transaction (shiny, rectangular)"
+        elif not material and distance < 30 and duration < 1:
+            return "🤝 Brief touch (no object detected)"
+        elif not material and distance < 60 and duration < 3:
+            return "👋 Possible handshake or gesture"
+        elif duration > 5:
+            return "⚠️ Extended contact (suspicious, check video)"
+        elif distance > 100:
+            return "👀 Hands nearby but not interacting"
+        else:
+            return "❓ Unknown pattern (review scores)"
     
     def _extract_possible_clip(self, video_path, output_path, start_frame, end_frame, fps):
         """
-        Extract a video clip for a possible detection
-        Re-processes frames with detection overlay + velocity arrows
-        VALIDATES that hands are actually close in the extracted frames
+        FULL DEBUG MODE for Possible clips:
+        - Shows ALL hand interactions (no distance filter)
+        - Shows ALL material analysis (even failed detections)
+        - Captures complete behavior patterns
+        - Detailed JSON output for analysis
+        Returns number of frames written
         """
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -1314,13 +1283,19 @@ class SimpleHandTouchDetector:
         # Seek to start frame
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         
-        # Save original settings
+        # Save original settings and ENABLE FULL DEBUG MODE
         original_debug = self.config.DEBUG_MODE
         original_velocity = self.config.DETECT_HAND_VELOCITY
+        original_distance = self.config.HAND_TOUCH_DISTANCE
+        original_min_frames = self.config.MIN_TRANSACTION_FRAMES
+        original_cash_detect = self.config.DETECT_CASH_COLOR
         
-        # Enable velocity visualization for possible clips
+        # FULL DEBUG MODE - Show EVERYTHING
         self.config.DEBUG_MODE = True
         self.config.DETECT_HAND_VELOCITY = True
+        self.config.HAND_TOUCH_DISTANCE = 300  # Very large - catch all interactions
+        self.config.MIN_TRANSACTION_FRAMES = 1  # Show even 1-frame interactions
+        self.config.DETECT_CASH_COLOR = True  # Always analyze material
         
         # Reset detector state for clip
         old_history = self.transaction_history.copy()
@@ -1336,87 +1311,156 @@ class SimpleHandTouchDetector:
         self.hand_history = {}
         
         frames_written = 0
-        frames_with_close_hands = 0  # Count frames where hands are actually close
         
+        # Read frames with explicit seeking to prevent jumps
         for frame_idx in range(start_frame, end_frame):
+            # Seek to exact frame to ensure no drift
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
+            
             if not ret:
-                break
+                # Create error frame
+                frame = np.zeros((height, width, 3), dtype=np.uint8)
+                cv2.putText(frame, f"Frame {frame_idx} - Read Error", (50, height//2),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+            else:
+                # Ensure correct dimensions
+                if frame.shape[:2] != (height, width):
+                    frame = cv2.resize(frame, (width, height))
             
             # Re-run detection to get annotated frame with velocity arrows
             try:
                 annotated_frame, detections = self.detect_hand_touches(frame)
                 
-                # Count frames where hands are actually close (detections found)
-                if detections:
-                    frames_with_close_hands += 1
-                
-                # Add banner at top showing detection status
-                # Check if material was detected in any of these detections
+                # FULL DEBUG INFO - Add comprehensive banner
                 has_material = any(d.get('cash_detected', False) for d in detections) if detections else False
+                hand_count = len(detections) if detections else 0
                 
+                # Show detection status with detailed info
                 if has_material:
-                    label_text = f"✅ MATERIAL DETECTED - ORIGINAL Frame {frame_idx}"
-                    banner_color = (0, 255, 0)  # Green for successful detection
+                    label_text = f"✅ MATERIAL - Frame {frame_idx} - {hand_count} interaction(s)"
+                    banner_color = (0, 255, 0)  # Green
                 elif detections:
-                    label_text = f"⚠️ HANDS CLOSE - NO MATERIAL - ORIGINAL Frame {frame_idx}"
-                    banner_color = (0, 165, 255)  # Orange for failed detection
+                    # Get closest distance
+                    min_dist = min(d.get('distance', 999) for d in detections)
+                    label_text = f"🤝 HANDS - Frame {frame_idx} - {hand_count} pair(s) - Min:{min_dist:.0f}px"
+                    banner_color = (0, 165, 255)  # Orange
                 else:
-                    label_text = f"⚠️ ORIGINAL Frame {frame_idx} - People moved/IDs changed"
-                    banner_color = (0, 100, 200)  # Blue warning
-                    
-                    # Add explanation text
-                    cv2.putText(annotated_frame, "Event was detected during main processing",
-                               (10, height - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 200, 255), 2)
-                    cv2.putText(annotated_frame, "but people moved away by clip extraction time",
-                               (10, height - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 200, 255), 2)
+                    label_text = f"👀 DEBUG - Frame {frame_idx} - No interactions"
+                    banner_color = (100, 100, 100)  # Gray
                 
-                banner_width = 750 if not detections else 550
+                # Main banner
+                banner_width = 650
                 cv2.rectangle(annotated_frame, (10, 10), (banner_width, 50), banner_color, -1)
                 cv2.rectangle(annotated_frame, (10, 10), (banner_width, 50), (255, 255, 255), 3)
                 cv2.putText(annotated_frame, label_text, (20, 37),
                            cv2.FONT_HERSHEY_DUPLEX, 0.55, (255, 255, 255), 2)
                 
-                # Add material analysis info panel (bottom-left corner)
-                panel_x = 10
-                panel_y = height - 160
-                panel_width = 400
-                panel_height = 150
+                # DEBUG INFO PANEL - Show ALL analysis scores
+                if detections:
+                    panel_x = 10
+                    panel_y = 60
+                    panel_width = 500
+                    panel_height = 120 + (len(detections) * 80)  # Dynamic height
+                    
+                    # Semi-transparent background
+                    overlay = annotated_frame.copy()
+                    cv2.rectangle(overlay, (panel_x, panel_y), 
+                                (panel_x + panel_width, panel_y + panel_height),
+                                (0, 0, 0), -1)
+                    cv2.addWeighted(overlay, 0.7, annotated_frame, 0.3, 0, annotated_frame)
+                    
+                    # Border
+                    cv2.rectangle(annotated_frame, (panel_x, panel_y),
+                                (panel_x + panel_width, panel_y + panel_height),
+                                (0, 255, 255), 2)
+                    
+                    # Title
+                    cv2.putText(annotated_frame, "🔍 DEBUG ANALYSIS",
+                              (panel_x + 10, panel_y + 25), 
+                              cv2.FONT_HERSHEY_DUPLEX, 0.7, (0, 255, 255), 2)
+                    
+                    # Show each detection's details
+                    y_offset = panel_y + 50
+                    for idx, det in enumerate(detections, 1):
+                        # Person pair and distance
+                        pair_text = f"#{idx} P{det['p1_id']}↔P{det['p2_id']} {det.get('hand_type','?')}"
+                        dist_text = f"Distance: {det.get('distance', 0):.0f}px"
+                        cv2.putText(annotated_frame, pair_text,
+                                  (panel_x + 15, y_offset),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+                        cv2.putText(annotated_frame, dist_text,
+                                  (panel_x + 250, y_offset),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+                        y_offset += 20
+                        
+                        # Material analysis scores
+                        scores = det.get('analysis_scores', {})
+                        if scores:
+                            geom = scores.get('geometric', 0)
+                            photo = scores.get('photometric', 0)
+                            chrom = scores.get('chromatic', 0)
+                            
+                            # Color code based on detection
+                            if det.get('cash_detected'):
+                                score_color = (0, 255, 0)  # Green
+                            else:
+                                score_color = (100, 200, 255)  # Light blue
+                            
+                            cv2.putText(annotated_frame, 
+                                      f"  Shape:{geom:.2f} Glare:{photo:.2f} Color:{chrom:.2f}",
+                                      (panel_x + 20, y_offset),
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.4, score_color, 1)
+                            y_offset += 18
+                            
+                            # Show detected material type
+                            material = det.get('cash_type', 'None')
+                            if det.get('cash_detected'):
+                                cv2.putText(annotated_frame, f"  ✅ {material}",
+                                          (panel_x + 20, y_offset),
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+                            else:
+                                cv2.putText(annotated_frame, f"  ❌ No material detected",
+                                          (panel_x + 20, y_offset),
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
+                            y_offset += 25
                 
-                # Semi-transparent background
+                # Add legend panel (bottom-left corner)
+                legend_x = 10
+                legend_y = height - 120
+                legend_width = 450
+                legend_height = 110
+                
+                # Legend background
                 overlay = annotated_frame.copy()
-                cv2.rectangle(overlay, (panel_x, panel_y), (panel_x + panel_width, panel_y + panel_height),
-                             (0, 0, 0), -1)
+                cv2.rectangle(overlay, (legend_x, legend_y), 
+                            (legend_x + legend_width, legend_y + legend_height),
+                            (0, 0, 0), -1)
                 cv2.addWeighted(overlay, 0.7, annotated_frame, 0.3, 0, annotated_frame)
                 
                 # Border
-                cv2.rectangle(annotated_frame, (panel_x, panel_y), (panel_x + panel_width, panel_y + panel_height),
-                             (0, 165, 255), 2)
+                cv2.rectangle(annotated_frame, (legend_x, legend_y),
+                            (legend_x + legend_width, legend_y + legend_height),
+                            (255, 200, 0), 2)
                 
-                # Title - changes based on detection status
-                if has_material:
-                    title_text = "MATERIAL ANALYSIS - DETECTED!"
-                    title_color = (0, 255, 0)
-                else:
-                    title_text = "MATERIAL ANALYSIS - NOT DETECTED"
-                    title_color = (0, 165, 255)
+                # Title
+                cv2.putText(annotated_frame, "📖 SCORE GUIDE (DEBUG MODE)",
+                           (legend_x + 10, legend_y + 22), 
+                           cv2.FONT_HERSHEY_DUPLEX, 0.55, (255, 200, 0), 2)
                 
-                cv2.putText(annotated_frame, title_text,
-                           (panel_x + 10, panel_y + 25), cv2.FONT_HERSHEY_DUPLEX, 0.6, title_color, 2)
-                
-                # Legend
-                y_offset = panel_y + 50
-                cv2.putText(annotated_frame, "Geometric (Shape): <0.3=Cash, >0.7=Card",
-                           (panel_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                y_offset += 25
-                cv2.putText(annotated_frame, "Photometric (Glare): >0.5=Card reflection",
-                           (panel_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                y_offset += 25
-                cv2.putText(annotated_frame, "Chromatic (Color): >0.6=Cash, <0.4=Card",
-                           (panel_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                y_offset += 25
-                cv2.putText(annotated_frame, "See JSON for all scores + detection status",
-                           (panel_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 255, 100), 1)
+                # Legend content
+                y_offset = legend_y + 45
+                cv2.putText(annotated_frame, "Shape: <0.3=Cash (bent), >0.7=Card (rigid)",
+                           (legend_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                y_offset += 20
+                cv2.putText(annotated_frame, "Glare: >0.5=Card (shiny plastic), <0.5=Cash (matte)",
+                           (legend_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                y_offset += 20
+                cv2.putText(annotated_frame, "Color: >0.6=Cash (colorful), <0.4=Card (gray/white)",
+                           (legend_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                y_offset += 20
+                cv2.putText(annotated_frame, "📊 Full data saved in JSON file",
+                           (legend_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 255, 100), 1)
                 
                 out.write(annotated_frame)
                 frames_written += 1
@@ -1431,9 +1475,12 @@ class SimpleHandTouchDetector:
         cap.release()
         out.release()
         
-        # Restore original settings
+        # Restore ALL original settings
         self.config.DEBUG_MODE = original_debug
         self.config.DETECT_HAND_VELOCITY = original_velocity
+        self.config.HAND_TOUCH_DISTANCE = original_distance
+        self.config.MIN_TRANSACTION_FRAMES = original_min_frames
+        self.config.DETECT_CASH_COLOR = original_cash_detect
         self.transaction_history = old_history
         self.person_id_map = old_person_map
         self.next_stable_id = old_stable_id
@@ -1443,25 +1490,23 @@ class SimpleHandTouchDetector:
         if frames_written == 0:
             raise Exception("No frames extracted")
         
-        # For debugging purposes, save ALL clips but warn about low interaction
-        # Don't filter out - let user see what was tracked
-        close_hands_ratio = frames_with_close_hands / frames_written if frames_written > 0 else 0
+        print(f"      📹 Extracted {frames_written} frames for Possible clip")
         
-        # Just print a warning if low interaction (but don't skip)
-        if close_hands_ratio < 0.1:  # Less than 10%
-            print(f"      ⚠️  Warning: Only {frames_with_close_hands}/{frames_written} frames ({close_hands_ratio:.1%}) show close hands")
-        
-        # Convert AVI to MP4 using ffmpeg if available
+        # Convert AVI to MP4 using ffmpeg with smooth playback settings
         try:
             import subprocess
             import shutil
             if shutil.which('ffmpeg'):
-                # Convert to MP4
+                # Convert to MP4 with constant frame rate
                 cmd = [
                     'ffmpeg', '-i', temp_avi_path,
                     '-c:v', 'libx264',
-                    '-preset', 'fast',
-                    '-crf', '23',
+                    '-preset', 'medium',
+                    '-crf', '20',
+                    '-pix_fmt', 'yuv420p',
+                    '-r', str(int(fps)),      # Preserve FPS
+                    '-vsync', 'cfr',          # Constant frame rate (no jumps!)
+                    '-movflags', '+faststart',
                     '-y',  # Overwrite
                     str(output_path)
                 ]
@@ -1470,6 +1515,7 @@ class SimpleHandTouchDetector:
                 if result.returncode == 0 and Path(output_path).exists():
                     # Delete temp AVI
                     Path(temp_avi_path).unlink(missing_ok=True)
+                    print(f"      ✅ Smooth MP4 created")
                 else:
                     # FFmpeg failed, rename AVI to MP4
                     Path(temp_avi_path).rename(output_path)
@@ -1481,6 +1527,8 @@ class SimpleHandTouchDetector:
             # Just rename the AVI file
             if Path(temp_avi_path).exists():
                 Path(temp_avi_path).rename(output_path.replace('.mp4', '.avi'))
+        
+        return frames_written
     
     def _group_events_by_time(self, events, fps, max_gap_seconds=2.0):
         """
@@ -1966,18 +2014,22 @@ class SimpleHandTouchDetector:
     def _draw_transactions(self, frame, people, transactions):
         """Draw hands and transactions"""
         
-        # Draw cashier zone if defined
-        if self.config.CASHIER_ZONE:
-            zone_x, zone_y, zone_w, zone_h = self.config.CASHIER_ZONE
-            # Draw semi-transparent zone
-            overlay = frame.copy()
-            cv2.rectangle(overlay, (zone_x, zone_y), (zone_x + zone_w, zone_y + zone_h), 
-                         (0, 255, 255), 3)  # Yellow rectangle
-            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+        # Draw cashier zone ONLY if there are people in it (reduce clutter)
+        if self.config.CASHIER_ZONE and people:
+            # Check if any cashier exists
+            has_cashier = any(p.get('role') == 'cashier' for p in people)
             
-            # Draw label
-            cv2.putText(frame, "CASHIER ZONE", (zone_x + 10, zone_y + 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            if has_cashier:
+                zone_x, zone_y, zone_w, zone_h = self.config.CASHIER_ZONE
+                # Draw semi-transparent zone
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (zone_x, zone_y), (zone_x + zone_w, zone_y + zone_h), 
+                             (0, 255, 255), 3)  # Yellow rectangle
+                cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+                
+                # Draw label
+                cv2.putText(frame, "CASHIER ZONE", (zone_x + 10, zone_y + 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         
         # Draw all hands with labels
         if self.config.DRAW_HANDS:

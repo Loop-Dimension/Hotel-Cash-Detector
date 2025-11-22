@@ -1,0 +1,133 @@
+{
+  "clip_info": {
+    "filename": "cc7a4046-4141-4885-ab3a-458b796a140e_251111_1116_CASH_EXCHANGE_P3_P2_2826s",
+    "video_source": "cc7a4046-4141-4885-ab3a-458b796a140e_251111_1116",
+    "clip_number": 1,
+    "total_clips": 1,
+    "start_frame": 42399,
+    "end_frame": 42461,
+    "start_time_seconds": 2826.6,
+    "end_time_seconds": 2830.73,
+    "duration_seconds": 4.13,
+    "fps": 15,
+    "event_type": "CASH_EXCHANGE",
+    "label": "현금 거래",
+    "priority": 3
+  },
+  "detection_summary": {
+    "merged_events_count": 1,
+    "person_1_id": 3,
+    "person_2_id": 2,
+    "hand_type": "R-R",
+    "confidence": null,
+    "description": null
+  },
+  "score_interpretation": {
+    "geometric": {
+      "description": "Shape analysis (rectangular vs irregular)",
+      "card_indicator": "> 0.7 (rigid rectangle)",
+      "cash_indicator": "< 0.3 (bent/folded)"
+    },
+    "photometric": {
+      "description": "Glare/reflection detection",
+      "card_indicator": "> 0.5 (plastic reflection)",
+      "cash_indicator": "< 0.5 (matte paper)"
+    },
+    "chromatic": {
+      "description": "Color saturation analysis",
+      "cash_indicator": "> 0.6 (colorful bills)",
+      "card_indicator": "< 0.4 (gray/white)"
+    }
+  },
+  "frames_with_detections": [
+    {
+      "frame_number": 42428,
+      "timestamp_seconds": 2828.53,
+      "detections": [
+        {
+          "type": "CASH_EXCHANGE",
+          "persons": "P3 ↔ P2",
+          "hand_type": "R-R",
+          "distance_px": 36.1,
+          "material_detected": false,
+          "material_type": null,
+          "is_violence": false,
+          "analysis_scores": {
+            "geometric": 0,
+            "photometric": 0,
+            "chromatic": 0
+          },
+          "interpretation": {
+            "shape": "Cash-like",
+            "surface": "Matte",
+            "color": "Grayscale"
+          },
+          "velocities": {
+            "cashier": 0.01643844674342211,
+            "customer": 0.006380437004843163
+          }
+        }
+      ]
+    },
+    {
+      "frame_number": 42429,
+      "timestamp_seconds": 2828.6,
+      "detections": [
+        {
+          "type": "CASH_EXCHANGE",
+          "persons": "P3 ↔ P2",
+          "hand_type": "R-R",
+          "distance_px": 37.0,
+          "material_detected": false,
+          "material_type": null,
+          "is_violence": false,
+          "analysis_scores": {
+            "geometric": 0,
+            "photometric": 0,
+            "chromatic": 0
+          },
+          "interpretation": {
+            "shape": "Cash-like",
+            "surface": "Matte",
+            "color": "Grayscale"
+          },
+          "velocities": {
+            "cashier": 0.018402995825688058,
+            "customer": 0.023833752199059074
+          }
+        }
+      ]
+    },
+    {
+      "frame_number": 42430,
+      "timestamp_seconds": 2828.67,
+      "detections": [
+        {
+          "type": "CASH_EXCHANGE",
+          "persons": "P3 ↔ P2",
+          "hand_type": "R-R",
+          "distance_px": 32.2,
+          "material_detected": false,
+          "material_type": null,
+          "is_violence": false,
+          "analysis_scores": {
+            "geometric": 0,
+            "photometric": 0,
+            "chromatic": 0
+          },
+          "interpretation": {
+            "shape": "Cash-like",
+            "surface": "Matte",
+            "color": "Grayscale"
+          },
+          "velocities": {
+            "cashier": 5.755432216610669,
+            "customer": 0.25
+          }
+        }
+      ]
+    }
+  ],
+  "frame_count": 62,
+  "detection_frame_count": 3
+}

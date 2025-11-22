@@ -575,17 +575,51 @@ class TransactionClipExtractor:
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
             
             frames_written = 0
-            clip_debug_data = {
+            
+            # ALWAYS collect comprehensive JSON data (not just debug mode)
+            clip_json_data = {
                 "clip_info": {
                     "filename": base_name,
-                    "start_time": f"{start_time:.2f}s",
-                    "end_time": f"{end_time:.2f}s",
-                    "duration": f"{end_time - start_time:.2f}s",
+                    "video_source": video_name,
+                    "clip_number": idx + 1,
+                    "total_clips": len(merged_clips),
+                    "start_frame": start_frame,
+                    "end_frame": end_frame,
+                    "start_time_seconds": round(start_time, 2),
+                    "end_time_seconds": round(end_time, 2),
+                    "duration_seconds": round(end_time - start_time, 2),
                     "fps": fps,
                     "event_type": event_type,
-                    "label": label
+                    "label": label,
+                    "priority": clip_info.get('priority', 99)
                 },
-                "frames": []
+                "detection_summary": {
+                    "merged_events_count": len(clip_info['events']),
+                    "person_1_id": clip_info.get('p1_id'),
+                    "person_2_id": clip_info.get('p2_id'),
+                    "hand_type": clip_info.get('hand_type', 'N/A'),
+                    "confidence": clip_info.get('confidence'),
+                    "description": clip_info.get('description')
+                },
+                "score_interpretation": {
+                    "geometric": {
+                        "description": "Shape analysis (rectangular vs irregular)",
+                        "card_indicator": "> 0.7 (rigid rectangle)",
+                        "cash_indicator": "< 0.3 (bent/folded)"
+                    },
+                    "photometric": {
+                        "description": "Glare/reflection detection",
+                        "card_indicator": "> 0.5 (plastic reflection)",
+                        "cash_indicator": "< 0.5 (matte paper)"
+                    },
+                    "chromatic": {
+                        "description": "Color saturation analysis",
+                        "cash_indicator": "> 0.6 (colorful bills)",
+                        "card_indicator": "< 0.4 (gray/white)"
+                    }
+                },
+                "frames_with_detections": [],
+                "frame_count": 0
             }
             
             for frame_idx in range(start_frame, end_frame):
@@ -606,25 +640,66 @@ class TransactionClipExtractor:
                     print(f"  ⚠️  Detection error at frame {frame_idx}: {e}")
                     annotated_frame = frame  # Use original frame if detection fails
                 
-                # Collect debug data from this frame (if available)
-                if self.config_dict.get('DEBUG_MODE', False):
-                    frame_data = {
-                        "frame_number": frame_idx,
-                        "timestamp": f"{frame_idx/fps:.2f}s",
-                        "detections": {}
-                    }
+                # Collect comprehensive detection data from this frame
+                frame_data = {
+                    "frame_number": frame_idx,
+                    "timestamp_seconds": round(frame_idx/fps, 2),
+                    "detections": []
+                }
+                
+                # Extract ALL detection data
+                for det_type, detections in detections_dict.items():
+                    if det_type == 'CASH_EXCHANGE' and detections:
+                        for det in detections:
+                            detection_entry = {
+                                "type": det_type,
+                                "persons": f"P{det.get('p1_id', '?')} ↔ P{det.get('p2_id', '?')}",
+                                "hand_type": det.get('hand_type', 'Unknown'),
+                                "distance_px": round(det.get('distance', 0), 1),
+                                "material_detected": det.get('cash_detected', False),
+                                "material_type": det.get('cash_type', 'None'),
+                                "is_violence": det.get('is_violence', False)
+                            }
+                            
+                            # Add analysis scores if available
+                            if 'analysis_scores' in det:
+                                scores = det['analysis_scores']
+                                detection_entry["analysis_scores"] = {
+                                    "geometric": round(scores.get('geometric', 0), 3),
+                                    "photometric": round(scores.get('photometric', 0), 3),
+                                    "chromatic": round(scores.get('chromatic', 0), 3)
+                                }
+                                
+                                # Add interpretation
+                                detection_entry["interpretation"] = {
+                                    "shape": "Card-like" if scores.get('geometric', 0) > 0.7 else "Cash-like" if scores.get('geometric', 0) < 0.3 else "Neutral",
+                                    "surface": "Shiny/Glare" if scores.get('photometric', 0) > 0.5 else "Matte",
+                                    "color": "Colorful" if scores.get('chromatic', 0) > 0.6 else "Grayscale" if scores.get('chromatic', 0) < 0.4 else "Neutral"
+                                }
+                                
+                                # Add full debug data if available
+                                if 'debug_data' in scores:
+                                    detection_entry["debug_data"] = scores['debug_data']
+                            
+                            # Add velocity data if available
+                            if 'velocities' in det:
+                                detection_entry["velocities"] = det['velocities']
+                            
+                            frame_data["detections"].append(detection_entry)
                     
-                    # Extract debug data from detections
-                    for det_type, detections in detections_dict.items():
-                        if det_type == 'CASH_EXCHANGE' and detections:
-                            for det in detections:
-                                # Check if this detection has debug data
-                                if 'analysis_scores' in det and 'debug_data' in det['analysis_scores']:
-                                    frame_data['detections'][det_type] = det['analysis_scores']['debug_data']
-                                    break  # Only store first detection per frame
-                    
-                    if frame_data['detections']:  # Only add frames with detections
-                        clip_debug_data['frames'].append(frame_data)
+                    elif det_type in ['VIOLENCE', 'FIRE']:
+                        for det in detections:
+                            detection_entry = {
+                                "type": det_type,
+                                "confidence": round(det.get('confidence', 0), 3),
+                                "description": det.get('description', det_type),
+                                "bbox": det.get('bbox', [])
+                            }
+                            frame_data["detections"].append(detection_entry)
+                
+                # Add frame data if there were detections
+                if frame_data["detections"]:
+                    clip_json_data["frames_with_detections"].append(frame_data)
                 
                 # Ensure frame is in correct format and size before writing
                 if annotated_frame.shape[:2] != (height, width):
@@ -636,16 +711,25 @@ class TransactionClipExtractor:
             
             out.release()
             
-            # Save debug data as JSON file
-            if self.config_dict.get('DEBUG_MODE', False) and clip_debug_data['frames']:
-                json_filename = base_name + '_debug.json'
-                json_path = os.path.join(output_folder, json_filename)
-                try:
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(clip_debug_data, f, indent=2, ensure_ascii=False)
-                    print(f"  📊 Saved debug data: {json_filename}")
-                except Exception as e:
-                    print(f"  ⚠️  Failed to save debug JSON: {e}")
+            # Update final frame count
+            clip_json_data["frame_count"] = frames_written
+            clip_json_data["detection_frame_count"] = len(clip_json_data["frames_with_detections"])
+            
+            # Add note if no detections in frames (but clip was created)
+            if len(clip_json_data["frames_with_detections"]) == 0:
+                clip_json_data["note"] = "Clip created from merged events but re-processing found no detections (people may have moved)"
+            
+            # ALWAYS save comprehensive JSON data (for tracking and analysis)
+            json_filename = base_name + '.json'
+            json_path = os.path.join(output_folder, json_filename)
+            try:
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(clip_json_data, f, indent=2, ensure_ascii=False)
+                print(f"  📊 Saved tracking data: {json_filename}")
+            except Exception as e:
+                print(f"  ⚠️  Failed to save JSON: {e}")
+                import traceback
+                traceback.print_exc()
             
             # Convert AVI to browser-compatible MP4 if ffmpeg is available
             final_path = clip_path_avi
