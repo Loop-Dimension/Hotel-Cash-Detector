@@ -1,9 +1,9 @@
 {
   "POSE_MODEL": "models/yolov8s-pose.pt",
   "CAMERA_NAME": "camera1",
-  "HAND_TOUCH_DISTANCE": 100,
+  "HAND_TOUCH_DISTANCE": 60,
   "POSE_CONFIDENCE": 0.5,
-  "MIN_TRANSACTION_FRAMES": 1,
+  "MIN_TRANSACTION_FRAMES": 3,
   "CALIBRATION_SCALE": 1.0,
   "CAMERA_ANGLE": 0,
   "CASHIER_ZONE": [0, 330, 850, 385],
@@ -13,30 +13,30 @@
   "DRAW_CONNECTIONS": true,
   "DEBUG_MODE": true,
   
-  "DETECT_CASH_COLOR": true,
-  "CASH_COLOR_THRESHOLD": 150,
-  "CASH_DETECTION_CONFIDENCE": 0.65,
-  "MAX_CASH_TRANSACTION_SECONDS": 5,
+  "DETECT_CASH_COLOR": false,
+  "CASH_COLOR_THRESHOLD": 50,
+  "CASH_DETECTION_CONFIDENCE": 0.30,
+  "MAX_CASH_TRANSACTION_SECONDS": 3,
   "DETECT_HAND_VELOCITY": true,
-  "VIOLENCE_VELOCITY_THRESHOLD": 150,
+  "VIOLENCE_VELOCITY_THRESHOLD": 100,
   "CASH_COLORS": {
     "50000_won": {
-      "lower": [15, 100, 100],
+      "lower": [15, 120, 120],
       "upper": [30, 255, 255],
       "name": "50,000원 (Yellow)"
     },
     "10000_won": {
-      "lower": [40, 50, 50],
+      "lower": [40, 80, 80],
       "upper": [80, 255, 255],
       "name": "10,000원 (Green)"
     },
     "5000_won": {
-      "lower": [0, 100, 100],
+      "lower": [0, 120, 120],
       "upper": [15, 255, 255],
       "name": "5,000원 (Red/Pink)"
     },
     "1000_won": {
-      "lower": [100, 50, 50],
+      "lower": [100, 80, 100],
       "upper": [130, 255, 255],
       "name": "1,000원 (Blue)"
     }

@@ -33,7 +33,10 @@ class SimpleHandTouchConfig:
     
     # Cash Color Detection (Korean Won Bills)
     DETECT_CASH_COLOR = True  # Enable color-based cash detection
-    CASH_COLOR_THRESHOLD = 200  # Minimum pixels of cash color to confirm money
+    CASH_COLOR_THRESHOLD = 50  # Minimum pixels of cash color to confirm money (TEMP: lowered to capture debug data)
+    CASH_DETECTION_CONFIDENCE = 0.60  # Minimum confidence (0.0-1.0) to confirm cash (TEMP: lowered)
+    MAX_CASH_TRANSACTION_SECONDS = 3  # Max duration for normal cash transaction
+    
     # Color ranges for Korean currency (HSV format)
     CASH_COLORS = {
         '50000_won': {'lower': [15, 100, 100], 'upper': [30, 255, 255], 'name': '50,000원 (Yellow)'},
@@ -41,6 +44,10 @@ class SimpleHandTouchConfig:
         '5000_won': {'lower': [0, 100, 100], 'upper': [15, 255, 255], 'name': '5,000원 (Red/Pink)'},
         '1000_won': {'lower': [100, 50, 50], 'upper': [130, 255, 255], 'name': '1,000원 (Blue)'}
     }
+    
+    # Violence Detection
+    DETECT_HAND_VELOCITY = True  # Enable velocity-based violence detection
+    VIOLENCE_VELOCITY_THRESHOLD = 200  # Pixels/frame threshold for violence (higher = less sensitive)
     
     # Camera calibration settings
     CAMERA_NAME = "default"
@@ -121,8 +128,15 @@ class SimpleHandTouchDetector:
             'transactions': 0,
             'confirmed_transactions': 0,
             'cash_detections': 0,
-            'cash_types': {}  # Count each type of bill detected
+            'cash_types': {},  # Count each type of bill detected
+            'possible_detections': 0  # Hands close but no material
         }
+        
+        # Track "possible" detections (hands close but no material)
+        self.possible_events = []  # Store all possible detections
+        self.current_possible_event = None  # Track ongoing possible event
+        self.possible_frame_buffer = {}  # Buffer frames during detection: {event_index: [(frame_num, annotated_frame)]}
+        self.current_event_index = 0  # Event counter
         
         # Temporal tracking - track transactions over time
         self.transaction_history = {}  # {person_pair: [frame_count]}
@@ -309,25 +323,38 @@ class SimpleHandTouchDetector:
                             # Calculate hand velocities for violence detection
                             c_hand_type = hand_type.split('-')[0]  # 'L' or 'R'
                             n_hand_type = hand_type.split('-')[1]  # 'L' or 'R'
-                            c_velocity, c_angle = self._calculate_hand_velocity(cashier['id'], c_hand, c_hand_type.lower(), self.stats['frames'])
-                            n_velocity, n_angle = self._calculate_hand_velocity(customer['id'], n_hand, n_hand_type.lower(), self.stats['frames'])
+                            # Map to full names: L -> left, R -> right
+                            c_hand_name = 'left' if c_hand_type == 'L' else 'right'
+                            n_hand_name = 'left' if n_hand_type == 'L' else 'right'
+                            c_velocity, c_angle = self._calculate_hand_velocity(cashier['id'], c_hand, c_hand_name, self.stats['frames'])
+                            n_velocity, n_angle = self._calculate_hand_velocity(customer['id'], n_hand, n_hand_name, self.stats['frames'])
                             
-                            # Check for violence: Fast hand movement (>150 px/frame)
+                            # === VIOLENCE DETECTION (3 METHODS) ===
+                            # ONLY detect violence from CUSTOMER, not cashier
                             is_violent = False
-                            violence_reason = None
+                            violence_type = None
+                            violence_confidence = 0
+                            violence_method = None
+                            
+                            # Only check CUSTOMER velocity for violence (not cashier)
                             if self.config.DETECT_HAND_VELOCITY:
                                 violence_threshold = self.config.VIOLENCE_VELOCITY_THRESHOLD
-                                if c_velocity > violence_threshold:
+                                # Only customer fast movement = violence
+                                if n_velocity > violence_threshold:
                                     is_violent = True
-                                    violence_reason = f"Cashier hand moving fast: {c_velocity:.0f} px/frame"
-                                elif n_velocity > violence_threshold:
-                                    is_violent = True
-                                    violence_reason = f"Customer hand moving fast: {n_velocity:.0f} px/frame"
+                                    violence_type = f"🚨 Violence (Customer Attack - {n_velocity:.0f} px/f)"
+                                    violence_confidence = min(n_velocity / violence_threshold, 1.0)
+                                    violence_method = "Velocity"
                             
                             # If violent movement detected, mark as violence instead of cash
                             if is_violent:
-                                print(f"  ⚠️  🚨 VIOLENCE DETECTED: {violence_reason}")
+                                print(f"  🚨 VIOLENCE DETECTED ({violence_method}): {violence_type}")
+                                print(f"     Confidence: {violence_confidence:.0%}")
                                 print(f"     Between: P{cashier['id']} ↔ P{customer['id']} ({hand_type})")
+                                if 'violence_count' not in self.stats:
+                                    self.stats['violence_count'] = 0
+                                self.stats['violence_count'] += 1
+                                
                                 closest_distance = dist
                                 closest_transaction = {
                                     'p1_id': cashier['id'],
@@ -338,10 +365,14 @@ class SimpleHandTouchDetector:
                                     'distance': dist,
                                     'cashier_customer_pair': f"C{cashier['id']}-P{customer['id']}",
                                     'cash_detected': True,  # Mark as detected
-                                    'cash_type': '🚨 Violence (Fast Movement)',  # Violence label
+                                    'cash_type': violence_type,  # Violence label
                                     'cash_bbox': None,
                                     'cash_pixels': 0,
-                                    'analysis_scores': {'velocity': max(c_velocity, n_velocity), 'reason': violence_reason},
+                                    'analysis_scores': {
+                                        'violence_confidence': violence_confidence, 
+                                        'method': violence_method,
+                                        'velocity': max(c_velocity, n_velocity)
+                                    },
                                     'is_violence': True  # NEW: Flag for violence
                                 }
                                 continue  # Skip material analysis
@@ -349,35 +380,40 @@ class SimpleHandTouchDetector:
                             # Check for cash/card with 3-Phase Handover Zone Analysis
                             material_detected, material_type, material_bbox, analysis_scores = self._analyze_handover_zone(frame, c_hand, n_hand, draw_debug=True)
                             
-                            # Apply confidence threshold (default 0.65)
-                            confidence_threshold = self.config.CASH_DETECTION_CONFIDENCE
-                            if material_detected:
-                                # Calculate overall confidence from analysis scores
+                            # Track ALL hand-close events to Possible folder (for debugging)
+                            # This includes BOTH material detected and NOT detected
+                            if dist < closest_distance:  # Only track closest pair
                                 geom = analysis_scores.get('geometric', 0)
                                 glare = analysis_scores.get('photometric', 0)
                                 color = analysis_scores.get('chromatic', 0)
+                                internal_conf = analysis_scores.get('confidence', 0)
                                 
-                                # Confidence is high if scores support the material type
-                                if '💳' in material_type or 'Card' in material_type:
-                                    # Card: high geometric + high glare + low color
-                                    confidence = (geom + glare + (1 - color)) / 3
+                                # Print message based on detection result
+                                if material_detected:
+                                    print(f"  ✅ Material detected: {material_type} (conf:{internal_conf:.2f}) [G:{geom:.2f} L:{glare:.2f} C:{color:.2f}]")
                                 else:
-                                    # Cash: low geometric + low glare + high color
-                                    confidence = ((1 - geom) + (1 - glare) + color) / 3
-                                
-                                # Apply threshold
-                                if confidence < confidence_threshold:
-                                    material_detected = False
-                                    if self.config.DEBUG_MODE:
-                                        print(f"  ⚠️  Material rejected (confidence {confidence:.2f} < {confidence_threshold:.2f}) - P{cashier['id']}↔P{customer['id']}")
-                            
-                            # Debug: Print when hands are close but NO material detected
-                            if self.config.DETECT_CASH_COLOR and not material_detected and self.config.DEBUG_MODE:
-                                if dist < closest_distance:  # Only print for closest pair
-                                    geom = analysis_scores.get('geometric', 0)
-                                    glare = analysis_scores.get('photometric', 0)
-                                    color = analysis_scores.get('chromatic', 0)
                                     print(f"  ⚠️  Hands close ({dist:.0f}px) but NO MATERIAL - P{cashier['id']}↔P{customer['id']} ({hand_type}) [G:{geom:.2f} L:{glare:.2f} C:{color:.2f}]")
+                                
+                                # Track ALL hand-close events (detected OR not) for debugging
+                                try:
+                                    self._track_possible_detection(
+                                        frame_num=self.stats['frames'],
+                                        p1_id=cashier['id'],
+                                        p2_id=customer['id'],
+                                        hand_type=hand_type,
+                                        distance=dist,
+                                        scores={'geometric': geom, 'photometric': glare, 'chromatic': color},
+                                        p1_hand=c_hand,
+                                        p2_hand=n_hand,
+                                        material_detected=material_detected,
+                                        material_type=material_type,
+                                        confidence=internal_conf,
+                                        annotated_frame=frame  # Pass frame for buffering
+                                    )
+                                except Exception as e:
+                                    print(f"  ❌ Error tracking possible detection: {e}")
+                                    import traceback
+                                    traceback.print_exc()
                             
                             # Only confirm if BOTH hand proximity AND material detected
                             if self.config.DETECT_CASH_COLOR and not material_detected:
@@ -419,6 +455,9 @@ class SimpleHandTouchDetector:
             
             self.transaction_history[pair_key] += 1
             
+            if self.config.DEBUG_MODE and self.transaction_history[pair_key] == 1:
+                print(f"  🔄 NEW PAIR: P{trans['p1_id']}↔P{trans['p2_id']} started ({dist:.0f}px)")
+            
             # Confirm transaction if it lasts MIN_TRANSACTION_FRAMES or more
             if self.transaction_history[pair_key] >= self.config.MIN_TRANSACTION_FRAMES:
                 trans['confirmed'] = True
@@ -428,6 +467,8 @@ class SimpleHandTouchDetector:
                 # Count as confirmed transaction (only once when first confirmed)
                 if self.transaction_history[pair_key] == self.config.MIN_TRANSACTION_FRAMES:
                     self.stats['confirmed_transactions'] += 1
+                    if self.config.DEBUG_MODE:
+                        print(f"  ✅ CONFIRMED: P{trans['p1_id']}↔P{trans['p2_id']} ({trans['distance']:.0f}px, {trans['duration']} frames)")
                     
                     # Debug: Print material detection details (Cash or Card)
                     if self.config.DETECT_CASH_COLOR and trans.get('cash_detected'):
@@ -475,6 +516,24 @@ class SimpleHandTouchDetector:
         
         # STEP 4: Draw hands and confirmed transactions
         output_frame = self._draw_transactions(frame.copy(), people, confirmed_transactions)
+        
+        # STEP 5: Update possible event buffer with final annotated frame
+        # This ensures clips show EXACTLY what was detected during main processing
+        if self.current_possible_event is not None:
+            event_idx = self.current_possible_event.get('event_index')
+            if event_idx and event_idx in self.possible_frame_buffer:
+                # Replace all frames for this event with annotated version
+                # (since we only track the current frame per call, just update the last one)
+                if len(self.possible_frame_buffer[event_idx]) > 0:
+                    last_frame_num = self.possible_frame_buffer[event_idx][-1][0]
+                    # Check if this is the current frame
+                    if last_frame_num == self.stats['frames']:
+                        # Draw possible detection overlay on this frame
+                        annotated_possible = output_frame.copy()
+                        # Add velocity arrows if debug mode
+                        if self.config.DEBUG_MODE:
+                            annotated_possible = self._draw_velocity_arrows(annotated_possible, people)
+                        self.possible_frame_buffer[event_idx][-1] = (last_frame_num, annotated_possible.copy())
         
         return output_frame, confirmed_transactions
     
@@ -606,7 +665,7 @@ class SimpleHandTouchDetector:
         photometric_score = self._filter_photometric_glare(gray_zone)
         
         # --- FILTER C: CHROMATIC LOGIC (Color Saturation) ---
-        chromatic_score, detected_bill = self._filter_chromatic_color(hsv_zone)
+        chromatic_score, detected_bill, color_analysis = self._filter_chromatic_color(hsv_zone)
         
         # ═══════════════════════════════════════════════════════════════
         # DECISION LOGIC: Combine all filters
@@ -616,40 +675,75 @@ class SimpleHandTouchDetector:
             'geometric': geometric_score,      # > 0.7 = Card, < 0.3 = Cash
             'photometric': photometric_score,  # > 0.5 = Card (glare), < 0.5 = Cash (matte)
             'chromatic': chromatic_score,      # > 0.6 = Cash (colorful), < 0.4 = Card (gray)
-            'bill_type': detected_bill
+            'bill_type': detected_bill,
+            'color_analysis': color_analysis
         }
         
         # Decision tree (prioritize strong signals)
         material_type = None
         confidence = 0
+        decision_reason = ""
         
         # Strong Card signal: High glare + Low color + Rectangular shape
         if photometric_score > 0.5 and chromatic_score < 0.4 and geometric_score > 0.6:
             material_type = "💳 Card"
             confidence = (photometric_score + geometric_score + (1 - chromatic_score)) / 3
+            decision_reason = "High glare + Low color + Rectangular shape"
         
         # Strong Cash signal: High color + Low glare + Detected bill type
-        elif chromatic_score > 0.6 and photometric_score < 0.5 and detected_bill:
+        elif chromatic_score > 0.7 and photometric_score < 0.5 and detected_bill:
             material_type = f"💵 {detected_bill}"
             confidence = chromatic_score
+            decision_reason = f"High color ({chromatic_score:.2f}) + Low glare + Bill detected"
         
-        # Weak Cash signal: Just high color
-        elif chromatic_score > 0.5 and detected_bill:
+        # Weak Cash signal: High color only (more strict now)
+        elif chromatic_score > 0.75 and detected_bill:
             material_type = f"💵 {detected_bill}"
-            confidence = chromatic_score * 0.8  # Lower confidence
+            confidence = chromatic_score * 0.75  # Lower confidence
+            decision_reason = f"High color only ({chromatic_score:.2f})"
         
         # Nothing detected or ambiguous
         else:
             material_type = None
             confidence = 0
+            decision_reason = f"Not enough: Geom={geometric_score:.2f} Photo={photometric_score:.2f} Chrom={chromatic_score:.2f}"
         
-        # Add confidence to scores dictionary
+        # Add confidence and decision to scores dictionary
         scores['confidence'] = confidence
+        scores['decision_reason'] = decision_reason
+        
+        # Store JSON debug data (will be saved with video clip later)
+        if self.config.DEBUG_MODE:
+            debug_data = {
+                "zone_size": f"{roi_x2-roi_x1}x{roi_y2-roi_y1} pixels",
+                "hand_distance": f"{hand_distance:.1f} pixels",
+                "scores": {
+                    "geometric": round(geometric_score, 3),
+                    "photometric": round(photometric_score, 3),
+                    "chromatic": round(chromatic_score, 3),
+                    "confidence": round(confidence, 3)
+                },
+                "color_detection": color_analysis,
+                "thresholds": {
+                    "min_pixels": self.config.CASH_COLOR_THRESHOLD,
+                    "min_confidence": self.config.CASH_DETECTION_CONFIDENCE,
+                    "internal_threshold": 0.5
+                },
+                "decision": {
+                    "material_type": material_type or "None",
+                    "detected_bill": detected_bill or "None",
+                    "confidence_percent": round(confidence * 100, 1),
+                    "reason": decision_reason,
+                    "passed_internal": confidence > 0.5,
+                    "passed_external": confidence > self.config.CASH_DETECTION_CONFIDENCE
+                }
+            }
+            scores['debug_data'] = debug_data
         
         # Debug visualization
         if draw_debug and self.config.DEBUG_MODE:
             self._draw_handover_debug(frame, roi_x1, roi_y1, roi_x2, roi_y2, 
-                                     mid_x, mid_y, scores, material_type, confidence)
+                                     mid_x, mid_y, scores, material_type, confidence, color_analysis)
         
         # Only return detection if confidence is sufficient (internal threshold)
         if material_type and confidence > 0.5:
@@ -735,11 +829,15 @@ class SimpleHandTouchDetector:
     
     def _filter_chromatic_color(self, zone_hsv):
         """
-        FILTER C: Chromatic Logic (Color Saturation)
+        FILTER C: Chromatic Logic (Color Saturation) - ENHANCED 🔥
         
         Logic:
         - Card: White/Gray/Black (Low saturation)
         - Cash (Korean Won): Green/Yellow/Pink (High saturation)
+        
+        Enhancements:
+        - Morphological operations to remove noise
+        - Contour analysis for better shape detection
         
         Returns: (chromatic_score, detected_bill_type)
         - High score (>0.6) = Cash-like (colorful)
@@ -754,9 +852,10 @@ class SimpleHandTouchDetector:
         # Normalize: 0-255 → 0.0-1.0
         chromatic_score = avg_saturation / 255.0
         
-        # Also check for specific Korean Won bill colors
+        # Also check for specific Korean Won bill colors with ENHANCEMENTS
         detected_bill = None
         max_pixels = 0
+        color_analysis = {}  # Store detailed analysis for each bill
         
         for bill_type, color_info in self.config.CASH_COLORS.items():
             lower = np.array(color_info['lower'])
@@ -764,21 +863,40 @@ class SimpleHandTouchDetector:
             
             # Create mask for this bill color
             mask = cv2.inRange(zone_hsv, lower, upper)
-            pixel_count = np.count_nonzero(mask)
             
-            # Check if this bill color is prominent
-            if pixel_count > max_pixels and pixel_count > 50:  # At least 50 pixels
+            pixel_count = np.count_nonzero(mask)
+            original_pixel_count = pixel_count
+            
+            # ENHANCEMENT 1: Morphological operations (remove noise) - OPTIONAL
+            if pixel_count > 200:  # Only apply if we have significant detection
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+                mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)  # Fill small holes
+                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)   # Remove noise
+                pixel_count = np.count_nonzero(mask)  # Recount after cleanup
+            
+            # Store analysis for this bill type
+            color_analysis[color_info['name']] = {
+                'pixel_count': pixel_count,
+                'original_pixel_count': original_pixel_count,
+                'hsv_range': f"H:{lower[0]}-{upper[0]} S:{lower[1]}-{upper[1]} V:{lower[2]}-{upper[2]}",
+                'threshold': self.config.CASH_COLOR_THRESHOLD,
+                'passed': pixel_count > self.config.CASH_COLOR_THRESHOLD
+            }
+            
+            # Check if this bill color is prominent (use configured threshold)
+            min_threshold = self.config.CASH_COLOR_THRESHOLD
+            if pixel_count > max_pixels and pixel_count > min_threshold:
                 max_pixels = pixel_count
                 detected_bill = color_info['name']
         
         # Boost chromatic score if specific bill detected
-        if detected_bill and max_pixels > 100:
+        if detected_bill and max_pixels > self.config.CASH_COLOR_THRESHOLD:
             chromatic_score = max(chromatic_score, 0.7)
         
-        return chromatic_score, detected_bill
+        return chromatic_score, detected_bill, color_analysis
     
     def _draw_handover_debug(self, frame, x1, y1, x2, y2, mid_x, mid_y, 
-                            scores, material_type, confidence):
+                            scores, material_type, confidence, color_analysis=None):
         """Draw debug visualization for handover zone analysis"""
         # Draw handover zone (cyan dashed rectangle)
         dash_length = 8
@@ -790,6 +908,23 @@ class SimpleHandTouchDetector:
         for i in range(y1, y2, dash_length * 2):
             cv2.line(frame, (x1, i), (x1, min(i + dash_length, y2)), color, 2)
             cv2.line(frame, (x2, i), (x2, min(i + dash_length, y2)), color, 2)
+        
+        # Draw color analysis (pixel counts for each bill)
+        if color_analysis:
+            y_offset = y2 + 20
+            for bill_name, analysis in color_analysis.items():
+                pixel_count = analysis['pixel_count']
+                passed = analysis['passed']
+                color_text = (0, 255, 0) if passed else (0, 0, 255)
+                
+                # Show pixel count for each bill type
+                text = f"{bill_name}: {pixel_count}px"
+                if passed:
+                    text += " ✓"
+                
+                cv2.putText(frame, text, (x1, y_offset),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, color_text, 1)
+                y_offset += 18
         
         # Draw midpoint
         cv2.circle(frame, (mid_x, mid_y), 6, (255, 255, 0), -1)
@@ -818,6 +953,566 @@ class SimpleHandTouchDetector:
     def _detect_cash_color(self, frame, hand1, hand2, draw_debug=False):
         """Legacy method - redirects to new handover zone analysis"""
         return self._analyze_handover_zone(frame, hand1, hand2, draw_debug)
+    
+    def _track_possible_detection(self, frame_num, p1_id, p2_id, hand_type, distance, scores, p1_hand, p2_hand, 
+                                  material_detected=False, material_type=None, confidence=0.0, annotated_frame=None):
+        """
+        Track ALL hand-close events (material detected OR not) for debugging
+        Buffers annotated frames during detection for accurate clips
+        """
+        # Check if this continues the current event
+        pair_key = f"{p1_id}-{p2_id}"
+        
+        if self.current_possible_event is None:
+            # Start new event
+            self.current_event_index += 1
+            event_idx = self.current_event_index
+            
+            self.current_possible_event = {
+                'event_index': event_idx,
+                'start_frame': frame_num,
+                'end_frame': frame_num,
+                'pair': pair_key,
+                'p1_id': p1_id,
+                'p2_id': p2_id,
+                'hand_type': hand_type,
+                'distance': distance,
+                'scores': scores,
+                'p1_hand': p1_hand,
+                'p2_hand': p2_hand,
+                'frame_count': 1,
+                'avg_scores': scores.copy(),
+                'material_detected': material_detected,
+                'material_type': material_type,
+                'confidence': confidence
+            }
+            
+            # Initialize frame buffer for this event
+            self.possible_frame_buffer[event_idx] = []
+            
+            # Buffer this frame (save ACTUAL detection, not re-run later!)
+            if annotated_frame is not None:
+                self.possible_frame_buffer[event_idx].append((frame_num, annotated_frame.copy()))
+        elif self.current_possible_event['pair'] == pair_key and (frame_num - self.current_possible_event['end_frame']) <= 5:
+            # Continue existing event (within 5 frames)
+            event = self.current_possible_event
+            event['end_frame'] = frame_num
+            event['frame_count'] += 1
+            
+            # Update average scores
+            for key in ['geometric', 'photometric', 'chromatic']:
+                event['avg_scores'][key] = (
+                    (event['avg_scores'][key] * (event['frame_count'] - 1) + scores[key]) 
+                    / event['frame_count']
+                )
+            
+            # Update material detection status (if material detected at any frame, mark as detected)
+            if material_detected and not event['material_detected']:
+                event['material_detected'] = True
+                event['material_type'] = material_type
+                event['confidence'] = confidence
+            elif material_detected and confidence > event.get('confidence', 0):
+                # Update to higher confidence detection
+                event['material_type'] = material_type
+                event['confidence'] = confidence
+            
+            # Buffer this frame too
+            if annotated_frame is not None:
+                event_idx = event['event_index']
+                if event_idx in self.possible_frame_buffer:
+                    self.possible_frame_buffer[event_idx].append((frame_num, annotated_frame.copy()))
+        else:
+            # Save previous event and start new one (NO THRESHOLD - save all)
+            if self.current_possible_event['frame_count'] >= 1:  # Changed from 3 to 1 - save ALL events
+                self.possible_events.append(self.current_possible_event.copy())
+                self.stats['possible_detections'] += 1
+            
+            # Start new event with new index
+            self.current_event_index += 1
+            event_idx = self.current_event_index
+            
+            self.current_possible_event = {
+                'event_index': event_idx,
+                'start_frame': frame_num,
+                'end_frame': frame_num,
+                'pair': pair_key,
+                'p1_id': p1_id,
+                'p2_id': p2_id,
+                'hand_type': hand_type,
+                'distance': distance,
+                'scores': scores,
+                'p1_hand': p1_hand,
+                'p2_hand': p2_hand,
+                'frame_count': 1,
+                'avg_scores': scores.copy(),
+                'material_detected': material_detected,
+                'material_type': material_type,
+                'confidence': confidence
+            }
+            
+            # Initialize frame buffer for this new event
+            self.possible_frame_buffer[event_idx] = []
+            if annotated_frame is not None:
+                self.possible_frame_buffer[event_idx].append((frame_num, annotated_frame.copy()))
+    
+    def _save_possible_detections(self, video_path, output_base_dir, fps=30):
+        """
+        Save all "possible" detections to Possible folder with JSON data + video clips
+        Groups events that occur within same time period
+        """
+        # Finalize last event if exists (save ALL, no threshold)
+        if self.current_possible_event and self.current_possible_event['frame_count'] >= 1:
+            self.possible_events.append(self.current_possible_event.copy())
+            self.stats['possible_detections'] += 1
+        
+        if not self.possible_events:
+            return
+        
+        # Create Possible folder
+        possible_dir = Path(output_base_dir) / "Possible"
+        possible_dir.mkdir(exist_ok=True, parents=True)
+        
+        # Group events by time proximity (within 2 seconds)
+        grouped_events = self._group_events_by_time(self.possible_events, fps, max_gap_seconds=2.0)
+        
+        print(f"\n💾 Saving {len(self.possible_events)} hand-close detection(s) to: {possible_dir}")
+        print(f"   Grouped into: {len(grouped_events)} clip(s)")
+        
+        # Save each group (save ALL for debugging, even 1-frame events)
+        video_name = Path(video_path).stem
+        saved_count = 0
+        for group_idx, event_group in enumerate(grouped_events, 1):
+            # Use ALL events (including 1-frame) for debugging purposes
+            valid_events = event_group
+            if not valid_events:
+                continue  # Skip empty groups
+            
+            # Calculate time range
+            start_frame = min(e['start_frame'] for e in valid_events)
+            end_frame = max(e['end_frame'] for e in valid_events)
+            start_time = start_frame / fps
+            end_time = end_frame / fps
+            duration = end_time - start_time
+            
+            # Create JSON data for this group (only valid events)
+            # Don't increment saved_count yet - wait until clip is validated
+            temp_group_id = saved_count + 1
+            json_data = {
+                'video_source': video_name,
+                'group_id': temp_group_id,  # Temporary ID
+                'time_range': {
+                    'start_frame': start_frame,
+                    'end_frame': end_frame,
+                    'start_time_seconds': round(start_time, 2),
+                    'end_time_seconds': round(end_time, 2),
+                    'duration_seconds': round(duration, 2)
+                },
+                'event_count': len(valid_events),
+                'important_note': '✅ Continuous clips: 1s before + detection + 1s after. Frame numbers are ORIGINAL from main video.',
+                'how_to_use': 'Video shows "Original Frame: XXXX" continuously. Buffered frames have detection overlays, padding frames are clean.',
+                'clip_info': {
+                    'padding_before': '1 second before detection',
+                    'padding_after': '1 second after detection',
+                    'continuous': 'All frames shown sequentially (e.g., 1000→1001→1002→1003...)'
+                },
+                'events': []
+            }
+            
+            # Add each valid event in this group
+            for event in valid_events:
+                json_data['events'].append({
+                    'frame_range': f"{event['start_frame']}-{event['end_frame']}",
+                    'persons': f"P{event['p1_id']} ↔ P{event['p2_id']}",
+                    'hand_type': event['hand_type'],
+                    'distance_px': round(event['distance'], 1),
+                    'frame_count': event['frame_count'],
+                    'material_detected': event.get('material_detected', False),
+                    'material_type': event.get('material_type', 'None'),
+                    'detection_confidence': round(event.get('confidence', 0.0), 3),
+                    'material_scores': {
+                        'geometric': round(event['avg_scores']['geometric'], 3),
+                        'photometric': round(event['avg_scores']['photometric'], 3),
+                        'chromatic': round(event['avg_scores']['chromatic'], 3)
+                    },
+                    'interpretation': {
+                        'geometric': 'Card-like' if event['avg_scores']['geometric'] > 0.7 else 'Cash-like' if event['avg_scores']['geometric'] < 0.3 else 'Neutral',
+                        'photometric': 'Glare detected' if event['avg_scores']['photometric'] > 0.5 else 'Matte surface',
+                        'chromatic': 'Colorful' if event['avg_scores']['chromatic'] > 0.6 else 'Grayscale' if event['avg_scores']['chromatic'] < 0.4 else 'Neutral'
+                    },
+                    'debug_note': '✅ DETECTED' if event.get('material_detected', False) else '⚠️ NOT DETECTED'
+                })
+            
+            # Temp filenames (will be renamed if successful)
+            temp_json_filename = f"possible_{video_name}_groupTEMP_{start_frame:06d}-{end_frame:06d}.json"
+            temp_json_path = possible_dir / temp_json_filename
+            temp_clip_filename = f"possible_{video_name}_groupTEMP_{start_frame:06d}-{end_frame:06d}.mp4"
+            temp_clip_path = possible_dir / temp_clip_filename
+            
+            padding_seconds = 2  # 2 seconds before and after
+            clip_start_frame = max(0, start_frame - int(padding_seconds * fps))
+            clip_end_frame = end_frame + int(padding_seconds * fps)
+            
+            try:
+                # Create clip from BUFFERED frames (EXACT frames that were detected!)
+                frames_used = self._create_clip_from_buffer(valid_events, temp_clip_path, fps, video_path, clip_start_frame, clip_end_frame)
+                
+                if frames_used == 0:
+                    continue
+                
+                # Clip created! Increment counter and rename files
+                saved_count += 1
+                json_data['group_id'] = saved_count  # Update with final ID
+                
+                # Final filenames
+                json_filename = f"possible_{video_name}_group{saved_count:03d}_{start_frame:06d}-{end_frame:06d}.json"
+                json_path = possible_dir / json_filename
+                clip_filename = f"possible_{video_name}_group{saved_count:03d}_{start_frame:06d}-{end_frame:06d}.mp4"
+                clip_path = possible_dir / clip_filename
+                
+                # Save JSON
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(json_data, f, indent=2, ensure_ascii=False)
+                
+                # Rename clip
+                temp_clip_path.rename(clip_path)
+                
+                print(f"  ✅ Group {saved_count}: {len(valid_events)} event(s) at {start_time:.1f}s-{end_time:.1f}s")
+                
+            except Exception as e:
+                if temp_clip_path.exists():
+                    temp_clip_path.unlink()
+        
+        print(f"✅ Saved {saved_count} clip(s) to: {possible_dir}\n")
+        
+        self.possible_frame_buffer.clear()
+    
+    def _create_clip_from_buffer(self, valid_events, output_path, fps, video_path, clip_start_frame, clip_end_frame):
+        """
+        Create video clip from BUFFERED frames with padding to ensure minimum 5 seconds
+        Fills gaps between buffered frames from original video for continuity
+        """
+        # Padding: 1 second before detection, 1 second after detection
+        PADDING_BEFORE_SECONDS = 1
+        PADDING_AFTER_SECONDS = 1
+        PADDING_BEFORE_FRAMES = int(PADDING_BEFORE_SECONDS * fps)
+        PADDING_AFTER_FRAMES = int(PADDING_AFTER_SECONDS * fps)
+        
+        # Collect all buffered frames for this group
+        buffered_frames_dict = {}  # {frame_num: annotated_frame}
+        for event in valid_events:
+            event_idx = event.get('event_index')
+            if event_idx and event_idx in self.possible_frame_buffer:
+                for frame_num, frame in self.possible_frame_buffer[event_idx]:
+                    buffered_frames_dict[frame_num] = frame
+        
+        if not buffered_frames_dict:
+            self._extract_possible_clip(video_path, output_path, clip_start_frame, clip_end_frame, fps)
+            return 0
+        
+        # Find the actual frame range from buffered frames
+        buffered_frame_numbers = sorted(buffered_frames_dict.keys())
+        actual_start = buffered_frame_numbers[0]
+        actual_end = buffered_frame_numbers[-1]
+        
+        # Add padding: 1 second before, 1 second after
+        clip_start_frame = max(0, actual_start - PADDING_BEFORE_FRAMES)
+        clip_end_frame = actual_end + PADDING_AFTER_FRAMES
+        
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise Exception(f"Cannot open video: {video_path}")
+        
+        first_frame = buffered_frames_dict[buffered_frame_numbers[0]]
+        height, width = first_frame.shape[:2]
+        
+        temp_avi_path = str(output_path).replace('.mp4', '_temp.avi')
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        out = cv2.VideoWriter(temp_avi_path, fourcc, fps, (width, height))
+        
+        if not out.isOpened():
+            cap.release()
+            raise Exception(f"Cannot create video writer: {output_path}")
+        
+        cap.set(cv2.CAP_PROP_POS_FRAMES, clip_start_frame)
+        
+        frames_written = 0
+        buffered_count = 0
+        
+        for current_frame in range(clip_start_frame, clip_end_frame + 1):
+            ret, frame = cap.read()
+            if not ret:
+                frame = np.zeros((height, width, 3), dtype=np.uint8)
+            else:
+                if frame.shape[:2] != (height, width):
+                    frame = cv2.resize(frame, (width, height))
+            
+            if current_frame in buffered_frames_dict:
+                overlay = buffered_frames_dict[current_frame].copy()
+                frame = cv2.addWeighted(frame, 0.3, overlay, 0.7, 0)
+                buffered_count += 1
+            
+            frame_text = f"Frame: {current_frame}"
+            cv2.putText(frame, frame_text, (width - 150, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            
+            out.write(frame)
+            frames_written += 1
+        
+        cap.release()
+        out.release()
+        
+        # Convert to MP4
+        try:
+            import subprocess
+            import shutil
+            if shutil.which('ffmpeg'):
+                cmd = [
+                    'ffmpeg', '-i', temp_avi_path,
+                    '-c:v', 'libx264',
+                    '-preset', 'fast',
+                    '-crf', '23',
+                    '-y',
+                    str(output_path)
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0 and Path(output_path).exists():
+                    Path(temp_avi_path).unlink(missing_ok=True)
+                else:
+                    Path(temp_avi_path).rename(output_path.replace('.mp4', '.avi'))
+            else:
+                Path(temp_avi_path).rename(output_path.replace('.mp4', '.avi'))
+        except Exception as e:
+            print(f"      ⚠️  Conversion error, using AVI: {e}")
+            if Path(temp_avi_path).exists():
+                Path(temp_avi_path).rename(output_path.replace('.mp4', '.avi'))
+        
+        return frames_written
+    
+    def _extract_possible_clip(self, video_path, output_path, start_frame, end_frame, fps):
+        """
+        Extract a video clip for a possible detection
+        Re-processes frames with detection overlay + velocity arrows
+        VALIDATES that hands are actually close in the extracted frames
+        """
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise Exception(f"Cannot open video: {video_path}")
+        
+        # Get video properties
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Try MJPEG first (more compatible), fallback to mp4v
+        temp_avi_path = str(output_path).replace('.mp4', '_temp.avi')
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        out = cv2.VideoWriter(temp_avi_path, fourcc, fps, (width, height))
+        
+        if not out.isOpened():
+            raise Exception(f"Cannot create video writer: {output_path}")
+        
+        # Seek to start frame
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        
+        # Save original settings
+        original_debug = self.config.DEBUG_MODE
+        original_velocity = self.config.DETECT_HAND_VELOCITY
+        
+        # Enable velocity visualization for possible clips
+        self.config.DEBUG_MODE = True
+        self.config.DETECT_HAND_VELOCITY = True
+        
+        # Reset detector state for clip
+        old_history = self.transaction_history.copy()
+        old_person_map = self.person_id_map.copy()
+        old_stable_id = self.next_stable_id
+        old_persistence = self.cashier_persistence.copy()
+        old_hand_history = self.hand_history.copy()
+        
+        self.transaction_history = {}
+        self.person_id_map = {}
+        self.next_stable_id = 1
+        self.cashier_persistence = {}
+        self.hand_history = {}
+        
+        frames_written = 0
+        frames_with_close_hands = 0  # Count frames where hands are actually close
+        
+        for frame_idx in range(start_frame, end_frame):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Re-run detection to get annotated frame with velocity arrows
+            try:
+                annotated_frame, detections = self.detect_hand_touches(frame)
+                
+                # Count frames where hands are actually close (detections found)
+                if detections:
+                    frames_with_close_hands += 1
+                
+                # Add banner at top showing detection status
+                # Check if material was detected in any of these detections
+                has_material = any(d.get('cash_detected', False) for d in detections) if detections else False
+                
+                if has_material:
+                    label_text = f"✅ MATERIAL DETECTED - ORIGINAL Frame {frame_idx}"
+                    banner_color = (0, 255, 0)  # Green for successful detection
+                elif detections:
+                    label_text = f"⚠️ HANDS CLOSE - NO MATERIAL - ORIGINAL Frame {frame_idx}"
+                    banner_color = (0, 165, 255)  # Orange for failed detection
+                else:
+                    label_text = f"⚠️ ORIGINAL Frame {frame_idx} - People moved/IDs changed"
+                    banner_color = (0, 100, 200)  # Blue warning
+                    
+                    # Add explanation text
+                    cv2.putText(annotated_frame, "Event was detected during main processing",
+                               (10, height - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 200, 255), 2)
+                    cv2.putText(annotated_frame, "but people moved away by clip extraction time",
+                               (10, height - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 200, 255), 2)
+                
+                banner_width = 750 if not detections else 550
+                cv2.rectangle(annotated_frame, (10, 10), (banner_width, 50), banner_color, -1)
+                cv2.rectangle(annotated_frame, (10, 10), (banner_width, 50), (255, 255, 255), 3)
+                cv2.putText(annotated_frame, label_text, (20, 37),
+                           cv2.FONT_HERSHEY_DUPLEX, 0.55, (255, 255, 255), 2)
+                
+                # Add material analysis info panel (bottom-left corner)
+                panel_x = 10
+                panel_y = height - 160
+                panel_width = 400
+                panel_height = 150
+                
+                # Semi-transparent background
+                overlay = annotated_frame.copy()
+                cv2.rectangle(overlay, (panel_x, panel_y), (panel_x + panel_width, panel_y + panel_height),
+                             (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.7, annotated_frame, 0.3, 0, annotated_frame)
+                
+                # Border
+                cv2.rectangle(annotated_frame, (panel_x, panel_y), (panel_x + panel_width, panel_y + panel_height),
+                             (0, 165, 255), 2)
+                
+                # Title - changes based on detection status
+                if has_material:
+                    title_text = "MATERIAL ANALYSIS - DETECTED!"
+                    title_color = (0, 255, 0)
+                else:
+                    title_text = "MATERIAL ANALYSIS - NOT DETECTED"
+                    title_color = (0, 165, 255)
+                
+                cv2.putText(annotated_frame, title_text,
+                           (panel_x + 10, panel_y + 25), cv2.FONT_HERSHEY_DUPLEX, 0.6, title_color, 2)
+                
+                # Legend
+                y_offset = panel_y + 50
+                cv2.putText(annotated_frame, "Geometric (Shape): <0.3=Cash, >0.7=Card",
+                           (panel_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                y_offset += 25
+                cv2.putText(annotated_frame, "Photometric (Glare): >0.5=Card reflection",
+                           (panel_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                y_offset += 25
+                cv2.putText(annotated_frame, "Chromatic (Color): >0.6=Cash, <0.4=Card",
+                           (panel_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                y_offset += 25
+                cv2.putText(annotated_frame, "See JSON for all scores + detection status",
+                           (panel_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 255, 100), 1)
+                
+                out.write(annotated_frame)
+                frames_written += 1
+            except Exception as e:
+                print(f"  ⚠️  Frame {frame_idx} detection error: {e}")
+                # Write original frame with error message
+                cv2.putText(frame, f"Detection error on frame {frame_idx}", (10, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                out.write(frame)
+                frames_written += 1
+        
+        cap.release()
+        out.release()
+        
+        # Restore original settings
+        self.config.DEBUG_MODE = original_debug
+        self.config.DETECT_HAND_VELOCITY = original_velocity
+        self.transaction_history = old_history
+        self.person_id_map = old_person_map
+        self.next_stable_id = old_stable_id
+        self.cashier_persistence = old_persistence
+        self.hand_history = old_hand_history
+        
+        if frames_written == 0:
+            raise Exception("No frames extracted")
+        
+        # For debugging purposes, save ALL clips but warn about low interaction
+        # Don't filter out - let user see what was tracked
+        close_hands_ratio = frames_with_close_hands / frames_written if frames_written > 0 else 0
+        
+        # Just print a warning if low interaction (but don't skip)
+        if close_hands_ratio < 0.1:  # Less than 10%
+            print(f"      ⚠️  Warning: Only {frames_with_close_hands}/{frames_written} frames ({close_hands_ratio:.1%}) show close hands")
+        
+        # Convert AVI to MP4 using ffmpeg if available
+        try:
+            import subprocess
+            import shutil
+            if shutil.which('ffmpeg'):
+                # Convert to MP4
+                cmd = [
+                    'ffmpeg', '-i', temp_avi_path,
+                    '-c:v', 'libx264',
+                    '-preset', 'fast',
+                    '-crf', '23',
+                    '-y',  # Overwrite
+                    str(output_path)
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0 and Path(output_path).exists():
+                    # Delete temp AVI
+                    Path(temp_avi_path).unlink(missing_ok=True)
+                else:
+                    # FFmpeg failed, rename AVI to MP4
+                    Path(temp_avi_path).rename(output_path)
+            else:
+                # No ffmpeg, just rename AVI to MP4
+                Path(temp_avi_path).rename(output_path)
+        except Exception as e:
+            print(f"  ⚠️  Conversion error, using AVI: {e}")
+            # Just rename the AVI file
+            if Path(temp_avi_path).exists():
+                Path(temp_avi_path).rename(output_path.replace('.mp4', '.avi'))
+    
+    def _group_events_by_time(self, events, fps, max_gap_seconds=2.0):
+        """
+        Group events that occur within max_gap_seconds of each other
+        Returns list of event groups
+        """
+        if not events:
+            return []
+        
+        # Sort events by start frame
+        sorted_events = sorted(events, key=lambda e: e['start_frame'])
+        
+        groups = []
+        current_group = [sorted_events[0]]
+        max_gap_frames = max_gap_seconds * fps
+        
+        for event in sorted_events[1:]:
+            # Check if this event is close to the last event in current group
+            last_event_end = current_group[-1]['end_frame']
+            if event['start_frame'] - last_event_end <= max_gap_frames:
+                # Add to current group
+                current_group.append(event)
+            else:
+                # Start new group
+                groups.append(current_group)
+                current_group = [event]
+        
+        # Add last group
+        if current_group:
+            groups.append(current_group)
+        
+        return groups
     
     def _calculate_hand_velocity(self, person_id, hand_pos, hand_type, current_frame):
         """
@@ -863,6 +1558,200 @@ class SimpleHandTouchDetector:
         angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
         
         return velocity, angle
+    
+    def _analyze_violence_patterns(self, frame, hand1, hand2, draw_debug=False):
+        """
+        ═══════════════════════════════════════════════════════════════
+        🚨 VIOLENCE PATTERN ANALYSIS (NEW METHOD!)
+        ═══════════════════════════════════════════════════════════════
+        
+        Same zone as cash detection, but analyze for violence indicators:
+        
+        Violence Indicators:
+        1. Clenched fist (closed hand shape)
+        2. Grabbing motion (hands overlap/clutching)
+        3. Aggressive red/dark colors (blood, dark clothing in struggle)
+        4. Irregular motion patterns (shaking, jerking)
+        5. High contact pressure (hands pressed tightly)
+        
+        Returns: (is_violent, violence_type, confidence)
+        ═══════════════════════════════════════════════════════════════
+        """
+        # Create handover zone (same as cash detection)
+        x1, y1 = int(hand1[0]), int(hand1[1])
+        x2, y2 = int(hand2[0]), int(hand2[1])
+        
+        mid_x = (x1 + x2) // 2
+        mid_y = (y1 + y2) // 2
+        
+        hand_distance = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        zone_size = max(int(hand_distance * 0.4), 30)
+        
+        roi_x1 = max(0, mid_x - zone_size)
+        roi_y1 = max(0, mid_y - zone_size)
+        roi_x2 = min(frame.shape[1], mid_x + zone_size)
+        roi_y2 = min(frame.shape[0], mid_y + zone_size)
+        
+        zone = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+        
+        if zone.size == 0 or zone.shape[0] < 10 or zone.shape[1] < 10:
+            return False, None, 0
+        
+        # Convert to HSV and grayscale
+        hsv_zone = cv2.cvtColor(zone, cv2.COLOR_BGR2HSV)
+        gray_zone = cv2.cvtColor(zone, cv2.COLOR_BGR2GRAY)
+        
+        violence_scores = {}
+        
+        # INDICATOR 1: Clenched fist / Closed hand (detect dark closed shape)
+        violence_scores['fist'] = self._detect_clenched_fist(gray_zone)
+        
+        # INDICATOR 2: Grabbing motion (hands overlap/pressed together)
+        violence_scores['grabbing'] = self._detect_grabbing_motion(hand_distance, zone)
+        
+        # INDICATOR 3: Aggressive colors (red/blood, dark struggle)
+        violence_scores['aggressive_color'] = self._detect_aggressive_colors(hsv_zone)
+        
+        # INDICATOR 4: Irregular motion (calculated from velocity)
+        violence_scores['motion'] = 0.0  # Will be filled by calling function
+        
+        # Calculate overall violence confidence
+        # Weights: grabbing (40%), fist (30%), color (20%), motion (10%)
+        confidence = (
+            violence_scores['grabbing'] * 0.4 +
+            violence_scores['fist'] * 0.3 +
+            violence_scores['aggressive_color'] * 0.2 +
+            violence_scores['motion'] * 0.1
+        )
+        
+        # Determine violence type
+        violence_type = None
+        if confidence > 0.6:
+            if violence_scores['grabbing'] > 0.7:
+                violence_type = "🚨 Violence (Grabbing)"
+            elif violence_scores['fist'] > 0.7:
+                violence_type = "🚨 Violence (Clenched Fist)"
+            elif violence_scores['aggressive_color'] > 0.7:
+                violence_type = "🚨 Violence (Aggressive Contact)"
+            else:
+                violence_type = "🚨 Violence (Physical Contact)"
+        
+        # Debug visualization
+        if draw_debug and self.config.DEBUG_MODE and violence_type:
+            # Draw violence zone (RED dashed rectangle)
+            dash_length = 8
+            color = (0, 0, 255)  # Red for violence
+            
+            for i in range(roi_x1, roi_x2, dash_length * 2):
+                cv2.line(frame, (i, roi_y1), (min(i + dash_length, roi_x2), roi_y1), color, 3)
+                cv2.line(frame, (i, roi_y2), (min(i + dash_length, roi_x2), roi_y2), color, 3)
+            for i in range(roi_y1, roi_y2, dash_length * 2):
+                cv2.line(frame, (roi_x1, i), (roi_x1, min(i + dash_length, roi_y2)), color, 3)
+                cv2.line(frame, (roi_x2, i), (roi_x2, min(i + dash_length, roi_y2)), color, 3)
+            
+            # Draw violence label
+            cv2.putText(frame, "VIOLENCE ZONE", (roi_x1 + 5, roi_y1 - 5),
+                       cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 0, 255), 2)
+            
+            # Show scores
+            y_offset = roi_y2 + 20
+            cv2.putText(frame, f"Grab: {violence_scores['grabbing']:.2f}", 
+                       (roi_x1, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
+            cv2.putText(frame, f"Fist: {violence_scores['fist']:.2f}", 
+                       (roi_x1, y_offset + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
+            cv2.putText(frame, f"{violence_type} ({confidence:.0%})", 
+                       (roi_x1, y_offset + 35), cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 0, 255), 2)
+        
+        is_violent = confidence > 0.6
+        return is_violent, violence_type, confidence
+    
+    def _detect_clenched_fist(self, gray_zone):
+        """Detect if hand is clenched (fist) vs open (passing object)"""
+        # Clenched fist = compact dark blob
+        # Open hand = spread fingers
+        
+        # Apply threshold to detect dark areas (hand shadow/closed fingers)
+        _, binary = cv2.threshold(gray_zone, 80, 255, cv2.THRESH_BINARY_INV)
+        
+        # Find contours
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return 0.0
+        
+        # Get largest contour (hand)
+        largest = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(largest)
+        
+        if area < 50:
+            return 0.0
+        
+        # Calculate solidity (area / convex hull area)
+        # Clenched fist = high solidity (compact)
+        # Open hand = low solidity (spread fingers)
+        hull = cv2.convexHull(largest)
+        hull_area = cv2.contourArea(hull)
+        
+        if hull_area == 0:
+            return 0.0
+        
+        solidity = area / hull_area
+        
+        # Clenched fist: solidity > 0.85 (very compact)
+        # Open hand: solidity < 0.7 (spread)
+        if solidity > 0.85:
+            return 0.9  # High confidence fist
+        elif solidity > 0.75:
+            return 0.6  # Medium confidence
+        else:
+            return 0.2  # Likely open hand
+    
+    def _detect_grabbing_motion(self, hand_distance, zone):
+        """Detect if hands are grabbing/clutching vs gentle pass"""
+        # Grabbing = very close contact (<20px)
+        # Passing = moderate distance (40-80px)
+        
+        if hand_distance < 20:
+            return 0.9  # Very close = likely grabbing
+        elif hand_distance < 40:
+            return 0.7  # Close = possible grabbing
+        elif hand_distance < 60:
+            return 0.3  # Moderate = likely normal
+        else:
+            return 0.1  # Far = definitely not grabbing
+    
+    def _detect_aggressive_colors(self, hsv_zone):
+        """Detect aggressive colors (red/blood, dark clothing in struggle)"""
+        # Extract hue and value channels
+        hue = hsv_zone[:, :, 0]
+        saturation = hsv_zone[:, :, 1]
+        value = hsv_zone[:, :, 2]
+        
+        # Detect red colors (blood, aggressive)
+        # Red is at hue 0-10 or 160-180
+        red_mask1 = cv2.inRange(hsv_zone, np.array([0, 100, 50]), np.array([10, 255, 255]))
+        red_mask2 = cv2.inRange(hsv_zone, np.array([160, 100, 50]), np.array([180, 255, 255]))
+        red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+        red_pixels = np.count_nonzero(red_mask)
+        
+        # Detect very dark areas (struggle, black clothing)
+        dark_mask = cv2.inRange(hsv_zone, np.array([0, 0, 0]), np.array([180, 255, 80]))
+        dark_pixels = np.count_nonzero(dark_mask)
+        
+        total_pixels = hsv_zone.shape[0] * hsv_zone.shape[1]
+        
+        # Red indicator (blood, aggression)
+        red_ratio = red_pixels / total_pixels
+        red_score = min(red_ratio * 10, 1.0)  # 10% red = max score
+        
+        # Dark indicator (struggle, dark clothing)
+        dark_ratio = dark_pixels / total_pixels
+        dark_score = min(dark_ratio * 2, 1.0)  # 50% dark = max score
+        
+        # Combine scores
+        aggressive_score = max(red_score, dark_score * 0.5)  # Red is stronger indicator
+        
+        return aggressive_score
     
     def _bbox_overlaps_zone(self, bbox, zone, min_overlap_ratio=0.3):
         """
@@ -1005,6 +1894,75 @@ class SimpleHandTouchDetector:
         
         return people
     
+    def _draw_velocity_arrows(self, frame, people):
+        """Draw velocity arrows on hands to show movement speed and direction"""
+        if not self.config.DEBUG_MODE:
+            return frame
+        
+        for person in people:
+            if person['id'] not in self.hand_history:
+                continue
+            
+            # Draw velocity vectors for both hands
+            for hand_type in ['left', 'right']:
+                if hand_type not in self.hand_history[person['id']]:
+                    continue
+                if len(self.hand_history[person['id']][hand_type]) < 2:
+                    continue
+                
+                history = self.hand_history[person['id']][hand_type]
+                current = history[-1]
+                previous = history[-2]
+                
+                # Ensure current and previous are proper (x, y) tuples
+                if not isinstance(current, (tuple, list)) or len(current) < 2:
+                    continue
+                if not isinstance(previous, (tuple, list)) or len(previous) < 2:
+                    continue
+                
+                # Extract only x, y coordinates (ignore confidence if present)
+                curr_x, curr_y = int(current[0]), int(current[1])
+                prev_x, prev_y = int(previous[0]), int(previous[1])
+                
+                # Calculate velocity vector
+                dx = curr_x - prev_x
+                dy = curr_y - prev_y
+                velocity = math.sqrt(dx*dx + dy*dy)
+                
+                # Draw velocity vector (arrow)
+                if velocity > 10:  # Only show if significant movement
+                    try:
+                        # Scale arrow for visibility (multiply by 3)
+                        end_x = int(curr_x + dx * 3)
+                        end_y = int(curr_y + dy * 3)
+                        
+                        # Color based on velocity (green = slow, yellow = medium, red = fast)
+                        if velocity < 50:
+                            vel_color = (0, 255, 0)  # Green
+                        elif velocity < 100:
+                            vel_color = (0, 255, 255)  # Yellow
+                        elif velocity < 150:
+                            vel_color = (0, 165, 255)  # Orange
+                        else:
+                            vel_color = (0, 0, 255)  # Red (violence threshold)
+                        
+                        # Draw arrow - ensure points are (x, y) tuples of ints
+                        start_pt = (curr_x, curr_y)
+                        end_pt = (end_x, end_y)
+                        
+                        cv2.arrowedLine(frame, start_pt, end_pt, vel_color, 2, tipLength=0.3)
+                        
+                        # Draw velocity text
+                        vel_text = f"{velocity:.0f} px/f"
+                        cv2.putText(frame, vel_text, 
+                                  (curr_x - 30, curr_y + 25),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.4, vel_color, 1)
+                    except Exception as e:
+                        # Silently skip if arrow drawing fails
+                        pass
+        
+        return frame
+    
     def _draw_transactions(self, frame, people, transactions):
         """Draw hands and transactions"""
         
@@ -1044,6 +2002,66 @@ class SimpleHandTouchDetector:
                     cv2.putText(frame, label, 
                                (person['left_hand'][0] + 10, person['left_hand'][1] - 10),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, left_color, 2)
+                
+                # VELOCITY VISUALIZATION (if debug mode)
+                if self.config.DEBUG_MODE and person['id'] in self.hand_history:
+                    # Draw velocity vectors for both hands
+                    for hand_type in ['left', 'right']:
+                        if hand_type in self.hand_history[person['id']] and len(self.hand_history[person['id']][hand_type]) >= 2:
+                            history = self.hand_history[person['id']][hand_type]
+                            current = history[-1]
+                            previous = history[-2]
+                            
+                            # Ensure current and previous are proper (x, y) tuples
+                            if not isinstance(current, (tuple, list)) or len(current) < 2:
+                                continue
+                            if not isinstance(previous, (tuple, list)) or len(previous) < 2:
+                                continue
+                            
+                            # Extract only x, y coordinates (ignore confidence if present)
+                            curr_x, curr_y = int(current[0]), int(current[1])
+                            prev_x, prev_y = int(previous[0]), int(previous[1])
+                            
+                            # Calculate velocity vector
+                            dx = curr_x - prev_x
+                            dy = curr_y - prev_y
+                            velocity = math.sqrt(dx*dx + dy*dy)
+                            
+                            # Draw velocity vector (arrow)
+                            if velocity > 10:  # Only show if significant movement
+                                try:
+                                    # Scale arrow for visibility (multiply by 3)
+                                    end_x = int(curr_x + dx * 3)
+                                    end_y = int(curr_y + dy * 3)
+                                    
+                                    # Color based on velocity (green = slow, yellow = medium, red = fast)
+                                    if velocity < 50:
+                                        vel_color = (0, 255, 0)  # Green
+                                    elif velocity < 100:
+                                        vel_color = (0, 255, 255)  # Yellow
+                                    elif velocity < 150:
+                                        vel_color = (0, 165, 255)  # Orange
+                                    else:
+                                        vel_color = (0, 0, 255)  # Red (violence threshold)
+                                    
+                                    # Draw arrow - ensure points are (x, y) tuples of ints
+                                    start_pt = (curr_x, curr_y)
+                                    end_pt = (end_x, end_y)
+                                    
+                                    # Verify tuples are valid
+                                    assert len(start_pt) == 2 and len(end_pt) == 2, f"Invalid tuple length: start={len(start_pt)}, end={len(end_pt)}"
+                                    
+                                    cv2.arrowedLine(frame, start_pt, end_pt, vel_color, 2, tipLength=0.3)
+                                    
+                                    # Draw velocity text
+                                    vel_text = f"{velocity:.0f} px/f"
+                                    cv2.putText(frame, vel_text, 
+                                              (curr_x - 30, curr_y + 25),
+                                              cv2.FONT_HERSHEY_SIMPLEX, 0.4, vel_color, 1)
+                                except Exception as e:
+                                    # Silently skip if arrow drawing fails (don't crash detection)
+                                    if self.config.DEBUG_MODE:
+                                        print(f"⚠️  Velocity arrow error: {e}")
                 
                 # Draw smaller CASHIER label box at person's center
                 if is_cashier:
@@ -1168,37 +2186,59 @@ class SimpleHandTouchDetector:
                 mid_x = (trans['p1_hand'][0] + trans['p2_hand'][0]) // 2
                 mid_y = (trans['p1_hand'][1] + trans['p2_hand'][1]) // 2
                 
-                # Draw transaction label above the line (shows material type)
+                # Draw transaction label above the line (shows detection type + number)
                 label_y = min(trans['p1_hand'][1], trans['p2_hand'][1]) - 15
                 
-                # Determine label text and color based on material
+                # Determine label text and color based on material/violence
                 material_type = trans.get('cash_type', 'EXCHANGE')
-                if '💳' in material_type or 'Card' in material_type:
+                is_violence = trans.get('is_violence', False)
+                
+                if is_violence or (material_type and ('🚨' in material_type or 'Violence' in material_type)):
+                    # Violence detection
+                    text = "VIOLENCE DETECTED"
+                    label_color = (0, 0, 255)  # Red
+                elif material_type and ('💳' in material_type or 'Card' in material_type):
+                    # Card transaction
                     text = "CARD TRANSACTION"
                     label_color = (255, 100, 0)  # Blue
                 else:
+                    # Cash transaction
                     text = "CASH TRANSACTION"
                     label_color = (0, 255, 0)  # Green
                 
                 # Background box for label
-                text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-                box_x1 = mid_x - text_size[0]//2 - 5
-                box_y1 = label_y - text_size[1] - 5
-                box_x2 = mid_x + text_size[0]//2 + 5
-                box_y2 = label_y + 5
+                text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 0.6, 2)[0]
+                box_x1 = mid_x - text_size[0]//2 - 8
+                box_y1 = label_y - text_size[1] - 8
+                box_x2 = mid_x + text_size[0]//2 + 8
+                box_y2 = label_y + 8
                 
                 # Draw background box
                 cv2.rectangle(frame, (box_x1, box_y1), (box_x2, box_y2), label_color, -1)
-                cv2.rectangle(frame, (box_x1, box_y1), (box_x2, box_y2), (0, 0, 0), 2)
+                cv2.rectangle(frame, (box_x1, box_y1), (box_x2, box_y2), (255, 255, 255), 3)
                 
                 # Draw text
                 cv2.putText(frame, text, (mid_x - text_size[0]//2, label_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                           cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 2)
         
-        # Draw counter and frame number at top
-        counter_text = f"Transactions: {len(transactions)}"
-        cv2.putText(frame, counter_text, (10, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        # Draw counters at top (separated by type)
+        violence_count = sum(1 for t in transactions if t.get('is_violence', False))
+        cash_count = len(transactions) - violence_count
+        
+        # Violence counter (RED)
+        if violence_count > 0:
+            cv2.putText(frame, f"VIOLENCE: {violence_count}", (10, 30),
+                       cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 0, 255), 3)
+            cv2.putText(frame, f"VIOLENCE: {violence_count}", (10, 30),
+                       cv2.FONT_HERSHEY_DUPLEX, 0.8, (255, 255, 255), 2)
+        
+        # Cash counter (GREEN)
+        if cash_count > 0:
+            y_offset = 70 if violence_count > 0 else 30
+            cv2.putText(frame, f"CASH: {cash_count}", (10, y_offset),
+                       cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 3)
+            cv2.putText(frame, f"CASH: {cash_count}", (10, y_offset),
+                       cv2.FONT_HERSHEY_DUPLEX, 0.8, (255, 255, 255), 2)
         
         # Show material analysis status
         if self.config.DETECT_CASH_COLOR:
@@ -1228,6 +2268,61 @@ class SimpleHandTouchDetector:
         cv2.putText(frame, frame_text, (10, frame.shape[0] - 10),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
+        # DETECTION COUNTER (top-right corner)
+        if self.config.DEBUG_MODE:
+            y_start = 30
+            x_start = frame.shape[1] - 200
+            
+            # Semi-transparent background
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (x_start - 10, y_start - 25), 
+                         (frame.shape[1] - 10, y_start + 60), 
+                         (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+            
+            # Detection counts
+            violence_count = self.stats.get('violence_count', 0)
+            cash_count = self.stats.get('cash_detections', 0)
+            
+            cv2.putText(frame, f"DETECTIONS:", (x_start, y_start),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            cv2.putText(frame, f"Violence: {violence_count}", (x_start, y_start + 25),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2)
+            cv2.putText(frame, f"Cash: {cash_count}", (x_start, y_start + 50),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 2)
+            
+            # Velocity legend (bottom-right)
+            if self.config.DETECT_HAND_VELOCITY:
+                y_legend = frame.shape[0] - 120
+                x_legend = frame.shape[1] - 180
+                
+                # Background
+                overlay2 = frame.copy()
+                cv2.rectangle(overlay2, (x_legend - 10, y_legend - 10), 
+                             (frame.shape[1] - 10, frame.shape[0] - 40), 
+                             (0, 0, 0), -1)
+                cv2.addWeighted(overlay2, 0.7, frame, 0.3, 0, frame)
+                
+                # Legend title
+                cv2.putText(frame, "VELOCITY:", (x_legend, y_legend),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 2)
+                
+                # Color scale
+                cv2.arrowedLine(frame, (x_legend, y_legend + 15), 
+                               (x_legend + 30, y_legend + 15), (0, 255, 0), 2)
+                cv2.putText(frame, "<50 px/f", (x_legend + 35, y_legend + 20),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 0), 1)
+                
+                cv2.arrowedLine(frame, (x_legend, y_legend + 35), 
+                               (x_legend + 30, y_legend + 35), (0, 255, 255), 2)
+                cv2.putText(frame, "50-100", (x_legend + 35, y_legend + 40),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
+                
+                cv2.arrowedLine(frame, (x_legend, y_legend + 55), 
+                               (x_legend + 30, y_legend + 55), (0, 0, 255), 2)
+                cv2.putText(frame, ">100 VIOLENCE", (x_legend + 35, y_legend + 60),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
+        
         return frame
     
     def process_video(self, video_path, output_path):
@@ -1242,8 +2337,14 @@ class SimpleHandTouchDetector:
             'transactions': 0,
             'confirmed_transactions': 0,
             'cash_detections': 0,
-            'cash_types': {}
+            'cash_types': {},
+            'possible_detections': 0
         }
+        # Reset possible detection tracking
+        self.possible_events = []
+        self.current_possible_event = None
+        self.possible_frame_buffer = {}
+        self.current_event_index = 0
         
         print(f"\n{'='*70}")
         print(f"📹 Processing: {video_path}")
@@ -1323,19 +2424,64 @@ class SimpleHandTouchDetector:
         print(f"✅ CONFIRMED TRANSACTIONS (5+ frames): {self.stats['confirmed_transactions']}")
         print(f"Average per frame: {self.stats['transactions']/frame_num:.2f}")
         
-        # Print cash detection statistics
-        if self.config.DETECT_CASH_COLOR:
-            print(f"\n💵 CASH DETECTION SUMMARY:")
-            print(f"   Total cash detections: {self.stats['cash_detections']}")
-            if self.stats['cash_types']:
-                print(f"   Detected bills:")
-                for cash_type, count in sorted(self.stats['cash_types'].items(), key=lambda x: x[1], reverse=True):
-                    print(f"      • {cash_type}: {count}x")
-            else:
-                print(f"   No cash detected in video")
-        
+        # Print comprehensive detection statistics
+        print(f"\n{'='*70}")
+        print(f"📊 DETECTION SUMMARY REPORT")
         print(f"{'='*70}")
-        print(f"💾 Saved: {output_path}")
+        
+        # Violence statistics
+        violence_count = self.stats.get('violence_count', 0)
+        print(f"\n🚨 VIOLENCE DETECTIONS: {violence_count}")
+        if violence_count > 0:
+            print(f"   ⚠️  Violence events detected in video")
+            print(f"   Check output video for details")
+        else:
+            print(f"   ✅ No violence detected")
+        
+        # Cash detection statistics
+        if self.config.DETECT_CASH_COLOR:
+            print(f"\n💵 CASH DETECTIONS: {self.stats['cash_detections']}")
+            if self.stats['cash_types']:
+                print(f"   Breakdown by bill type:")
+                for cash_type, count in sorted(self.stats['cash_types'].items(), key=lambda x: x[1], reverse=True):
+                    # Exclude violence types from cash summary
+                    if '🚨' not in cash_type and 'Violence' not in cash_type:
+                        print(f"      • {cash_type}: {count}x")
+            else:
+                print(f"   No cash transactions detected")
+        
+        # Overall statistics
+        print(f"\n📈 OVERALL STATISTICS:")
+        print(f"   Total frames processed: {self.stats['frames']}")
+        print(f"   Confirmed transactions: {self.stats['confirmed_transactions']}")
+        total_detections = violence_count + self.stats['cash_detections']
+        print(f"   Total detections: {total_detections}")
+        
+        # Possible detections (hands close but no material)
+        if self.stats.get('possible_detections', 0) > 0:
+            print(f"\n⚠️  POSSIBLE DETECTIONS (Hands close, no material):")
+            print(f"   Count: {self.stats['possible_detections']}")
+            print(f"   Saved to: Possible/ folder with JSON data")
+        
+        print(f"\n{'='*70}")
+        print(f"💾 Output saved: {output_path}")
+        print(f"{'='*70}")
+        
+        # Save possible detections (hands close but no material) to Possible folder
+        if self.possible_events or self.current_possible_event:
+            print(f"\n🔍 Possible detections found:")
+            print(f"   - Saved events: {len(self.possible_events)}")
+            print(f"   - Current event: {'Yes' if self.current_possible_event else 'No'}")
+            output_base_dir = Path(output_path).parent
+            try:
+                self._save_possible_detections(video_path, output_base_dir, fps)
+            except Exception as e:
+                print(f"❌ Error saving possible detections: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"\n⚠️  No possible detections to save (hands were detected close but tracking didn't capture events)")
+        
         print()
 
 

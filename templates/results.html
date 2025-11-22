@@ -182,7 +182,7 @@
                 </div>
               </div>
 
-              <div class="flex gap-2">
+              <div class="flex gap-2 flex-wrap">
                 <button onclick="viewVideo('{{ job_id }}', '{{ clip.filename }}')" 
                    class="flex-1 bg-purple-600 hover:bg-purple-700 text-white text-center px-4 py-2 rounded-lg text-sm font-medium transition-colors">
                   <i class="fas fa-play mr-2"></i>
@@ -191,7 +191,14 @@
                 <a href="/download/{{ job_id }}/{{ clip.filename }}" 
                    class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-center px-4 py-2 rounded-lg text-sm font-medium transition-colors">
                   <i class="fas fa-download mr-2"></i>
-                  다운로드
+                  비디오
+                </a>
+                {% set json_filename = clip.filename.replace('.mp4', '_debug.json').replace('.avi', '_debug.json') %}
+                <a href="/download/{{ job_id }}/{{ json_filename }}" 
+                   class="flex-1 bg-green-600 hover:bg-green-700 text-white text-center px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                   title="다운로드 디버그 데이터 (JSON)">
+                  <i class="fas fa-code mr-2"></i>
+                  JSON
                 </a>
               </div>
 

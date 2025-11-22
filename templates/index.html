@@ -77,6 +77,63 @@
       <div id="selectedFiles" class="mt-6 hidden">
         <h3 class="font-semibold text-gray-700 mb-3">선택된 비디오:</h3>
         <div id="fileList" class="space-y-2"></div>
+        
+        <!-- Time Interval Selection -->
+        <div class="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+          <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
+            <i class="far fa-clock text-blue-600 mr-2"></i>
+            분석 시간 구간 설정
+          </h4>
+          
+          <div class="flex items-center gap-4 mb-4">
+            <label class="flex items-center cursor-pointer">
+              <input type="checkbox" id="fullVideoCheckbox" checked class="mr-2 w-4 h-4">
+              <span class="text-sm text-gray-700">전체 비디오 분석</span>
+            </label>
+          </div>
+          
+          <div id="timeIntervalInputs" class="grid grid-cols-2 gap-4 hidden">
+            <div>
+              <label class="block text-sm text-gray-600 mb-1">시작 시간 (초)</label>
+              <input type="number" id="startTime" min="0" placeholder="0" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div>
+              <label class="block text-sm text-gray-600 mb-1">종료 시간 (초)</label>
+              <input type="number" id="endTime" min="0" placeholder="자동" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+            </div>
+          </div>
+          
+          <div class="mt-3 text-xs text-gray-500">
+            <i class="fas fa-info-circle mr-1"></i>
+            특정 시간 구간만 분석하려면 체크박스를 해제하세요
+          </div>
+          
+          <!-- Preview of selected interval -->
+          <div id="intervalPreview" class="mt-3 p-2 bg-blue-100 rounded text-sm font-semibold text-blue-800 hidden">
+            <i class="fas fa-clock mr-1"></i>
+            <span id="intervalText">전체 비디오 분석</span>
+          </div>
+        </div>
+        
+        <!-- Debug Options -->
+        <div class="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200">
+          <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
+            <i class="fas fa-bug text-purple-600 mr-2"></i>
+            디버그 옵션
+          </h4>
+          
+          <div class="space-y-2">
+            <label class="flex items-center cursor-pointer">
+              <input type="checkbox" id="debugVelocity" class="mr-2 w-4 h-4">
+              <span class="text-sm text-gray-700">손 속도 시각화 (폭력 감지 디버깅)</span>
+            </label>
+            <label class="flex items-center cursor-pointer">
+              <input type="checkbox" id="showDetectionCount" checked class="mr-2 w-4 h-4">
+              <span class="text-sm text-gray-700">프레임별 감지 횟수 표시</span>
+            </label>
+          </div>
+        </div>
+        
         <button id="uploadBtn" class="mt-4 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-8 rounded-lg transition-colors w-full flex items-center justify-center">
           <i class="fas fa-play mr-2"></i>
           분석 시작
@@ -112,6 +169,38 @@
     const selectedFilesDiv = document.getElementById('selectedFiles');
     const fileListDiv = document.getElementById('fileList');
     const uploadBtn = document.getElementById('uploadBtn');
+
+    // Time interval checkbox toggle
+    const fullVideoCheckbox = document.getElementById('fullVideoCheckbox');
+    const timeIntervalInputs = document.getElementById('timeIntervalInputs');
+    const intervalPreview = document.getElementById('intervalPreview');
+    const intervalText = document.getElementById('intervalText');
+    const startTimeInput = document.getElementById('startTime');
+    const endTimeInput = document.getElementById('endTime');
+    
+    function updateIntervalPreview() {
+      if (fullVideoCheckbox.checked) {
+        timeIntervalInputs.classList.add('hidden');
+        intervalPreview.classList.remove('hidden');
+        intervalText.textContent = '전체 비디오 분석';
+        intervalPreview.className = 'mt-3 p-2 bg-blue-100 rounded text-sm font-semibold text-blue-800';
+      } else {
+        timeIntervalInputs.classList.remove('hidden');
+        intervalPreview.classList.remove('hidden');
+        
+        const start = startTimeInput.value || '0';
+        const end = endTimeInput.value || '끝';
+        intervalText.textContent = `시간 구간: ${start}초 - ${end}초`;
+        intervalPreview.className = 'mt-3 p-2 bg-yellow-100 rounded text-sm font-semibold text-yellow-800';
+      }
+    }
+    
+    fullVideoCheckbox.addEventListener('change', updateIntervalPreview);
+    startTimeInput.addEventListener('input', updateIntervalPreview);
+    endTimeInput.addEventListener('input', updateIntervalPreview);
+    
+    // Initialize preview
+    updateIntervalPreview();
 
     fileInput.addEventListener('change', handleFiles);
 
@@ -182,10 +271,39 @@
     uploadBtn.addEventListener('click', async () => {
       if (selectedFiles.length === 0) return;
 
+      // Add time interval parameters
+      const fullVideo = document.getElementById('fullVideoCheckbox').checked;
+      
+      // Validate time interval
+      if (!fullVideo) {
+        const startTime = parseFloat(document.getElementById('startTime').value) || 0;
+        const endTime = parseFloat(document.getElementById('endTime').value);
+        
+        if (endTime && endTime <= startTime) {
+          alert('종료 시간은 시작 시간보다 커야 합니다!');
+          return;
+        }
+      }
+
       const formData = new FormData();
       selectedFiles.forEach(file => {
         formData.append('videos', file);
       });
+      
+      formData.append('full_video', fullVideo);
+      
+      if (!fullVideo) {
+        const startTime = document.getElementById('startTime').value;
+        const endTime = document.getElementById('endTime').value;
+        if (startTime) formData.append('start_time', startTime);
+        if (endTime) formData.append('end_time', endTime);
+      }
+      
+      // Add debug options
+      const debugVelocity = document.getElementById('debugVelocity').checked;
+      const showDetectionCount = document.getElementById('showDetectionCount').checked;
+      formData.append('debug_velocity', debugVelocity);
+      formData.append('show_detection_count', showDetectionCount);
 
       uploadBtn.disabled = true;
       uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>업로드 중...';
