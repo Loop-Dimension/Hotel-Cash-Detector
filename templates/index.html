@@ -1,500 +1,805 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>호텔 보안 시스템 - 비디오 분석</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hotel CCTV Monitoring System</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Custom Tailwind Config -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1a1a2e',
+                        secondary: '#16213e',
+                        accent: '#0f3460',
+                        highlight: '#e94560',
+                        success: '#00d26a',
+                        warning: '#ffc107',
+                        danger: '#dc3545',
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Socket.IO -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <style>
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1a1a2e;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #e94560;
+            border-radius: 4px;
+        }
+        
+        /* Animations */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.9); opacity: 1; }
+            100% { transform: scale(1.3); opacity: 0; }
+        }
+        
+        @keyframes slide-in {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        .alert-animation {
+            animation: slide-in 0.3s ease-out;
+        }
+        
+        .pulse-dot::before {
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            animation: pulse-ring 1.5s ease-out infinite;
+        }
+        
+        /* Video container */
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        }
+        
+        .video-container img {
+            width: 100%;
+            height: auto;
+        }
+        
+        /* Card styles */
+        .glass-card {
+            background: rgba(22, 33, 62, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        /* Detection badge animation */
+        .detection-badge {
+            transition: all 0.3s ease;
+        }
+        .detection-badge:hover {
+            transform: scale(1.05);
+        }
+    </style>
 </head>
-<body class="bg-gray-100">
-  <!-- Header -->
-  <header class="bg-slate-800 text-white py-4 px-6 shadow-lg">
-    <div class="container mx-auto flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <i class="fas fa-shield-alt text-2xl"></i>
-        <h1 class="text-xl font-semibold">호텔 보안 시스템</h1>
-      </div>
-      <div class="flex items-center gap-4">
-        <div class="text-sm text-gray-300">
-          <i class="far fa-clock mr-1"></i>
-          <span id="currentTime"></span>
-        </div>
-        <div class="flex gap-2">
-          <span class="bg-green-600 text-white text-xs px-2 py-1 rounded">현금 거래</span>
-          <span class="bg-red-600 text-white text-xs px-2 py-1 rounded">폭력</span>
-          <span class="bg-orange-600 text-white text-xs px-2 py-1 rounded">화재</span>
-        </div>
-      </div>
-    </div>
-  </header>
-
-  <div class="container mx-auto px-6 py-8">
-    <!-- Info Banner -->
-    <div class="bg-gradient-to-r from-blue-50 to-indigo-50 border-l-4 border-blue-500 p-6 mb-6 rounded-r shadow-sm">
-      <div class="flex items-start">
-        <i class="fas fa-info-circle text-blue-500 text-2xl mr-4 mt-1"></i>
-        <div class="flex-1">
-          <p class="font-bold text-blue-900 text-lg mb-2">🤖 다중 이벤트 자동 감지 시스템</p>
-          <p class="text-sm text-blue-700 mb-3">최대 5개의 비디오를 업로드하세요. 시스템이 현금 거래, 폭력 행위, 화재/연기를 자동으로 감지하고 클립을 추출합니다.</p>
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
-            <div class="bg-white bg-opacity-50 p-2 rounded">
-              <i class="fas fa-money-bill-wave text-green-600 mr-1"></i>
-              <span class="font-semibold">현금 거래:</span> 손 접촉 감지 (100px)
+<body class="bg-primary min-h-screen text-white">
+    <!-- Header -->
+    <header class="bg-secondary border-b border-accent px-6 py-4">
+        <div class="container mx-auto flex items-center justify-between">
+            <div class="flex items-center space-x-4">
+                <div class="bg-highlight p-3 rounded-lg">
+                    <i class="fas fa-video text-2xl"></i>
+                </div>
+                <div>
+                    <h1 class="text-2xl font-bold">Hotel CCTV Monitor</h1>
+                    <p class="text-gray-400 text-sm">Real-time Detection System</p>
+                </div>
             </div>
-            <div class="bg-white bg-opacity-50 p-2 rounded">
-              <i class="fas fa-hand-fist text-red-600 mr-1"></i>
-              <span class="font-semibold">폭력:</span> 공격적 움직임 분석
+            
+            <div class="flex items-center space-x-6">
+                <!-- Status Indicator -->
+                <div class="flex items-center space-x-2">
+                    <div id="status-dot" class="w-3 h-3 bg-success rounded-full pulse-dot relative"></div>
+                    <span id="status-text" class="text-sm text-gray-300">Connected</span>
+                </div>
+                
+                <!-- Detection Toggles -->
+                <div class="flex items-center space-x-4">
+                    <button onclick="toggleDetection('cash')" id="btn-cash" 
+                            class="detection-badge bg-success/20 border border-success px-4 py-2 rounded-full text-sm font-medium flex items-center space-x-2">
+                        <span>💵</span>
+                        <span>Cash</span>
+                    </button>
+                    <button onclick="toggleDetection('violence')" id="btn-violence" 
+                            class="detection-badge bg-danger/20 border border-danger px-4 py-2 rounded-full text-sm font-medium flex items-center space-x-2">
+                        <span>⚠️</span>
+                        <span>Violence</span>
+                    </button>
+                    <button onclick="toggleDetection('fire')" id="btn-fire" 
+                            class="detection-badge bg-warning/20 border border-warning px-4 py-2 rounded-full text-sm font-medium flex items-center space-x-2">
+                        <span>🔥</span>
+                        <span>Fire</span>
+                    </button>
+                </div>
             </div>
-            <div class="bg-white bg-opacity-50 p-2 rounded">
-              <i class="fas fa-fire text-orange-600 mr-1"></i>
-              <span class="font-semibold">화재:</span> 색상 기반 감지
-            </div>
-          </div>
         </div>
-      </div>
-    </div>
-
-    <!-- Upload Section -->
-    <div class="bg-white rounded-lg shadow-md p-8 mb-8">
-      <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center">
-        <i class="fas fa-upload text-blue-600 mr-3"></i>
-        비디오 업로드
-      </h2>
-
-      <div class="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center hover:border-blue-500 transition-colors cursor-pointer" id="dropZone">
-        <i class="fas fa-cloud-upload-alt text-6xl text-gray-400 mb-4"></i>
-        <p class="text-lg text-gray-700 mb-2">비디오를 여기로 드래그하세요</p>
-        <p class="text-sm text-gray-500 mb-4">또는 클릭하여 파일 선택</p>
-        <input type="file" id="videoInput" accept="video/*" multiple class="hidden">
-        <button onclick="document.getElementById('videoInput').click()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-lg transition-colors">
-          비디오 선택
-        </button>
-        <p class="text-xs text-gray-400 mt-4">최대 5개 비디오 • MP4, AVI, MOV, MKV • 최대 2GB/개</p>
-      </div>
-
-      <!-- Selected Files -->
-      <div id="selectedFiles" class="mt-6 hidden">
-        <h3 class="font-semibold text-gray-700 mb-3">선택된 비디오:</h3>
-        <div id="fileList" class="space-y-2"></div>
-        
-        <!-- Time Interval Selection -->
-        <div class="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-          <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
-            <i class="far fa-clock text-blue-600 mr-2"></i>
-            분석 시간 구간 설정
-          </h4>
-          
-          <div class="flex items-center gap-4 mb-4">
-            <label class="flex items-center cursor-pointer">
-              <input type="checkbox" id="fullVideoCheckbox" checked class="mr-2 w-4 h-4">
-              <span class="text-sm text-gray-700">전체 비디오 분석</span>
-            </label>
-          </div>
-          
-          <div id="timeIntervalInputs" class="grid grid-cols-2 gap-4 hidden">
-            <div>
-              <label class="block text-sm text-gray-600 mb-1">시작 시간 (초)</label>
-              <input type="number" id="startTime" min="0" placeholder="0" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
-            </div>
-            <div>
-              <label class="block text-sm text-gray-600 mb-1">종료 시간 (초)</label>
-              <input type="number" id="endTime" min="0" placeholder="자동" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
-            </div>
-          </div>
-          
-          <div class="mt-3 text-xs text-gray-500">
-            <i class="fas fa-info-circle mr-1"></i>
-            특정 시간 구간만 분석하려면 체크박스를 해제하세요
-          </div>
-          
-          <!-- Preview of selected interval -->
-          <div id="intervalPreview" class="mt-3 p-2 bg-blue-100 rounded text-sm font-semibold text-blue-800 hidden">
-            <i class="fas fa-clock mr-1"></i>
-            <span id="intervalText">전체 비디오 분석</span>
-          </div>
-        </div>
-        
-        <!-- Debug Options -->
-        <div class="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200">
-          <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
-            <i class="fas fa-bug text-purple-600 mr-2"></i>
-            디버그 옵션
-          </h4>
-          
-          <div class="space-y-2">
-            <label class="flex items-center cursor-pointer">
-              <input type="checkbox" id="debugVelocity" class="mr-2 w-4 h-4">
-              <span class="text-sm text-gray-700">손 속도 시각화 (폭력 감지 디버깅)</span>
-            </label>
-            <label class="flex items-center cursor-pointer">
-              <input type="checkbox" id="showDetectionCount" checked class="mr-2 w-4 h-4">
-              <span class="text-sm text-gray-700">프레임별 감지 횟수 표시</span>
-            </label>
-          </div>
-        </div>
-        
-        <button id="uploadBtn" class="mt-4 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-8 rounded-lg transition-colors w-full flex items-center justify-center">
-          <i class="fas fa-play mr-2"></i>
-          분석 시작
-        </button>
-      </div>
-    </div>
-
-    <!-- Processing Status -->
-    <div id="processingSection" class="hidden">
-      <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center">
-        <i class="fas fa-cog fa-spin text-blue-600 mr-3"></i>
-        비디오 분석 중
-      </h2>
-      <div id="jobsList" class="space-y-4"></div>
-    </div>
-  </div>
-
-  <script>
-    let selectedFiles = [];
-    const MAX_FILES = 5;
-
-    // Update time
-    function updateTime() {
-      const now = new Date();
-      document.getElementById('currentTime').textContent = now.toLocaleString('ko-KR');
-    }
-    updateTime();
-    setInterval(updateTime, 1000);
-
-    // File input handling
-    const fileInput = document.getElementById('videoInput');
-    const dropZone = document.getElementById('dropZone');
-    const selectedFilesDiv = document.getElementById('selectedFiles');
-    const fileListDiv = document.getElementById('fileList');
-    const uploadBtn = document.getElementById('uploadBtn');
-
-    // Time interval checkbox toggle
-    const fullVideoCheckbox = document.getElementById('fullVideoCheckbox');
-    const timeIntervalInputs = document.getElementById('timeIntervalInputs');
-    const intervalPreview = document.getElementById('intervalPreview');
-    const intervalText = document.getElementById('intervalText');
-    const startTimeInput = document.getElementById('startTime');
-    const endTimeInput = document.getElementById('endTime');
+    </header>
     
-    function updateIntervalPreview() {
-      if (fullVideoCheckbox.checked) {
-        timeIntervalInputs.classList.add('hidden');
-        intervalPreview.classList.remove('hidden');
-        intervalText.textContent = '전체 비디오 분석';
-        intervalPreview.className = 'mt-3 p-2 bg-blue-100 rounded text-sm font-semibold text-blue-800';
-      } else {
-        timeIntervalInputs.classList.remove('hidden');
-        intervalPreview.classList.remove('hidden');
-        
-        const start = startTimeInput.value || '0';
-        const end = endTimeInput.value || '끝';
-        intervalText.textContent = `시간 구간: ${start}초 - ${end}초`;
-        intervalPreview.className = 'mt-3 p-2 bg-yellow-100 rounded text-sm font-semibold text-yellow-800';
-      }
-    }
+    <!-- Main Content -->
+    <main class="container mx-auto px-6 py-8">
+        <div class="grid grid-cols-12 gap-6">
+            
+            <!-- Video Feed Section -->
+            <div class="col-span-12 lg:col-span-8">
+                <div class="glass-card rounded-2xl p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-semibold flex items-center space-x-2">
+                            <i class="fas fa-broadcast-tower text-highlight"></i>
+                            <span>Live Feed</span>
+                        </h2>
+                        
+                        <div class="flex items-center space-x-3">
+                            <!-- Video Selection -->
+                            <select id="video-select" onchange="changeVideo()" 
+                                    class="bg-accent border border-gray-600 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-highlight">
+                                <option value="">Select Video</option>
+                                {% for video in videos %}
+                                <option value="{{ video.path }}">{{ video.name }}</option>
+                                {% endfor %}
+                            </select>
+                            
+                            <!-- Control Buttons -->
+                            <button onclick="stopProcessing()" 
+                                    class="bg-danger hover:bg-red-600 px-4 py-2 rounded-lg text-sm font-medium transition">
+                                <i class="fas fa-stop mr-2"></i>Stop
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Zone drawing instructions (above video) -->
+                    <div id="zone-instructions" class="hidden bg-yellow-600/90 px-4 py-3 rounded-lg text-center mb-4">
+                        <i class="fas fa-draw-polygon mr-2"></i>
+                        <span class="font-semibold">Click and drag on the video below to draw the cashier zone rectangle</span>
+                    </div>
+                    
+                    <!-- Video Container -->
+                    <div class="video-container" id="video-wrapper">
+                        <img id="video-feed" src="" alt="Video Feed" 
+                             class="w-full" style="min-height: 400px; background: #000;">
+                        
+                        <!-- Canvas overlay for drawing zone -->
+                        <canvas id="zone-canvas" class="absolute top-0 left-0 w-full h-full hidden" style="cursor: crosshair;"></canvas>
+                        
+                        <!-- Overlay Info -->
+                        <div class="absolute top-4 left-4 bg-black/60 px-3 py-1 rounded-lg text-sm">
+                            <span id="frame-counter">Frame: 0</span>
+                        </div>
+                        
+                        <div class="absolute top-4 right-4">
+                            <span id="live-badge" class="bg-danger px-3 py-1 rounded-full text-sm font-medium animate-pulse">
+                                LIVE
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <!-- Detection Stats -->
+                    <div class="grid grid-cols-3 gap-4 mt-6">
+                        <div class="bg-accent/50 rounded-xl p-4 text-center">
+                            <div class="text-3xl font-bold text-success" id="stat-cash">0</div>
+                            <div class="text-gray-400 text-sm">Cash Transactions</div>
+                        </div>
+                        <div class="bg-accent/50 rounded-xl p-4 text-center">
+                            <div class="text-3xl font-bold text-danger" id="stat-violence">0</div>
+                            <div class="text-gray-400 text-sm">Violence Detected</div>
+                        </div>
+                        <div class="bg-accent/50 rounded-xl p-4 text-center">
+                            <div class="text-3xl font-bold text-warning" id="stat-fire">0</div>
+                            <div class="text-gray-400 text-sm">Fire/Smoke Alerts</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Upload Section -->
+                <div class="glass-card rounded-2xl p-6 mt-6">
+                    <h2 class="text-xl font-semibold mb-4 flex items-center space-x-2">
+                        <i class="fas fa-cloud-upload-alt text-highlight"></i>
+                        <span>Upload Video</span>
+                    </h2>
+                    
+                    <div class="border-2 border-dashed border-accent rounded-xl p-8 text-center hover:border-highlight transition cursor-pointer"
+                         onclick="document.getElementById('file-input').click()">
+                        <input type="file" id="file-input" accept="video/*" class="hidden" onchange="uploadVideo(this)">
+                        <i class="fas fa-film text-4xl text-gray-500 mb-4"></i>
+                        <p class="text-gray-400">Click or drag video file here</p>
+                        <p class="text-gray-500 text-sm mt-2">Supports: MP4, AVI, MOV, MKV</p>
+                    </div>
+                    
+                    <!-- Upload Progress -->
+                    <div id="upload-progress" class="hidden mt-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span id="upload-filename" class="text-sm text-gray-300">Uploading...</span>
+                            <span id="upload-percent" class="text-sm text-highlight">0%</span>
+                        </div>
+                        <div class="w-full bg-accent rounded-full h-2">
+                            <div id="upload-bar" class="bg-highlight h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Alerts Panel -->
+            <div class="col-span-12 lg:col-span-4">
+                <div class="glass-card rounded-2xl p-6 h-full">
+                    <h2 class="text-xl font-semibold mb-4 flex items-center space-x-2">
+                        <i class="fas fa-bell text-highlight"></i>
+                        <span>Recent Alerts</span>
+                        <span id="alert-count" class="ml-auto bg-highlight px-2 py-1 rounded-full text-xs">0</span>
+                    </h2>
+                    
+                    <div id="alerts-container" class="space-y-3 max-h-[600px] overflow-y-auto pr-2">
+                        <!-- Alert items will be inserted here -->
+                        <div class="text-center text-gray-500 py-8">
+                            <i class="fas fa-shield-alt text-4xl mb-3 opacity-50"></i>
+                            <p>No alerts yet</p>
+                            <p class="text-sm mt-1">Monitoring for activity...</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Quick Actions -->
+                <div class="glass-card rounded-2xl p-6 mt-6">
+                    <h2 class="text-xl font-semibold mb-4 flex items-center space-x-2">
+                        <i class="fas fa-cog text-highlight"></i>
+                        <span>Quick Actions</span>
+                    </h2>
+                    
+                    <div class="space-y-3">
+                        <button onclick="toggleDebugMode()" id="btn-debug"
+                                class="w-full bg-purple-600 hover:bg-purple-500 px-4 py-3 rounded-lg text-left flex items-center space-x-3 transition">
+                            <i class="fas fa-bug text-white"></i>
+                            <span>Debug Mode: OFF</span>
+                        </button>
+                        
+                        <button onclick="startDrawCashierZone()" id="btn-draw-zone"
+                                class="w-full bg-yellow-600 hover:bg-yellow-500 px-4 py-3 rounded-lg text-left flex items-center space-x-3 transition">
+                            <i class="fas fa-draw-polygon text-white"></i>
+                            <span>Draw Cashier Zone</span>
+                        </button>
+                        
+                        <div id="zone-info" class="hidden bg-accent/50 rounded-lg p-3 text-sm">
+                            <div class="text-yellow-400 font-semibold mb-1">Current Zone:</div>
+                            <div id="zone-coords" class="text-gray-300">Not set</div>
+                        </div>
+                        
+                        <button onclick="clearAlerts()" 
+                                class="w-full bg-accent hover:bg-accent/80 px-4 py-3 rounded-lg text-left flex items-center space-x-3 transition">
+                            <i class="fas fa-trash-alt text-red-400"></i>
+                            <span>Clear All Alerts</span>
+                        </button>
+                        
+                        <button onclick="exportReport()" 
+                                class="w-full bg-accent hover:bg-accent/80 px-4 py-3 rounded-lg text-left flex items-center space-x-3 transition">
+                            <i class="fas fa-file-export text-blue-400"></i>
+                            <span>Export Report</span>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Detection Logic Info -->
+                <div class="glass-card rounded-2xl p-6 mt-6">
+                    <h2 class="text-xl font-semibold mb-4 flex items-center space-x-2">
+                        <i class="fas fa-info-circle text-highlight"></i>
+                        <span>Detection Logic</span>
+                    </h2>
+                    
+                    <div class="space-y-4 text-sm">
+                        <div class="bg-green-900/30 rounded-lg p-3 border-l-4 border-green-500">
+                            <div class="font-semibold text-green-400 mb-1">Cash Detection (70%)</div>
+                            <div class="text-gray-400">Person OUTSIDE zone hands to person INSIDE zone. Tracks hand proximity between two people.</div>
+                        </div>
+                        
+                        <div class="bg-red-900/30 rounded-lg p-3 border-l-4 border-red-500">
+                            <div class="font-semibold text-red-400 mb-1">Violence Detection</div>
+                            <div class="text-gray-400">Requires TWO people in close combat with aggressive poses or rapid motion. Single person actions ignored.</div>
+                        </div>
+                        
+                        <div class="bg-orange-900/30 rounded-lg p-3 border-l-4 border-orange-500">
+                            <div class="font-semibold text-orange-400 mb-1">Fire Detection</div>
+                            <div class="text-gray-400">Requires FLICKERING (60% weight). Static orange/red objects won't trigger. Skin colors excluded.</div>
+                        </div>
+                    </div>
+                </div>
+        </div>
+    </main>
     
-    fullVideoCheckbox.addEventListener('change', updateIntervalPreview);
-    startTimeInput.addEventListener('input', updateIntervalPreview);
-    endTimeInput.addEventListener('input', updateIntervalPreview);
+    <!-- Alert Sound -->
+    <audio id="alert-sound" preload="auto">
+        <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2teleTeO2uoQAAAA" type="audio/wav">
+    </audio>
     
-    // Initialize preview
-    updateIntervalPreview();
-
-    fileInput.addEventListener('change', handleFiles);
-
-    // Drag and drop
-    dropZone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      dropZone.classList.add('border-blue-500', 'bg-blue-50');
-    });
-
-    dropZone.addEventListener('dragleave', () => {
-      dropZone.classList.remove('border-blue-500', 'bg-blue-50');
-    });
-
-    dropZone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dropZone.classList.remove('border-blue-500', 'bg-blue-50');
-      fileInput.files = e.dataTransfer.files;
-      handleFiles();
-    });
-
-    function handleFiles() {
-      const files = Array.from(fileInput.files);
-      
-      if (files.length > MAX_FILES) {
-        alert(`최대 ${MAX_FILES}개의 비디오만 허용됩니다!`);
-        return;
-      }
-
-      selectedFiles = files;
-      displaySelectedFiles();
-    }
-
-    function displaySelectedFiles() {
-      if (selectedFiles.length === 0) {
-        selectedFilesDiv.classList.add('hidden');
-        return;
-      }
-
-      selectedFilesDiv.classList.remove('hidden');
-      fileListDiv.innerHTML = '';
-
-      selectedFiles.forEach((file, index) => {
-        const fileSize = (file.size / (1024 * 1024)).toFixed(2);
-        const fileItem = document.createElement('div');
-        fileItem.className = 'flex items-center justify-between bg-gray-50 p-3 rounded-lg';
-        fileItem.innerHTML = `
-          <div class="flex items-center gap-3">
-            <i class="fas fa-video text-blue-600"></i>
-            <div>
-              <p class="font-medium text-gray-800">${file.name}</p>
-              <p class="text-sm text-gray-500">${fileSize} MB</p>
-            </div>
-          </div>
-          <button onclick="removeFile(${index})" class="text-red-500 hover:text-red-700">
-            <i class="fas fa-times"></i>
-          </button>
-        `;
-        fileListDiv.appendChild(fileItem);
-      });
-    }
-
-    function removeFile(index) {
-      selectedFiles.splice(index, 1);
-      displaySelectedFiles();
-    }
-
-    // Upload and process
-    uploadBtn.addEventListener('click', async () => {
-      if (selectedFiles.length === 0) return;
-
-      // Add time interval parameters
-      const fullVideo = document.getElementById('fullVideoCheckbox').checked;
-      
-      // Validate time interval
-      if (!fullVideo) {
-        const startTime = parseFloat(document.getElementById('startTime').value) || 0;
-        const endTime = parseFloat(document.getElementById('endTime').value);
+    <script>
+        // Socket connection
+        const socket = io();
         
-        if (endTime && endTime <= startTime) {
-          alert('종료 시간은 시작 시간보다 커야 합니다!');
-          return;
-        }
-      }
-
-      const formData = new FormData();
-      selectedFiles.forEach(file => {
-        formData.append('videos', file);
-      });
-      
-      formData.append('full_video', fullVideo);
-      
-      if (!fullVideo) {
-        const startTime = document.getElementById('startTime').value;
-        const endTime = document.getElementById('endTime').value;
-        if (startTime) formData.append('start_time', startTime);
-        if (endTime) formData.append('end_time', endTime);
-      }
-      
-      // Add debug options
-      const debugVelocity = document.getElementById('debugVelocity').checked;
-      const showDetectionCount = document.getElementById('showDetectionCount').checked;
-      formData.append('debug_velocity', debugVelocity);
-      formData.append('show_detection_count', showDetectionCount);
-
-      uploadBtn.disabled = true;
-      uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>업로드 중...';
-
-      try {
-        const response = await fetch('/upload', {
-          method: 'POST',
-          body: formData
-        });
-
-        const data = await response.json();
+        // State
+        let detectionEnabled = {
+            cash: true,
+            violence: true,
+            fire: true
+        };
+        let debugMode = false;
+        let stats = { cash: 0, violence: 0, fire: 0 };
+        let alerts = [];
         
-        if (data.error) {
-          alert('오류: ' + data.error);
-          uploadBtn.disabled = false;
-          uploadBtn.innerHTML = '<i class="fas fa-play mr-2"></i>분석 시작';
-          return;
-        }
-
-        // Show processing section
-        document.getElementById('processingSection').classList.remove('hidden');
-        
-        // Monitor each job
-        data.jobs.forEach(job => {
-          createJobCard(job);
-          monitorJob(job.job_id);
-        });
-
-        // Reset upload form
-        selectedFiles = [];
-        fileInput.value = '';
-        displaySelectedFiles();
-        uploadBtn.disabled = false;
-        uploadBtn.innerHTML = '<i class="fas fa-play mr-2"></i>분석 시작';
-
-      } catch (error) {
-        alert('업로드 실패: ' + error.message);
-        uploadBtn.disabled = false;
-        uploadBtn.innerHTML = '<i class="fas fa-play mr-2"></i>분석 시작';
-      }
-    });
-
-    function createJobCard(job) {
-      const jobCard = document.createElement('div');
-      jobCard.id = `job-${job.job_id}`;
-      jobCard.className = 'bg-white rounded-lg shadow-md p-6';
-      jobCard.innerHTML = `
-        <div class="flex items-center justify-between mb-4">
-          <div class="flex items-center gap-3">
-            <i class="fas fa-video text-blue-600 text-xl"></i>
-            <div>
-              <h3 class="font-semibold text-gray-800">${job.filename}</h3>
-              <p class="text-sm text-gray-500" id="stage-${job.job_id}">초기화 중...</p>
-            </div>
-          </div>
-          <span class="text-sm font-semibold text-blue-600" id="progress-text-${job.job_id}">0%</span>
-        </div>
-        
-        <div class="w-full bg-gray-200 rounded-full h-3 mb-4">
-          <div id="progress-bar-${job.job_id}" class="bg-blue-600 h-3 rounded-full transition-all duration-300" style="width: 0%"></div>
-        </div>
-        
-        <div id="results-${job.job_id}" class="hidden mt-4">
-          <div class="bg-green-50 border-l-4 border-green-500 p-4 mb-4">
-            <p class="font-semibold text-green-800">
-              <i class="fas fa-check-circle mr-2"></i>
-              분석 완료
-            </p>
-            <p class="text-sm text-green-700" id="summary-${job.job_id}"></p>
-          </div>
-          <div id="clips-${job.job_id}" class="space-y-2"></div>
-        </div>
-      `;
-      
-      document.getElementById('jobsList').appendChild(jobCard);
-    }
-
-    async function monitorJob(jobId) {
-      const interval = setInterval(async () => {
-        try {
-          const response = await fetch(`/status/${jobId}`);
-          const status = await response.json();
-
-          // Update progress
-          document.getElementById(`progress-bar-${jobId}`).style.width = status.progress + '%';
-          document.getElementById(`progress-text-${jobId}`).textContent = status.progress + '%';
-          document.getElementById(`stage-${jobId}`).textContent = status.stage || 'Processing...';
-
-          if (status.status === 'completed') {
-            clearInterval(interval);
-            showResults(jobId, status);
-          } else if (status.status === 'error') {
-            clearInterval(interval);
-            showError(jobId, status.error);
-          }
-        } catch (error) {
-          console.error('Error monitoring job:', error);
-        }
-      }, 1000);
-    }
-
-    function showResults(jobId, status) {
-      const resultsDiv = document.getElementById(`results-${jobId}`);
-      const clipsDiv = document.getElementById(`clips-${jobId}`);
-      const summaryDiv = document.getElementById(`summary-${jobId}`);
-
-      resultsDiv.classList.remove('hidden');
-
-      if (status.clips && status.clips.length > 0) {
-        summaryDiv.innerHTML = `${status.clips.length}개의 이벤트 감지됨`;
-
-        // Add view all button
-        clipsDiv.innerHTML = `
-          <div class="flex items-center justify-between mb-3">
-            <h4 class="font-semibold text-gray-700">추출된 클립:</h4>
-            <a href="/results/${jobId}" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-              <i class="fas fa-eye mr-2"></i>
-              전체 결과 보기
-            </a>
-          </div>
-        `;
-        
-        // Show first 3 clips as preview
-        const previewClips = status.clips.slice(0, 3);
-        previewClips.forEach((clip, index) => {
-          const eventType = clip.type || 'CASH_EXCHANGE';
-          let icon, color, bgColor, label;
-          
-          if (eventType === 'VIOLENCE') {
-            icon = 'hand-fist';
-            color = 'red';
-            bgColor = 'bg-red-50';
-            label = clip.label || '폭력';
-          } else if (eventType === 'FIRE') {
-            icon = 'fire';
-            color = 'orange';
-            bgColor = 'bg-orange-50';
-            label = clip.label || '화재';
-          } else {
-            icon = 'money-bill-wave';
-            color = 'green';
-            bgColor = 'bg-green-50';
-            label = clip.label || '현금 거래';
-          }
-          
-          const clipItem = document.createElement('div');
-          clipItem.className = `flex items-center justify-between ${bgColor} p-3 rounded-lg border border-${color}-200`;
-          clipItem.innerHTML = `
-            <div class="flex items-center gap-3 flex-1">
-              <i class="fas fa-${icon} text-${color}-600 text-xl"></i>
-              <div>
-                <p class="font-medium text-gray-800">${label} ${index + 1}</p>
-                <p class="text-sm text-gray-600">시간: ${clip.start_time}s - ${clip.end_time}s (${clip.duration}s)</p>
-              </div>
-            </div>
-            <a href="/download/${jobId}/${clip.filename}" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm transition-colors">
-              <i class="fas fa-download"></i>
-            </a>
-          `;
-          clipsDiv.appendChild(clipItem);
+        // Socket events
+        socket.on('connect', () => {
+            updateStatus(true);
+            console.log('Connected to server');
         });
         
-        if (status.clips.length > 3) {
-          const moreDiv = document.createElement('div');
-          moreDiv.className = 'text-center mt-2';
-          moreDiv.innerHTML = `
-            <a href="/results/${jobId}" class="text-blue-600 hover:text-blue-700 text-sm font-medium">
-              +${status.clips.length - 3}개 더 보기 →
-            </a>
-          `;
-          clipsDiv.appendChild(moreDiv);
+        socket.on('disconnect', () => {
+            updateStatus(false);
+            console.log('Disconnected from server');
+        });
+        
+        socket.on('detections', (data) => {
+            console.log('Detection:', data);
+            
+            data.detections.forEach(det => {
+                addAlert(det);
+                updateStats(det.label);
+                playAlertSound(det.label);
+            });
+        });
+        
+        // Debug mode toggle
+        function toggleDebugMode() {
+            debugMode = !debugMode;
+            const btn = document.getElementById('btn-debug');
+            
+            if (debugMode) {
+                btn.innerHTML = '<i class="fas fa-bug text-white mr-2"></i>Debug Mode: ON';
+                btn.classList.remove('bg-purple-600');
+                btn.classList.add('bg-green-600');
+            } else {
+                btn.innerHTML = '<i class="fas fa-bug text-white mr-2"></i>Debug Mode: OFF';
+                btn.classList.remove('bg-green-600');
+                btn.classList.add('bg-purple-600');
+            }
+            
+            fetch('/toggle_debug', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: debugMode })
+            });
         }
-      } else {
-        summaryDiv.textContent = status.message || '감지된 이벤트 없음';
-      }
-    }
-
-    function showError(jobId, error) {
-      const resultsDiv = document.getElementById(`results-${jobId}`);
-      resultsDiv.classList.remove('hidden');
-      resultsDiv.innerHTML = `
-        <div class="bg-red-50 border-l-4 border-red-500 p-4">
-          <p class="font-semibold text-red-800">
-            <i class="fas fa-exclamation-circle mr-2"></i>
-            오류 발생
-          </p>
-          <p class="text-sm text-red-700">${error}</p>
-        </div>
-      `;
-    }
-  </script>
+        
+        // Functions
+        function updateStatus(connected) {
+            const dot = document.getElementById('status-dot');
+            const text = document.getElementById('status-text');
+            
+            if (connected) {
+                dot.classList.remove('bg-danger');
+                dot.classList.add('bg-success');
+                text.textContent = 'Connected';
+            } else {
+                dot.classList.remove('bg-success');
+                dot.classList.add('bg-danger');
+                text.textContent = 'Disconnected';
+            }
+        }
+        
+        function changeVideo() {
+            const select = document.getElementById('video-select');
+            const videoPath = select.value;
+            
+            if (videoPath) {
+                const videoFeed = document.getElementById('video-feed');
+                videoFeed.src = `/video_feed?path=${encodeURIComponent(videoPath)}`;
+            }
+        }
+        
+        function stopProcessing() {
+            fetch('/stop_processing')
+                .then(res => res.json())
+                .then(data => {
+                    console.log('Stopped processing');
+                });
+        }
+        
+        function toggleDetection(type) {
+            detectionEnabled[type] = !detectionEnabled[type];
+            
+            const btn = document.getElementById(`btn-${type}`);
+            
+            if (detectionEnabled[type]) {
+                btn.classList.remove('opacity-50');
+            } else {
+                btn.classList.add('opacity-50');
+            }
+            
+            fetch('/toggle_detection', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: type, enabled: detectionEnabled[type] })
+            });
+        }
+        
+        function addAlert(detection) {
+            const container = document.getElementById('alerts-container');
+            
+            // Remove placeholder if exists
+            if (alerts.length === 0) {
+                container.innerHTML = '';
+            }
+            
+            // Create alert element
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'alert-animation glass-card rounded-lg p-4 border-l-4';
+            
+            // Color based on type
+            const colors = {
+                'CASH': 'border-success bg-success/10',
+                'VIOLENCE': 'border-danger bg-danger/10',
+                'FIRE': 'border-warning bg-warning/10'
+            };
+            
+            const icons = {
+                'CASH': '💵',
+                'VIOLENCE': '⚠️',
+                'FIRE': '🔥'
+            };
+            
+            alertDiv.classList.add(...(colors[detection.label] || 'border-gray-500').split(' '));
+            
+            const time = new Date().toLocaleTimeString();
+            
+            alertDiv.innerHTML = `
+                <div class="flex items-start justify-between">
+                    <div class="flex items-start space-x-3">
+                        <span class="text-2xl">${icons[detection.label] || '📌'}</span>
+                        <div>
+                            <div class="font-semibold">${detection.label}</div>
+                            <div class="text-sm text-gray-400">${time}</div>
+                            <div class="text-xs text-gray-500 mt-1">Confidence: ${(detection.confidence * 100).toFixed(1)}%</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            container.insertBefore(alertDiv, container.firstChild);
+            
+            // Keep only last 50 alerts
+            alerts.unshift(detection);
+            if (alerts.length > 50) {
+                alerts.pop();
+                if (container.children.length > 50) {
+                    container.removeChild(container.lastChild);
+                }
+            }
+            
+            // Update count
+            document.getElementById('alert-count').textContent = alerts.length;
+        }
+        
+        function updateStats(label) {
+            if (label === 'CASH') stats.cash++;
+            if (label === 'VIOLENCE') stats.violence++;
+            if (label === 'FIRE') stats.fire++;
+            
+            document.getElementById('stat-cash').textContent = stats.cash;
+            document.getElementById('stat-violence').textContent = stats.violence;
+            document.getElementById('stat-fire').textContent = stats.fire;
+        }
+        
+        function playAlertSound(label) {
+            if (label === 'VIOLENCE' || label === 'FIRE') {
+                const sound = document.getElementById('alert-sound');
+                sound.play().catch(() => {});
+            }
+        }
+        
+        function clearAlerts() {
+            alerts = [];
+            const container = document.getElementById('alerts-container');
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-shield-alt text-4xl mb-3 opacity-50"></i>
+                    <p>No alerts yet</p>
+                    <p class="text-sm mt-1">Monitoring for activity...</p>
+                </div>
+            `;
+            document.getElementById('alert-count').textContent = '0';
+        }
+        
+        function uploadVideo(input) {
+            const file = input.files[0];
+            if (!file) return;
+            
+            const formData = new FormData();
+            formData.append('video', file);
+            
+            // Show progress
+            const progress = document.getElementById('upload-progress');
+            const bar = document.getElementById('upload-bar');
+            const percent = document.getElementById('upload-percent');
+            const filename = document.getElementById('upload-filename');
+            
+            progress.classList.remove('hidden');
+            filename.textContent = file.name;
+            
+            // Create XHR for progress tracking
+            const xhr = new XMLHttpRequest();
+            
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    const pct = Math.round((e.loaded / e.total) * 100);
+                    bar.style.width = pct + '%';
+                    percent.textContent = pct + '%';
+                }
+            };
+            
+            xhr.onload = () => {
+                if (xhr.status === 200) {
+                    const data = JSON.parse(xhr.responseText);
+                    
+                    // Add to select
+                    const select = document.getElementById('video-select');
+                    const option = document.createElement('option');
+                    option.value = data.path;
+                    option.textContent = data.filename;
+                    select.appendChild(option);
+                    select.value = data.path;
+                    
+                    // Start playing
+                    changeVideo();
+                    
+                    setTimeout(() => {
+                        progress.classList.add('hidden');
+                        bar.style.width = '0%';
+                    }, 1000);
+                }
+            };
+            
+            xhr.open('POST', '/upload');
+            xhr.send(formData);
+        }
+        
+        // Cashier Zone Drawing
+        let isDrawingZone = false;
+        let isDragging = false;
+        let zoneStart = null;
+        let zoneEnd = null;
+        let currentZone = null;
+        
+        function startDrawCashierZone() {
+            const canvas = document.getElementById('zone-canvas');
+            const videoFeed = document.getElementById('video-feed');
+            const instructions = document.getElementById('zone-instructions');
+            const btn = document.getElementById('btn-draw-zone');
+            
+            if (!videoFeed.src || videoFeed.src === '') {
+                alert('Please select a video first');
+                return;
+            }
+            
+            // Show canvas and instructions
+            canvas.classList.remove('hidden');
+            instructions.classList.remove('hidden');
+            btn.textContent = 'Cancel Drawing';
+            btn.onclick = cancelDrawZone;
+            
+            // Set canvas size to match video
+            const rect = videoFeed.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            canvas.style.pointerEvents = 'auto';
+            
+            isDrawingZone = true;
+            isDragging = false;
+            
+            // Add mouse event listeners
+            canvas.addEventListener('mousedown', startDraw);
+            canvas.addEventListener('mousemove', drawing);
+            canvas.addEventListener('mouseup', endDraw);
+            canvas.addEventListener('mouseleave', endDraw);
+        }
+        
+        function cancelDrawZone() {
+            const canvas = document.getElementById('zone-canvas');
+            const instructions = document.getElementById('zone-instructions');
+            const btn = document.getElementById('btn-draw-zone');
+            
+            canvas.classList.add('hidden');
+            instructions.classList.add('hidden');
+            btn.innerHTML = '<i class="fas fa-draw-polygon text-white mr-2"></i>Draw Cashier Zone';
+            btn.onclick = startDrawCashierZone;
+            
+            // Remove event listeners
+            canvas.removeEventListener('mousedown', startDraw);
+            canvas.removeEventListener('mousemove', drawing);
+            canvas.removeEventListener('mouseup', endDraw);
+            canvas.removeEventListener('mouseleave', endDraw);
+            
+            isDrawingZone = false;
+            isDragging = false;
+            zoneStart = null;
+            zoneEnd = null;
+            
+            // Clear canvas
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+        
+        function startDraw(e) {
+            if (!isDrawingZone) return;
+            e.preventDefault();
+            isDragging = true;
+            const rect = e.target.getBoundingClientRect();
+            zoneStart = {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            };
+        }
+        
+        function drawing(e) {
+            if (!isDrawingZone || !isDragging || !zoneStart) return;
+            e.preventDefault();
+            
+            const canvas = document.getElementById('zone-canvas');
+            const ctx = canvas.getContext('2d');
+            const rect = canvas.getBoundingClientRect();
+            
+            zoneEnd = {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            };
+            
+            // Clear and redraw
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw rectangle
+            ctx.strokeStyle = '#ffff00';
+            ctx.lineWidth = 3;
+            ctx.setLineDash([5, 5]);
+            ctx.strokeRect(
+                zoneStart.x, zoneStart.y,
+                zoneEnd.x - zoneStart.x,
+                zoneEnd.y - zoneStart.y
+            );
+            
+            // Fill with semi-transparent yellow
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.1)';
+            ctx.fillRect(
+                zoneStart.x, zoneStart.y,
+                zoneEnd.x - zoneStart.x,
+                zoneEnd.y - zoneStart.y
+            );
+        }
+        
+        function endDraw(e) {
+            if (!isDrawingZone || !isDragging || !zoneStart) return;
+            e.preventDefault();
+            isDragging = false;
+            
+            const canvas = document.getElementById('zone-canvas');
+            const videoFeed = document.getElementById('video-feed');
+            const rect = canvas.getBoundingClientRect();
+            
+            // Update zoneEnd with final position
+            zoneEnd = {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            };
+            
+            // Calculate zone coordinates on canvas first
+            const canvasW = Math.abs(zoneEnd.x - zoneStart.x);
+            const canvasH = Math.abs(zoneEnd.y - zoneStart.y);
+            
+            console.log('Drawing ended - Canvas size:', canvasW, 'x', canvasH);
+            console.log('Start:', zoneStart, 'End:', zoneEnd);
+            
+            // Very small minimum - just needs to be intentional
+            if (canvasW < 10 || canvasH < 10) {
+                console.log('Zone too small, ignoring');
+                return;
+            }
+            
+            // Get actual video dimensions - use canvas size as fallback
+            const videoWidth = videoFeed.naturalWidth || canvas.width;
+            const videoHeight = videoFeed.naturalHeight || canvas.height;
+            
+            // Calculate scale factors (default to 1 if same size)
+            const scaleX = canvas.width > 0 ? videoWidth / canvas.width : 1;
+            const scaleY = canvas.height > 0 ? videoHeight / canvas.height : 1;
+            
+            // Scale to video coordinates
+            const x = Math.round(Math.min(zoneStart.x, zoneEnd.x) * scaleX);
+            const y = Math.round(Math.min(zoneStart.y, zoneEnd.y) * scaleY);
+            const w = Math.round(canvasW * scaleX);
+            const h = Math.round(canvasH * scaleY);
+            
+            currentZone = [x, y, w, h];
+            
+            console.log('Zone coordinates:', currentZone, 'Scale:', scaleX, scaleY);
+            
+            // Save zone to server
+            fetch('/set_cashier_zone', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ zone: currentZone })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    // Show zone info
+                    document.getElementById('zone-info').classList.remove('hidden');
+                    document.getElementById('zone-coords').textContent = 
+                        `X: ${x}, Y: ${y}, Width: ${w}, Height: ${h}`;
+                    
+                    alert('Cashier zone saved successfully!');
+                    cancelDrawZone();
+                }
+            });
+        }
+        
+        function exportReport() {
+            fetch('/get_summary')
+                .then(res => res.json())
+                .then(data => {
+                    const report = JSON.stringify(data, null, 2);
+                    const blob = new Blob([report], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `detection_report_${new Date().toISOString().slice(0,10)}.json`;
+                    a.click();
+                    
+                    URL.revokeObjectURL(url);
+                });
+        }
+        
+        // Auto-start first video if available
+        window.onload = () => {
+            const select = document.getElementById('video-select');
+            if (select.options.length > 1) {
+                select.selectedIndex = 1;
+                changeVideo();
+            }
+            
+            // Load existing cashier zone
+            fetch('/get_cashier_zone')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.zone && data.zone.length === 4) {
+                        currentZone = data.zone;
+                        document.getElementById('zone-info').classList.remove('hidden');
+                        document.getElementById('zone-coords').textContent = 
+                            `X: ${data.zone[0]}, Y: ${data.zone[1]}, Width: ${data.zone[2]}, Height: ${data.zone[3]}`;
+                    }
+                })
+                .catch(() => {});
+        };
+    </script>
 </body>
 </html>
-

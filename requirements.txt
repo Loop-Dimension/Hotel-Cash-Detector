@@ -1,8 +1,22 @@
-Flask
-ultralytics
+# Flask and Web
+flask
+flask-socketio
+python-socketio
+python-engineio
+eventlet
+werkzeug
+# Computer Vision & AI
 opencv-python
+ultralytics
+torch
+torchvision
 numpy
-Werkzeug
-waitress
-psutil
+Pillow
 
+# Video Processing
+imageio
+imageio-ffmpeg
+
+# Utilities
+python-dotenv
+tqdm

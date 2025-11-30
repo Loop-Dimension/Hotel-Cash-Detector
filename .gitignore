@@ -1,24 +1,55 @@
-*.pt
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Models (large files - keep .gitkeep)
+models/*.pt
+
+# Videos and media
 *.mp4
 *.avi
 *.mkv
 *.mov
 *_annotated_temp.mp4
+*.smi
 
-# Flask uploads and outputs
+# Uploads and outputs
 uploads/
+output/
 outputs/
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-venv/
-.env
+# Input videos (large files)
+input/*.mp4
+input/*.avi
+input/*.mov
+input/*.mkv
+input/*/
 
-# IDE
-.vscode/
-.idea/
-input/행동패턴_상황연출_20251111_15시55분~18시10분_일산그라체(admin)/행동패턴_상황연출_251111_1117.smi
-*.smi
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Archives
 *.zip
