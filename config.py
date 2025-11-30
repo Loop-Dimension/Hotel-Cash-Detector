@@ -19,7 +19,7 @@ for dir_path in [INPUT_DIR, OUTPUT_DIR, MODELS_DIR, UPLOAD_DIR]:
 
 # Flask settings
 SECRET_KEY = os.environ.get('SECRET_KEY', 'hotel-cash-detector-secret-key-2024')
-MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB max upload
+MAX_CONTENT_LENGTH = 1024 * 1024 * 1024  # 1GB max upload
 
 # Detection settings
 class DetectionConfig:

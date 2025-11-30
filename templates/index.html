@@ -224,11 +224,11 @@
                                 {% endfor %}
                             </select>
                             
-                            <!-- Stop Button -->
-                            <button onclick="stopProcessing()" 
+                            <!-- Stop/Start Button -->
+                            <button onclick="toggleProcessing()" id="btn-toggle-processing"
                                     class="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent-red/20 border border-accent-red/50 text-accent-red text-sm font-medium hover:bg-accent-red/30 transition">
-                                <i class="fas fa-stop"></i>
-                                <span>Stop</span>
+                                <i class="fas fa-stop" id="toggle-icon"></i>
+                                <span id="toggle-text">Stop</span>
                             </button>
                         </div>
                     </div>
@@ -529,11 +529,22 @@
         
         socket.on('detections', (data) => {
             console.log('Detection:', data);
+            // Update frame counter
+            if (data.frame) {
+                document.getElementById('frame-counter').textContent = 'Frame: ' + data.frame;
+            }
             data.detections.forEach(det => {
-                addAlert(det);
+                addAlert(det, data.frame);
                 updateStats(det.label);
                 playAlertSound(det.label);
             });
+        });
+        
+        // Also update frame counter periodically
+        socket.on('frame_update', (data) => {
+            if (data.frame) {
+                document.getElementById('frame-counter').textContent = 'Frame: ' + data.frame;
+            }
         });
         
         // Functions
@@ -561,15 +572,67 @@
                 const videoFeed = document.getElementById('video-feed');
                 videoFeed.src = `/video_feed?path=${encodeURIComponent(videoPath)}`;
                 placeholder.classList.add('hidden');
+                isProcessing = true;
+                updateToggleButton();
             } else {
                 placeholder.classList.remove('hidden');
+                isProcessing = false;
+                updateToggleButton();
             }
         }
         
-        function stopProcessing() {
-            fetch('/stop_processing').then(res => res.json()).then(data => {
-                console.log('Stopped processing');
-            });
+        let isProcessing = false;
+        
+        function toggleProcessing() {
+            if (isProcessing) {
+                // Stop processing
+                fetch('/stop_processing').then(res => res.json()).then(data => {
+                    console.log('Stopped processing');
+                    isProcessing = false;
+                    updateToggleButton();
+                    // Clear the video feed
+                    const videoFeed = document.getElementById('video-feed');
+                    videoFeed.src = '';
+                    document.getElementById('no-video-placeholder').classList.remove('hidden');
+                });
+            } else {
+                // Start processing - reload current video with fresh connection
+                const select = document.getElementById('video-select');
+                if (select.value) {
+                    // First tell server to allow processing
+                    fetch('/start_processing').then(() => {
+                        // Force fresh video feed by adding timestamp to URL
+                        const videoFeed = document.getElementById('video-feed');
+                        const videoPath = select.value;
+                        videoFeed.src = `/video_feed?path=${encodeURIComponent(videoPath)}&t=${Date.now()}`;
+                        document.getElementById('no-video-placeholder').classList.add('hidden');
+                        isProcessing = true;
+                        updateToggleButton();
+                    });
+                } else {
+                    alert('Please select a video first');
+                }
+            }
+        }
+        
+        function updateToggleButton() {
+            const btn = document.getElementById('btn-toggle-processing');
+            const icon = document.getElementById('toggle-icon');
+            const text = document.getElementById('toggle-text');
+            
+            if (isProcessing) {
+                btn.classList.remove('bg-accent-green/20', 'border-accent-green/50', 'text-accent-green');
+                btn.classList.add('bg-accent-red/20', 'border-accent-red/50', 'text-accent-red');
+                icon.classList.remove('fa-play');
+                icon.classList.add('fa-stop');
+                text.textContent = 'Stop';
+            } else {
+                btn.classList.remove('bg-accent-red/20', 'border-accent-red/50', 'text-accent-red');
+                btn.classList.add('bg-accent-green/20', 'border-accent-green/50', 'text-accent-green');
+                icon.classList.remove('fa-stop');
+                icon.classList.add('fa-play');
+                text.textContent = 'Start';
+            }
         }
         
         function toggleDetection(type) {
@@ -612,7 +675,7 @@
             });
         }
         
-        function addAlert(detection) {
+        function addAlert(detection, frameNum) {
             const container = document.getElementById('alerts-container');
             const noAlerts = document.getElementById('no-alerts');
             
@@ -626,6 +689,7 @@
             
             const style = colors[detection.label] || colors['CASH'];
             const time = new Date().toLocaleTimeString();
+            const frame = frameNum || 0;
             
             const alertDiv = document.createElement('div');
             alertDiv.className = `slide-in ${style.bg} ${style.border} border rounded-xl p-4`;
@@ -639,7 +703,10 @@
                             <span class="font-semibold text-sm ${style.text}">${detection.label}</span>
                             <span class="text-xs text-gray-500">${time}</span>
                         </div>
-                        <p class="text-xs text-gray-400 mt-1">Confidence: ${(detection.confidence * 100).toFixed(1)}%</p>
+                        <p class="text-xs text-gray-400 mt-1">Confidence: ${(detection.confidence * 100).toFixed(1)}% | Frame: ${frame}</p>
+                        <button onclick="downloadClip('${detection.label}', ${frame})" class="mt-2 text-xs px-2 py-1 rounded bg-dark-700 hover:bg-dark-600 transition">
+                            <i class="fas fa-download mr-1"></i>Download Clip
+                        </button>
                     </div>
                 </div>
             `;
@@ -655,6 +722,38 @@
             }
             
             document.getElementById('alert-count').textContent = alerts.length;
+        }
+        
+        function downloadClip(label, frame) {
+            const select = document.getElementById('video-select');
+            const videoPath = select.value;
+            if (!videoPath) {
+                alert('No video selected');
+                return;
+            }
+            
+            // Request clip export from server
+            fetch('/export_clip', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    video_path: videoPath,
+                    detection_frame: frame,
+                    detection_type: label
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    // Download the clip
+                    window.open('/download_clip?path=' + encodeURIComponent(data.clip_path), '_blank');
+                } else {
+                    alert('Failed to export clip: ' + (data.error || 'Unknown error'));
+                }
+            })
+            .catch(err => {
+                alert('Error exporting clip: ' + err);
+            });
         }
         
         function updateStats(label) {
@@ -893,6 +992,10 @@
             if (select.options.length > 1) {
                 select.selectedIndex = 1;
                 changeVideo();
+            } else {
+                // No video selected yet
+                isProcessing = false;
+                updateToggleButton();
             }
             
             fetch('/get_cashier_zone')

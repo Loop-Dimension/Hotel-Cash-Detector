@@ -5,15 +5,17 @@ Main application for:
 - Video upload and processing
 - Live CCTV monitoring
 - Real-time detection alerts (Cash, Violence, Fire)
+- Video clip export on detection
 """
 import os
 import json
 import cv2
 import time
 import threading
+import subprocess
 from pathlib import Path
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, Response, send_from_directory
+from flask import Flask, render_template, request, jsonify, Response, send_from_directory, send_file
 from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
 
@@ -39,6 +41,11 @@ current_video_path = None
 is_processing = False
 processing_thread = None
 camera_configs = {}
+
+# Clip export tracking - to merge overlapping detections
+clip_export_requests = {}  # key: detection_type, value: {start_frame, end_frame, last_update}
+CLIP_DURATION_SECONDS = 60  # 1 minute clips
+CLIP_MERGE_WINDOW_SECONDS = 60  # Merge detections within 1 minute
 
 # Allowed video extensions
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm'}
@@ -109,6 +116,7 @@ def generate_frames(video_path):
     
     is_processing = True
     frame_count = 0
+    last_frame_emit = 0
     
     while is_processing:
         ret, frame = cap.read()
@@ -126,10 +134,15 @@ def generate_frames(video_path):
         # Process frame
         result = det.process_frame(frame, draw_overlay=True)
         
+        # Emit frame update every 10 frames for live counter
+        if frame_count - last_frame_emit >= 10:
+            socketio.emit('frame_update', {'frame': result['frame_number']})
+            last_frame_emit = frame_count
+        
         # Send alerts via WebSocket
         if result['detections']:
             socketio.emit('detections', {
-                'frame': frame_count,
+                'frame': result['frame_number'],
                 'detections': result['detections'],
                 'timestamp': datetime.now().isoformat()
             })
@@ -237,7 +250,20 @@ def stop_processing():
     """Stop video processing"""
     global is_processing
     is_processing = False
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'status': 'stopped'})
+
+
+@app.route('/start_processing')
+def start_processing():
+    """Reset detector and prepare for new processing"""
+    global is_processing, detector
+    is_processing = True
+    
+    # Reset the detector for fresh start
+    if detector:
+        detector.reset()
+    
+    return jsonify({'success': True, 'status': 'ready'})
 
 
 @app.route('/set_cashier_zone', methods=['POST'])
@@ -335,6 +361,125 @@ def get_summary():
     det = get_detector()
     summary = det.get_detection_summary()
     return jsonify(summary)
+
+
+@app.route('/export_clip', methods=['POST'])
+def export_clip():
+    """
+    Export a video clip around the detection frame.
+    Clips are 1 minute long (30 seconds before, 30 seconds after detection).
+    Multiple detections within the same minute are merged into one clip.
+    """
+    data = request.json
+    video_path = data.get('video_path')
+    detection_frame = data.get('detection_frame', 0)
+    detection_type = data.get('detection_type', 'UNKNOWN')
+    
+    if not video_path or not os.path.exists(video_path):
+        return jsonify({'error': 'Video file not found'}), 400
+    
+    try:
+        # Open video to get properties
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return jsonify({'error': 'Cannot open video file'}), 400
+        
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Calculate clip range (30 sec before, 30 sec after = 1 min total)
+        half_duration_frames = int((CLIP_DURATION_SECONDS / 2) * fps)
+        
+        start_frame = max(0, detection_frame - half_duration_frames)
+        end_frame = min(total_frames, detection_frame + half_duration_frames)
+        
+        # Generate clip filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        video_name = Path(video_path).stem
+        clip_filename = f"{detection_type}_{video_name}_frame{detection_frame}_{timestamp}.mp4"
+        clip_path = OUTPUT_DIR / clip_filename
+        
+        # Create output directory if needed
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        
+        # Set starting position
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        
+        # Create video writer
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(str(clip_path), fourcc, fps, (width, height))
+        
+        # Write frames
+        current_frame = start_frame
+        while current_frame < end_frame:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Add detection info overlay
+            cv2.putText(frame, f"{detection_type} Detection", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            cv2.putText(frame, f"Frame: {current_frame}", (10, 60),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            
+            # Highlight the detection frame
+            if abs(current_frame - detection_frame) < fps:  # Within 1 second of detection
+                cv2.rectangle(frame, (0, 0), (width, height), (0, 0, 255), 8)
+                cv2.putText(frame, "* DETECTION *", (width//2 - 100, height - 20),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            
+            out.write(frame)
+            current_frame += 1
+        
+        cap.release()
+        out.release()
+        
+        return jsonify({
+            'success': True,
+            'clip_path': str(clip_path),
+            'filename': clip_filename,
+            'start_frame': start_frame,
+            'end_frame': end_frame,
+            'duration_seconds': (end_frame - start_frame) / fps
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/download_clip')
+def download_clip():
+    """Download an exported clip"""
+    clip_path = request.args.get('path')
+    
+    if not clip_path or not os.path.exists(clip_path):
+        return jsonify({'error': 'Clip not found'}), 404
+    
+    return send_file(
+        clip_path,
+        as_attachment=True,
+        download_name=Path(clip_path).name
+    )
+
+
+@app.route('/list_clips')
+def list_clips():
+    """List all exported clips"""
+    clips = []
+    if OUTPUT_DIR.exists():
+        for clip in OUTPUT_DIR.glob('*.mp4'):
+            clips.append({
+                'name': clip.name,
+                'path': str(clip),
+                'size': clip.stat().st_size,
+                'created': datetime.fromtimestamp(clip.stat().st_ctime).isoformat()
+            })
+    
+    # Sort by creation time, newest first
+    clips.sort(key=lambda x: x['created'], reverse=True)
+    return jsonify({'clips': clips})
 
 
 @app.route('/api/alerts')
