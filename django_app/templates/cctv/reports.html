@@ -1,180 +1,442 @@
 {% extends 'cctv/base.html' %}
+{% load static %}
 
-{% block title %}리포트 - Hotel CCTV Monitoring{% endblock %}
+{% block title %}{{ t.reports_title }} - {{ t.app_name }}{% endblock %}
+
+{% block extra_css %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
 
 {% block content %}
-<div class="panel">
-    <div class="page-header">
-        <div>
-            <p class="eyebrow">기본 리포트</p>
-            <h1>리포트 대시보드</h1>
-        </div>
+<div class="page-header">
+    <div class="page-header-left">
+        <p class="eyebrow">{{ t.reports_subtitle }}</p>
+        <h1>{{ t.reports_title }}</h1>
     </div>
-
-    <form class="filters" style="margin-bottom: 12px;" method="get">
-        <div class="filter-group">
-            <label>지역</label>
-            <select name="region" id="reportRegion">
-                <option value="전체">전체</option>
-                {% for region in regions %}
-                <option value="{{ region.name }}">{{ region.name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div class="filter-group">
-            <label>지점명</label>
-            <input name="branch" id="reportBranch" placeholder="지점명 검색">
-        </div>
-        <button class="ghost-button small" type="submit">검색</button>
-    </form>
-
-    <!-- Metrics Cards -->
-    <div class="report-cards" id="metricsCards">
-        <div class="report-card">
-            <p class="eyebrow">이번 달 총 이벤트</p>
-            <h2 id="totalEvents">-</h2>
-        </div>
-        <div class="report-card">
-            <p class="eyebrow">평균 알람 대응 시간</p>
-            <h2>02분 35초</h2>
-        </div>
-        <div class="report-card">
-            <p class="eyebrow">오탐률</p>
-            <h2>3.2%</h2>
-        </div>
-    </div>
-
-    <!-- Charts -->
-    <div class="report-lines">
-        <div class="report-box">
-            <h3>기간별 이벤트 발생 건수 · 일별</h3>
-            <div class="mini-line-chart" id="dailyChart">
-                <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-                    <defs>
-                        <linearGradient id="lineFill" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="rgba(28,19,115,0.35)" />
-                            <stop offset="100%" stop-color="rgba(28,19,115,0.05)" />
-                        </linearGradient>
-                    </defs>
-                    <polyline id="dailyLine" fill="none" stroke="#1c1373" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></polyline>
-                    <polygon id="dailyFill" fill="url(#lineFill)" opacity="0.35"></polygon>
-                </svg>
-            </div>
-        </div>
-        <div class="report-box">
-            <h3>이벤트 유형별 비율</h3>
-            <div class="report-pie-inline">
-                <div class="pie-chart pie-single" id="pieChart" style="width: 150px; height: 150px;"></div>
-                <div class="pie-legend-list" id="pieLegend"></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Branch Summary Table -->
-    <div class="table" style="margin-top: 16px;">
-        <div class="table-head">
-            <span>지점</span>
-            <span>총 이벤트</span>
-            <span>평균 대응 시간</span>
-            <span>오탐률</span>
-        </div>
-        <div class="table-body" id="branchSummaryBody">
-            <div class="loading-row">데이터를 불러오는 중...</div>
-        </div>
-    </div>
-
-    <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
-        <button class="ghost-button" onclick="downloadReport()">다운로드</button>
+    <div class="page-actions">
+        <button class="btn btn-secondary" onclick="exportReport('pdf')">{{ t.export }} PDF</button>
+        <button class="btn btn-secondary" onclick="exportReport('excel')">{{ t.export }} Excel</button>
     </div>
 </div>
 
-<style>
-.report-pie-inline {
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    padding: 12px;
-}
-</style>
+<!-- Date Range Filter -->
+<div class="filter-bar">
+    <div class="filter-group">
+        <label>{{ t.date_range }}</label>
+        <select id="dateRange" onchange="updateDateRange()">
+            <option value="today">{{ t.today }}</option>
+            <option value="week" selected>{{ t.this_week }}</option>
+            <option value="month">{{ t.this_month }}</option>
+            <option value="custom">{{ t.custom }}</option>
+        </select>
+    </div>
+    <div class="filter-group" id="customDateRange" style="display: none;">
+        <label>{{ t.start_date }}</label>
+        <input type="date" id="startDate">
+    </div>
+    <div class="filter-group" id="customDateRangeEnd" style="display: none;">
+        <label>{{ t.end_date }}</label>
+        <input type="date" id="endDate">
+    </div>
+    <div class="filter-group">
+        <label>{{ t.select_region }}</label>
+        <select id="regionFilter" onchange="filterBranchesByRegion(); loadReportData()">
+            <option value="">{{ t.all_regions }}</option>
+            {% for region in regions %}
+            <option value="{{ region.id }}">{{ region.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label>{{ t.select_branch }}</label>
+        <select id="branchFilter" onchange="loadReportData()">
+            <option value="">{{ t.all_branches }}</option>
+            {% for branch in branches %}
+            <option value="{{ branch.id }}" data-region="{{ branch.region.id }}">{{ branch.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <button class="btn btn-primary" onclick="loadReportData()">{{ t.apply }}</button>
+</div>
 
+<!-- Summary Cards -->
+<div class="summary-cards">
+    <div class="summary-card">
+        <div class="summary-icon icon-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 6v6l4 2"/>
+            </svg>
+        </div>
+        <div class="summary-content">
+            <span class="summary-label">{{ t.total_events }}</span>
+            <span class="summary-value" id="totalEvents">-</span>
+        </div>
+    </div>
+    <div class="summary-card">
+        <div class="summary-icon icon-danger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                <line x1="12" y1="9" x2="12" y2="13"/>
+                <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+        </div>
+        <div class="summary-content">
+            <span class="summary-label">{{ t.high_priority }}</span>
+            <span class="summary-value" id="highPriorityEvents">-</span>
+        </div>
+    </div>
+    <div class="summary-card">
+        <div class="summary-icon icon-warning">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+        </div>
+        <div class="summary-content">
+            <span class="summary-label">{{ t.pending_review }}</span>
+            <span class="summary-value" id="pendingEvents">-</span>
+        </div>
+    </div>
+    <div class="summary-card">
+        <div class="summary-icon icon-success">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                <polyline points="22,4 12,14.01 9,11.01"/>
+            </svg>
+        </div>
+        <div class="summary-content">
+            <span class="summary-label">{{ t.resolved }}</span>
+            <span class="summary-value" id="resolvedEvents">-</span>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Section -->
+<div class="charts-grid">
+    <!-- Events by Type Chart -->
+    <div class="chart-card">
+        <h3>{{ t.events_by_type }}</h3>
+        <canvas id="eventsByTypeChart"></canvas>
+    </div>
+    
+    <!-- Events Timeline Chart -->
+    <div class="chart-card">
+        <h3>{{ t.events_timeline }}</h3>
+        <canvas id="eventsTimelineChart"></canvas>
+    </div>
+    
+    <!-- Events by Branch Chart -->
+    <div class="chart-card">
+        <h3>{{ t.events_by_branch }}</h3>
+        <canvas id="eventsByBranchChart"></canvas>
+    </div>
+    
+    <!-- Events by Hour Chart -->
+    <div class="chart-card">
+        <h3>{{ t.events_by_hour }}</h3>
+        <canvas id="eventsByHourChart"></canvas>
+    </div>
+</div>
+
+<!-- Detailed Table -->
+<div class="report-table-section">
+    <h3>{{ t.detailed_report }}</h3>
+    <div class="table">
+        <div class="table-head">
+            <span>{{ t.date }}</span>
+            <span>{{ t.branch }}</span>
+            <span>{{ t.event_type }}</span>
+            <span class="text-center">{{ t.count }}</span>
+            <span class="text-center">{{ t.high_priority }}</span>
+            <span class="text-center">{{ t.resolved }}</span>
+        </div>
+        <div class="table-body" id="reportTableBody">
+            <div class="loading-state">
+                <p>{{ t.loading }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    loadReportStats();
-});
-
-function loadReportStats() {
-    fetch('/api/report-stats/')
-        .then(response => response.json())
-        .then(data => {
-            // Update total events
-            document.getElementById('totalEvents').textContent = data.monthly_events + '건';
-            
-            // Update daily chart
-            if (data.daily_data && data.daily_data.length > 0) {
-                updateDailyChart(data.daily_data);
+    let eventsByTypeChart, eventsTimelineChart, eventsByBranchChart, eventsByHourChart;
+    
+    const chartColors = {
+        primary: '#3182f6',
+        danger: '#f04452',
+        warning: '#ffcfa1',
+        success: '#a0d6b6',
+        gray: '#8b95a1'
+    };
+    
+    document.addEventListener('DOMContentLoaded', function() {
+        initCharts();
+        loadReportData();
+    });
+    
+    function initCharts() {
+        const defaultOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    labels: {
+                        color: '#6b7684',
+                        font: {
+                            family: 'Pretendard Variable'
+                        }
+                    }
+                }
             }
-            
-            // Update pie chart
-            if (data.pie_data) {
-                updatePieChart(data.pie_data);
+        };
+        
+        // Events by Type - Doughnut Chart
+        eventsByTypeChart = new Chart(document.getElementById('eventsByTypeChart'), {
+            type: 'doughnut',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    backgroundColor: [chartColors.primary, chartColors.danger, chartColors.warning, chartColors.success]
+                }]
+            },
+            options: {
+                ...defaultOptions,
+                cutout: '60%'
             }
-            
-            // Update branch summary
-            if (data.branch_summary) {
-                updateBranchSummary(data.branch_summary);
-            }
-        })
-        .catch(error => {
-            console.error('Error loading report stats:', error);
         });
-}
-
-function updateDailyChart(data) {
-    const maxY = Math.max(...data.map(d => d.y), 1);
-    const points = data.map((d, idx) => {
-        const x = (idx / Math.max(data.length - 1, 1)) * 100;
-        const y = 100 - (d.y / maxY) * 75 - 12;
-        return `${x},${y}`;
-    });
+        
+        // Events Timeline - Line Chart
+        eventsTimelineChart = new Chart(document.getElementById('eventsTimelineChart'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: '{{ t.events }}',
+                    data: [],
+                    borderColor: chartColors.primary,
+                    backgroundColor: chartColors.primary + '20',
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                ...defaultOptions,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { color: '#6b7684' },
+                        grid: { color: '#e7eaed' }
+                    },
+                    x: {
+                        ticks: { color: '#6b7684' },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+        
+        // Events by Branch - Bar Chart
+        eventsByBranchChart = new Chart(document.getElementById('eventsByBranchChart'), {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: '{{ t.events }}',
+                    data: [],
+                    backgroundColor: chartColors.primary
+                }]
+            },
+            options: {
+                ...defaultOptions,
+                indexAxis: 'y',
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        ticks: { color: '#6b7684' },
+                        grid: { color: '#e7eaed' }
+                    },
+                    y: {
+                        ticks: { color: '#6b7684' },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+        
+        // Events by Hour - Bar Chart
+        eventsByHourChart = new Chart(document.getElementById('eventsByHourChart'), {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: '{{ t.events }}',
+                    data: [],
+                    backgroundColor: chartColors.success
+                }]
+            },
+            options: {
+                ...defaultOptions,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { color: '#6b7684' },
+                        grid: { color: '#e7eaed' }
+                    },
+                    x: {
+                        ticks: { color: '#6b7684' },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+    }
     
-    document.getElementById('dailyLine').setAttribute('points', points.join(' '));
-    document.getElementById('dailyFill').setAttribute('points', points.join(' ') + ' 100,100 0,100');
-}
-
-function updatePieChart(data) {
-    const total = data.reduce((s, p) => s + p.value, 0) || 1;
-    let stops = [];
-    let startAngle = 0;
+    function updateDateRange() {
+        const value = document.getElementById('dateRange').value;
+        const customStart = document.getElementById('customDateRange');
+        const customEnd = document.getElementById('customDateRangeEnd');
+        
+        if (value === 'custom') {
+            customStart.style.display = 'block';
+            customEnd.style.display = 'block';
+        } else {
+            customStart.style.display = 'none';
+            customEnd.style.display = 'none';
+            loadReportData();
+        }
+    }
     
-    data.forEach(p => {
-        const endAngle = startAngle + (p.value / 100) * 360;
-        stops.push(`${p.color} ${startAngle}deg ${endAngle}deg`);
-        startAngle = endAngle;
-    });
+    function filterBranchesByRegion() {
+        const regionId = document.getElementById('regionFilter').value;
+        const branchSelect = document.getElementById('branchFilter');
+        const options = branchSelect.querySelectorAll('option');
+        
+        // Reset branch selection
+        branchSelect.value = '';
+        
+        options.forEach(option => {
+            if (option.value === '') {
+                // Keep "All Branches" visible
+                option.style.display = 'block';
+                option.hidden = false;
+            } else {
+                const optionRegion = option.dataset.region;
+                if (!regionId || optionRegion === regionId) {
+                    option.style.display = 'block';
+                    option.hidden = false;
+                } else {
+                    option.style.display = 'none';
+                    option.hidden = true;
+                }
+            }
+        });
+    }
     
-    document.getElementById('pieChart').style.background = `conic-gradient(${stops.join(', ')})`;
+    async function loadReportData() {
+        const dateRange = document.getElementById('dateRange').value;
+        const regionId = document.getElementById('regionFilter').value;
+        const branchId = document.getElementById('branchFilter').value;
+        
+        let params = new URLSearchParams();
+        params.append('date_range', dateRange);
+        if (regionId) params.append('region_id', regionId);
+        if (branchId) params.append('branch_id', branchId);
+        
+        if (dateRange === 'custom') {
+            params.append('start_date', document.getElementById('startDate').value);
+            params.append('end_date', document.getElementById('endDate').value);
+        }
+        
+        try {
+            const response = await fetch(`/api/reports/?${params.toString()}`);
+            const data = await response.json();
+            
+            updateSummaryCards(data.summary);
+            updateCharts(data);
+            updateTable(data.details);
+        } catch (error) {
+            console.error('Error loading report data:', error);
+            showToast('{{ t.error }}', 'error');
+        }
+    }
     
-    document.getElementById('pieLegend').innerHTML = data.map(p => `
-        <div class="legend-item">
-            <span class="legend-dot" style="background: ${p.color}"></span>
-            ${p.label} (${p.value}%)
-        </div>
-    `).join('');
-}
-
-function updateBranchSummary(data) {
-    document.getElementById('branchSummaryBody').innerHTML = data.map(row => `
-        <div class="table-row events" style="grid-template-columns: 1.2fr 0.8fr 1fr 0.8fr;">
-            <span class="branch-name">${row.branch}</span>
-            <span>${row.total}</span>
-            <span>${row.avg}</span>
-            <span>${row.falseRate}</span>
-        </div>
-    `).join('') || '<div class="table-row empty-row"><span class="empty-text">데이터 없음</span></div>';
-}
-
-function downloadReport() {
-    alert('리포트 다운로드 기능은 준비 중입니다.');
-}
+    function updateSummaryCards(summary) {
+        document.getElementById('totalEvents').textContent = summary?.total || 0;
+        document.getElementById('highPriorityEvents').textContent = summary?.high_priority || 0;
+        document.getElementById('pendingEvents').textContent = summary?.pending || 0;
+        document.getElementById('resolvedEvents').textContent = summary?.resolved || 0;
+    }
+    
+    function updateCharts(data) {
+        // Events by Type
+        if (data.by_type) {
+            eventsByTypeChart.data.labels = data.by_type.map(d => d.type);
+            eventsByTypeChart.data.datasets[0].data = data.by_type.map(d => d.count);
+            eventsByTypeChart.update();
+        }
+        
+        // Events Timeline
+        if (data.timeline) {
+            eventsTimelineChart.data.labels = data.timeline.map(d => d.date);
+            eventsTimelineChart.data.datasets[0].data = data.timeline.map(d => d.count);
+            eventsTimelineChart.update();
+        }
+        
+        // Events by Branch
+        if (data.by_branch) {
+            eventsByBranchChart.data.labels = data.by_branch.map(d => d.branch);
+            eventsByBranchChart.data.datasets[0].data = data.by_branch.map(d => d.count);
+            eventsByBranchChart.update();
+        }
+        
+        // Events by Hour
+        if (data.by_hour) {
+            eventsByHourChart.data.labels = data.by_hour.map(d => `${d.hour}:00`);
+            eventsByHourChart.data.datasets[0].data = data.by_hour.map(d => d.count);
+            eventsByHourChart.update();
+        }
+    }
+    
+    function updateTable(details) {
+        const tbody = document.getElementById('reportTableBody');
+        
+        if (!details || details.length === 0) {
+            tbody.innerHTML = `
+                <div class="empty-state">
+                    <p class="empty-state-text">{{ t.no_data }}</p>
+                </div>
+            `;
+            return;
+        }
+        
+        tbody.innerHTML = details.map(row => `
+            <div class="table-row">
+                <span>${row.date}</span>
+                <span>${row.branch}</span>
+                <span>${row.event_type}</span>
+                <span class="text-center">${row.count}</span>
+                <span class="text-center">${row.high_priority}</span>
+                <span class="text-center">${row.resolved}</span>
+            </div>
+        `).join('');
+    }
+    
+    async function exportReport(format) {
+        const dateRange = document.getElementById('dateRange').value;
+        const regionId = document.getElementById('regionFilter').value;
+        const branchId = document.getElementById('branchFilter').value;
+        
+        let params = new URLSearchParams();
+        params.append('format', format);
+        params.append('date_range', dateRange);
+        if (regionId) params.append('region_id', regionId);
+        if (branchId) params.append('branch_id', branchId);
+        
+        window.location.href = `/api/reports/export/?${params.toString()}`;
+    }
 </script>
 {% endblock %}

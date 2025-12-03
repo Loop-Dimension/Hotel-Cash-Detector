@@ -1,73 +1,128 @@
 {% extends 'cctv/base.html' %}
 
-{% block title %}홈 - Hotel CCTV Monitoring{% endblock %}
+{% block title %}{{ t.home_title }} - {{ t.app_name }}{% endblock %}
 
 {% block content %}
-<div class="panel">
-    <div class="page-header">
-        <div>
-            <p class="eyebrow">대시보드</p>
-            <h1>금일 이벤트 현황</h1>
-        </div>
-    </div>
-    <div class="table home-table" id="homeTable">
-        <div class="table-head">
-            <span>지점</span>
-            <span>이벤트 건수</span>
-            <span>상태</span>
-        </div>
-        <div class="table-body" id="homeTableBody">
-            <!-- Data loaded via JavaScript -->
-            <div class="loading-row">데이터를 불러오는 중...</div>
-        </div>
-    </div>
-    <div class="legend">
-        <div class="legend-item">
-            <span class="status-pill status-confirmed">확인완료</span>
-            <span>이벤트 건수가 모두 확인되었습니다.</span>
-        </div>
-        <div class="legend-item">
-            <span class="status-pill status-pending">미확인</span>
-            <span>어떤 이벤트도 확인되지 않았습니다.</span>
-        </div>
-        <div class="legend-item">
-            <span class="status-pill status-review">확인중</span>
-            <span>일부 이벤트가 확인되고 있습니다.</span>
-        </div>
+<div class="page-header">
+    <div class="page-header-left">
+        <p class="eyebrow">{{ t.home_subtitle }}</p>
+        <h1>{{ t.home_title }}</h1>
     </div>
 </div>
 
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    loadHomeStats();
-});
+<!-- Stats Cards -->
+<div class="stats-grid" id="statsGrid">
+    <div class="stat-card blue">
+        <span class="stat-label">{{ t.total_branches }}</span>
+        <span class="stat-value" id="statBranches">-</span>
+    </div>
+    <div class="stat-card green">
+        <span class="stat-label">{{ t.today_events }}</span>
+        <span class="stat-value" id="statEvents">-</span>
+    </div>
+    <div class="stat-card yellow">
+        <span class="stat-label">{{ t.online_cameras }}</span>
+        <span class="stat-value" id="statCameras">-</span>
+    </div>
+    <div class="stat-card red">
+        <span class="stat-label">{{ t.pending_review }}</span>
+        <span class="stat-value" id="statPending">-</span>
+    </div>
+</div>
 
-function loadHomeStats() {
-    fetch('/api/home-stats/')
-        .then(response => response.json())
-        .then(data => {
-            const tbody = document.getElementById('homeTableBody');
-            if (data.stats.length === 0) {
-                tbody.innerHTML = '<div class="table-row empty-row"><span class="empty-text">등록된 지점이 없습니다.</span></div>';
-                return;
-            }
+<!-- Branch List -->
+<div class="panel">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h2>{{ t.total_branches }}</h2>
+        <a href="{% url 'cctv:monitor_all' %}" class="link-btn">{{ t.view_all }} →</a>
+    </div>
+    
+    <div class="table home-table">
+        <div class="table-head">
+            <span>{{ t.branch_name }}</span>
+            <span class="text-center">{{ t.event_count }}</span>
+            <span class="text-right">{{ t.status }}</span>
+        </div>
+        <div class="table-body" id="branchList">
+            <div class="loading">
+                <div class="loading-spinner"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="legend">
+        <div class="legend-item">
+            <span class="legend-dot green"></span>
+            <span>{{ t.status_confirmed }}</span>
+        </div>
+        <div class="legend-item">
+            <span class="legend-dot yellow"></span>
+            <span>{{ t.status_reviewing }}</span>
+        </div>
+        <div class="legend-item">
+            <span class="legend-dot red"></span>
+            <span>{{ t.status_pending }}</span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Load home stats
+    async function loadHomeStats() {
+        try {
+            const response = await fetch('{% url "cctv:api_home_stats" %}');
+            const data = await response.json();
             
-            tbody.innerHTML = data.stats.map(row => `
-                <a href="/video/logs/?branch=${encodeURIComponent(row.branch)}" class="table-row clickable">
-                    <span class="branch-name">${row.branch}</span>
-                    <span class="event-count">${row.count}</span>
-                    <span class="status-col">
-                        <span class="status-pill status-${row.status === 'confirmed' ? 'confirmed' : row.status === 'pending' ? 'pending' : 'review'}">
-                            ${row.status === 'confirmed' ? '확인완료' : row.status === 'pending' ? '미확인' : '확인중'}
-                        </span>
-                    </span>
-                </a>
-            `).join('');
-        })
-        .catch(error => {
-            console.error('Error loading home stats:', error);
-            document.getElementById('homeTableBody').innerHTML = '<div class="table-row empty-row"><span class="empty-text">데이터 로드 실패</span></div>';
-        });
-}
+            document.getElementById('statBranches').textContent = data.total_branches || 0;
+            document.getElementById('statEvents').textContent = data.today_events || 0;
+            document.getElementById('statCameras').textContent = data.online_cameras || 0;
+            document.getElementById('statPending').textContent = data.pending_review || 0;
+            
+            // Render branch list
+            renderBranchList(data.branches || []);
+        } catch (error) {
+            console.error('Error loading stats:', error);
+        }
+    }
+    
+    function renderBranchList(branches) {
+        const container = document.getElementById('branchList');
+        
+        if (branches.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <p class="empty-state-text">{{ t.no_data }}</p>
+                </div>
+            `;
+            return;
+        }
+        
+        container.innerHTML = branches.map(branch => `
+            <a href="{% url 'cctv:monitor_local' %}?branch=${branch.id}" class="table-row clickable">
+                <span class="branch-name">${branch.name}</span>
+                <span class="text-center">${branch.event_count}</span>
+                <span class="text-right">
+                    <span class="status-pill status-${branch.status}">${getStatusText(branch.status)}</span>
+                </span>
+            </a>
+        `).join('');
+    }
+    
+    function getStatusText(status) {
+        const statusMap = {
+            'confirmed': '{{ t.status_confirmed }}',
+            'reviewing': '{{ t.status_reviewing }}',
+            'pending': '{{ t.status_pending }}'
+        };
+        return statusMap[status] || status;
+    }
+    
+    // Load on page load
+    document.addEventListener('DOMContentLoaded', loadHomeStats);
+    
+    // Refresh every 30 seconds
+    setInterval(loadHomeStats, 30000);
 </script>
 {% endblock %}

@@ -1,100 +1,168 @@
 {% extends 'cctv/base.html' %}
 
-{% block title %}풀영상 - Hotel CCTV Monitoring{% endblock %}
+{% block title %}{{ t.video_full_title }} - {{ t.app_name }}{% endblock %}
 
 {% block content %}
-<div class="panel">
-    <div class="page-header">
-        <div>
-            <p class="eyebrow">전체 영상</p>
-            <h1>풀영상 목록</h1>
-        </div>
-        <div class="top-actions">
-            <button class="ghost-button" onclick="window.location.reload()">새로고침</button>
-        </div>
+<div class="page-header">
+    <div class="page-header-left">
+        <p class="eyebrow">{{ t.video_full_subtitle }}</p>
+        <h1>{{ t.video_full_title }}</h1>
     </div>
-    
-    {% if user.is_admin %}
-    <form class="filters" method="get">
-        <div class="filter-group">
-            <label>날짜</label>
-            <input type="date" name="date" value="{{ filters.date }}">
+</div>
+
+<!-- Filters -->
+<div class="filters">
+    <div class="filter-group">
+        <label>{{ t.select_region }}</label>
+        <select id="regionFilter" onchange="filterBranchesByRegion()">
+            <option value="">{{ t.all_regions }}</option>
+            {% for region in regions %}
+            <option value="{{ region.id }}">{{ region.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label>{{ t.select_branch }}</label>
+        <select id="branchFilter">
+            <option value="">{{ t.all_branches }}</option>
+            {% for branch in branches %}
+            <option value="{{ branch.id }}" data-region="{{ branch.region.id }}">{{ branch.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label>{{ t.date }}</label>
+        <input type="date" id="dateFilter">
+    </div>
+    <button class="btn btn-secondary" onclick="applyFilters()">{{ t.apply_filter }}</button>
+</div>
+
+<!-- Video List Table -->
+<div class="table">
+    <div class="table-head" style="grid-template-columns: 1.5fr 1fr 1fr 0.8fr 0.8fr 0.6fr;">
+        <span>{{ t.file_id }}</span>
+        <span>{{ t.branch_name }}</span>
+        <span>{{ t.camera }}</span>
+        <span>{{ t.date }}</span>
+        <span>{{ t.duration }}</span>
+        <span class="text-right">{{ t.actions }}</span>
+    </div>
+    <div class="table-body">
+        {% for video in videos %}
+        <div class="table-row" style="grid-template-columns: 1.5fr 1fr 1fr 0.8fr 0.8fr 0.6fr;">
+            <span class="font-mono">{{ video.file_id }}</span>
+            <span>{{ video.branch.name }}</span>
+            <span>{{ video.camera.name }}</span>
+            <span>{{ video.recorded_date|date:"Y-m-d" }}</span>
+            <span>{{ video.duration|floatformat:0 }}s</span>
+            <span class="text-right">
+                <button class="btn btn-sm btn-ghost" onclick="playVideo('{{ video.file_path }}')">▶</button>
+            </span>
         </div>
-        <div class="filter-group">
-            <label>지역</label>
-            <select name="region">
-                <option value="all" {% if filters.region == 'all' %}selected{% endif %}>전체</option>
-                {% for region in regions %}
-                <option value="{{ region.name }}" {% if filters.region == region.name %}selected{% endif %}>{{ region.name }}</option>
-                {% endfor %}
-            </select>
+        {% empty %}
+        <div class="empty-state">
+            <p class="empty-state-text">{{ t.no_videos }}</p>
         </div>
-        <div class="filter-group">
-            <label>지점명</label>
-            <input name="branch" placeholder="지점 검색" value="{{ filters.branch }}">
-        </div>
-        <button class="ghost-button small" type="submit">검색</button>
-    </form>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Pagination -->
+{% if videos %}
+<div class="pagination">
+    {% if page_obj.has_previous %}
+    <button class="page-btn" onclick="goToPage(1)">«</button>
+    <button class="page-btn" onclick="goToPage({{ page_obj.previous_page_number }})">‹</button>
     {% endif %}
     
-    <div class="table video-full">
-        <div class="table-head">
-            <span>지점</span>
-            <span>지역</span>
-            <span>날짜</span>
-            <span>파일 ID</span>
-        </div>
-        <div class="table-body">
-            {% for video in videos %}
-            <div class="table-row events">
-                <span class="branch-name">{{ video.branch.name }}</span>
-                <span>{{ video.branch.region.name }}</span>
-                <span class="mono">{{ video.recorded_date|date:"Y-m-d" }}</span>
-                <button class="link-button" onclick="showVideoModal('{{ video.branch.name }}', '{{ video.recorded_date|date:"Y-m-d" }}', '{{ video.file_id }}')">
-                    영상 보기
-                </button>
-            </div>
-            {% empty %}
-            <div class="table-row empty-row">
-                <span class="empty-text">영상이 없습니다.</span>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
+    <button class="page-btn active">{{ page_obj.number }}</button>
+    
+    {% if page_obj.has_next %}
+    <button class="page-btn" onclick="goToPage({{ page_obj.next_page_number }})">›</button>
+    <button class="page-btn" onclick="goToPage({{ page_obj.paginator.num_pages }})">»</button>
+    {% endif %}
 </div>
+{% endif %}
 
-<!-- Video Modal -->
-<div id="videoModal" class="modal-backdrop" style="display: none;" onclick="closeVideoModal()">
-    <div class="modal" onclick="event.stopPropagation()">
+<!-- Video Player Modal -->
+<div class="modal-backdrop" id="videoModal" style="display: none;">
+    <div class="modal" style="width: min(800px, 90%);">
         <div class="modal-header">
-            <h3 id="videoModalTitle">영상 보기</h3>
-            <button class="ghost-button small" onclick="closeVideoModal()">닫기</button>
+            <h2>{{ t.nav_video_full }}</h2>
+            <button class="modal-close" onclick="closeVideoModal()">×</button>
         </div>
         <div class="modal-body">
-            <div class="modal-video" id="videoModalContent">
-                영상 로딩 중...
-            </div>
-            <div class="modal-meta" id="videoModalMeta">
-                <span class="mono">-</span>
-                <span class="status-col">다운로드 준비</span>
+            <div class="modal-video" id="videoContainer">
+                <video id="videoPlayer" controls style="width:100%;height:100%;">
+                    <source src="" type="video/mp4">
+                </video>
             </div>
         </div>
     </div>
 </div>
+{% endblock %}
 
+{% block extra_js %}
 <script>
-function showVideoModal(branch, date, fileId) {
-    document.getElementById('videoModalTitle').textContent = `${branch} · ${date}`;
-    document.getElementById('videoModalContent').innerHTML = '영상 보기';
-    document.getElementById('videoModalMeta').innerHTML = `
-        <span class="mono">${date}</span>
-        <span class="status-col">파일: ${fileId}</span>
-    `;
-    document.getElementById('videoModal').style.display = 'flex';
-}
-
-function closeVideoModal() {
-    document.getElementById('videoModal').style.display = 'none';
-}
+    function filterBranchesByRegion() {
+        const regionId = document.getElementById('regionFilter').value;
+        const branchSelect = document.getElementById('branchFilter');
+        const options = branchSelect.querySelectorAll('option');
+        
+        // Reset branch selection
+        branchSelect.value = '';
+        
+        options.forEach(option => {
+            if (option.value === '') {
+                // Keep "All Branches" visible
+                option.style.display = 'block';
+                option.hidden = false;
+            } else {
+                const optionRegion = option.dataset.region;
+                if (!regionId || optionRegion === regionId) {
+                    option.style.display = 'block';
+                    option.hidden = false;
+                } else {
+                    option.style.display = 'none';
+                    option.hidden = true;
+                }
+            }
+        });
+    }
+    
+    function applyFilters() {
+        const region = document.getElementById('regionFilter').value;
+        const branch = document.getElementById('branchFilter').value;
+        const date = document.getElementById('dateFilter').value;
+        
+        let params = new URLSearchParams();
+        if (region) params.append('region', region);
+        if (branch) params.append('branch', branch);
+        if (date) params.append('date', date);
+        
+        window.location.href = `{% url 'cctv:video_full' %}?${params.toString()}`;
+    }
+    
+    function goToPage(page) {
+        const url = new URL(window.location);
+        url.searchParams.set('page', page);
+        window.location.href = url.toString();
+    }
+    
+    function playVideo(path) {
+        const modal = document.getElementById('videoModal');
+        const player = document.getElementById('videoPlayer');
+        player.src = path;
+        modal.style.display = 'flex';
+        player.play();
+    }
+    
+    function closeVideoModal() {
+        const modal = document.getElementById('videoModal');
+        const player = document.getElementById('videoPlayer');
+        player.pause();
+        player.src = '';
+        modal.style.display = 'none';
+    }
 </script>
 {% endblock %}

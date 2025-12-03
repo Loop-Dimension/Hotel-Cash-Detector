@@ -32,13 +32,17 @@ class UnifiedDetector:
         # Get models directory
         models_dir = self.config.get('models_dir', 'models')
         
+        # Cashier zone settings
+        self.cashier_zone_enabled = self.config.get('cashier_zone_enabled', True)
+        
         # Initialize individual detectors
         self.cash_detector = CashTransactionDetector({
             'models_dir': models_dir,
             'cashier_zone': self.config.get('cashier_zone', [100, 100, 400, 300]),
             'hand_touch_distance': self.config.get('hand_touch_distance', 100),
             'pose_confidence': self.config.get('pose_confidence', 0.5),
-            'min_transaction_frames': self.config.get('min_transaction_frames', 3)
+            'min_transaction_frames': self.config.get('min_transaction_frames', 3),
+            'cash_confidence': self.config.get('cash_confidence', 0.5),
         })
         
         self.violence_detector = ViolenceDetector({
@@ -172,9 +176,7 @@ class UnifiedDetector:
         
         if not self.is_initialized:
             if not self.initialize():
-                # Still draw overlays even if initialization fails
-                if draw_overlay:
-                    frame = self.draw_status_bar(frame)
+                # Return frame without overlays if initialization fails
                 return {
                     'frame': frame,
                     'detections': [],
@@ -218,8 +220,8 @@ class UnifiedDetector:
     
     def draw_overlays(self, frame: np.ndarray, detections: List[Detection]) -> np.ndarray:
         """Draw all detection overlays on frame"""
-        # Draw cashier zone
-        if self.detect_cash:
+        # Draw cashier zone only if enabled
+        if self.detect_cash and self.cashier_zone_enabled:
             frame = self.cash_detector.draw_cashier_zone(frame)
         
         # Draw detections
@@ -246,9 +248,6 @@ class UnifiedDetector:
                 cv2.rectangle(frame, (x1, y1 - 30), (x1 + w + 10, y1), color, -1)
                 cv2.putText(frame, label, (x1 + 5, y1 - 8),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
-        # Draw status bar
-        frame = self.draw_status_bar(frame)
         
         # Draw debug info if enabled
         if self.debug_mode:

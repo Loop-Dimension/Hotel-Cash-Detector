@@ -1,219 +1,452 @@
 {% extends 'cctv/base.html' %}
+{% load static %}
 
-{% block title %}{{ branch.name }} - 지점 상세{% endblock %}
+{% block title %}{{ branch.name }} - {{ t.app_name }}{% endblock %}
 
 {% block content %}
-<div class="panel">
-    <div class="page-header">
-        <div>
-            <p class="eyebrow">관리 · 지점관리</p>
-            <h1>{{ branch.name }}</h1>
-        </div>
-        <a href="{% url 'cctv:manage_branches' %}" class="ghost-button small">목록으로</a>
+<div class="page-header">
+    <div class="page-header-left">
+        <a href="{% url 'cctv:manage_branches' %}" class="back-link">← {{ t.manage_branches_title }}</a>
+        <h1>{{ branch.name }}</h1>
+        <p class="branch-region">{{ branch.region.name }}</p>
     </div>
-
-    <!-- Branch Info -->
-    <div class="table">
-        <div class="table-head">
-            <span>항목</span>
-            <span>정보</span>
-        </div>
-        <div class="table-body">
-            <div class="table-row events" style="grid-template-columns: 1fr 2fr;">
-                <span class="branch-name">지점명</span>
-                <span>{{ branch.name }}</span>
-            </div>
-            <div class="table-row events" style="grid-template-columns: 1fr 2fr;">
-                <span class="branch-name">지역</span>
-                <span>{{ branch.region.name }}</span>
-            </div>
-        </div>
+    <div class="page-actions">
+        <button class="btn btn-secondary" onclick="openEditBranchModal()">{{ t.edit }}</button>
+        <button class="btn btn-danger" onclick="deleteBranch()">{{ t.delete }}</button>
     </div>
+</div>
 
-    <!-- Accounts Section -->
-    <div class="panel" style="margin-top: 16px;">
-        <div class="page-header" style="margin-bottom: 12px;">
-            <div>
-                <p class="eyebrow">관리자 계정</p>
-                <h2>관리자 추가</h2>
-            </div>
+<!-- Branch Info -->
+<div class="detail-section">
+    <h2>{{ t.branch_info }}</h2>
+    <div class="info-grid">
+        <div class="info-item">
+            <span class="info-label">{{ t.branch_name }}</span>
+            <span class="info-value">{{ branch.name }}</span>
         </div>
-        <form class="manage-inline" style="align-items: flex-end; margin-bottom: 12px;" onsubmit="addAccount(event)">
-            <div class="filter-group">
-                <label>이름</label>
-                <input type="text" id="newAccountName" placeholder="관리자명" required>
-            </div>
-            <div class="filter-group">
-                <label>이메일</label>
-                <input type="email" id="newAccountEmail" placeholder="이메일" required>
-            </div>
-            <div class="filter-group">
-                <label>역할</label>
-                <select id="newAccountRole">
-                    <option value="manager">지점장</option>
-                    <option value="staff">스태프</option>
-                    <option value="control">관제</option>
-                </select>
-            </div>
-            <button type="submit" class="primary-button">계정 추가</button>
-        </form>
-        <div class="table">
-            <div class="table-head">
-                <span>이름</span>
-                <span>이메일</span>
-                <span>역할</span>
-            </div>
-            <div class="table-body" id="accountsTableBody">
-                {% for account in accounts %}
-                <div class="table-row events" style="grid-template-columns: 1fr 1.6fr 0.8fr;">
-                    <span class="branch-name">{{ account.name }}</span>
-                    <span>{{ account.email }}</span>
-                    <span>{{ account.get_role_display }}</span>
-                </div>
-                {% empty %}
-                <div class="table-row empty-row">
-                    <span class="empty-text">등록된 계정이 없습니다.</span>
-                </div>
-                {% endfor %}
-            </div>
+        <div class="info-item">
+            <span class="info-label">{{ t.region }}</span>
+            <span class="info-value">{{ branch.region.name }}</span>
         </div>
-    </div>
-
-    <!-- CCTV Mapping Section -->
-    <div class="panel" style="margin-top: 16px;">
-        <div class="page-header" style="margin-bottom: 12px;">
-            <div>
-                <p class="eyebrow">CCTV 매핑</p>
-                <h2>카메라 연결</h2>
-            </div>
+        <div class="info-item">
+            <span class="info-label">{{ t.address }}</span>
+            <span class="info-value">{{ branch.address|default:'-' }}</span>
         </div>
-        <form class="manage-inline" style="align-items: flex-end; margin-bottom: 12px;" onsubmit="addCamera(event)">
-            <div class="filter-group">
-                <label>카메라 ID</label>
-                <input type="text" id="newMappingCameraId" placeholder="CAM-001" required>
-            </div>
-            <div class="filter-group">
-                <label>카메라 이름</label>
-                <input type="text" id="newMappingCameraName" placeholder="로비 카메라 1" required>
-            </div>
-            <div class="filter-group">
-                <label>설치 위치</label>
-                <input type="text" id="newMappingLocation" placeholder="예: 출입구, 카운터">
-            </div>
-            <div class="filter-group">
-                <label>RTSP URL</label>
-                <input type="text" id="newMappingRtsp" placeholder="rtsp://..." required>
-            </div>
-            <button type="submit" class="ghost-button small">매핑 추가</button>
-        </form>
-        <div class="table">
-            <div class="table-head">
-                <span>카메라</span>
-                <span>이름</span>
-                <span>위치</span>
-                <span>상태</span>
-            </div>
-            <div class="table-body" id="camerasTableBody">
-                {% for camera in cameras %}
-                <div class="table-row events" style="grid-template-columns: 0.8fr 1fr 1fr 0.6fr;">
-                    <span class="branch-name">{{ camera.camera_id }}</span>
-                    <span>{{ camera.name }}</span>
-                    <span>{{ camera.location|default:"-" }}</span>
-                    <span class="status-pill status-{% if camera.status == 'online' %}online{% else %}offline{% endif %}">
-                        {{ camera.get_status_display }}
-                    </span>
-                </div>
-                {% empty %}
-                <div class="table-row empty-row">
-                    <span class="empty-text">등록된 카메라가 없습니다.</span>
-                </div>
-                {% endfor %}
-            </div>
+        <div class="info-item">
+            <span class="info-label">{{ t.created }}</span>
+            <span class="info-value">{{ branch.created_at|date:"Y-m-d" }}</span>
         </div>
     </div>
 </div>
 
+<!-- Users Section -->
+<div class="detail-section">
+    <div class="section-header">
+        <h2>{{ t.accounts }}</h2>
+        <button class="btn btn-primary btn-sm" onclick="openAddUserModal()">+ {{ t.add_account }}</button>
+    </div>
+    <div class="table">
+        <div class="table-head">
+            <span>{{ t.username }}</span>
+            <span>{{ t.name }}</span>
+            <span>{{ t.role }}</span>
+            <span class="text-right">{{ t.actions }}</span>
+        </div>
+        <div class="table-body" id="userTableBody">
+            {% for user in users %}
+            <div class="table-row">
+                <span>{{ user.username }}</span>
+                <span>{{ user.first_name }} {{ user.last_name }}</span>
+                <span>{{ user.role|default:'Staff' }}</span>
+                <span class="text-right">
+                    <button class="btn btn-sm btn-ghost" onclick="editUser({{ user.id }})">{{ t.edit }}</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteUser({{ user.id }})">{{ t.delete }}</button>
+                </span>
+            </div>
+            {% empty %}
+            <div class="empty-state">
+                <p class="empty-state-text">{{ t.no_users }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- Camera Mapping Section -->
+<div class="detail-section">
+    <div class="section-header">
+        <h2>{{ t.camera_mapping }}</h2>
+        <button class="btn btn-primary btn-sm" onclick="openAddCameraModal()">+ {{ t.add_camera }}</button>
+    </div>
+    <div class="camera-mapping-grid">
+        {% for camera in cameras %}
+        <div class="camera-map-card">
+            <div class="camera-map-preview">
+                <img src="/api/cameras/{{ camera.id }}/thumbnail/" alt="{{ camera.name }}" onerror="this.style.display='none'">
+            </div>
+            <div class="camera-map-info">
+                <h4>{{ camera.name }}</h4>
+                <p>{{ camera.location|default:'-' }}</p>
+                <div class="camera-badges">
+                    <span class="status-badge {% if camera.status == 'online' %}status-success{% else %}status-danger{% endif %}">
+                        {% if camera.status == 'online' %}{{ t.active }}{% else %}{{ t.inactive }}{% endif %}
+                    </span>
+                    {% if camera.cashier_zone_enabled %}
+                    <span class="status-badge status-info">{{ t.cashier_zone }}</span>
+                    {% endif %}
+                </div>
+                <div class="camera-thresholds mt-2">
+                    <small class="text-muted">
+                        {{ t.event_cash }}: {{ camera.cash_confidence|floatformat:2 }} |
+                        {{ t.event_violence }}: {{ camera.violence_confidence|floatformat:2 }} |
+                        {{ t.event_fire }}: {{ camera.fire_confidence|floatformat:2 }}
+                    </small>
+                </div>
+            </div>
+            <div class="camera-map-actions">
+                <a href="{% url 'cctv:camera_settings' camera.id %}" class="btn btn-sm btn-primary">{{ t.camera_settings }}</a>
+                <button class="btn btn-sm btn-ghost" onclick="editCamera({{ camera.id }})">{{ t.edit }}</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteCamera({{ camera.id }})">{{ t.delete }}</button>
+            </div>
+        </div>
+        {% empty %}
+        <div class="empty-state full-width">
+            <p class="empty-state-text">{{ t.no_cameras }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Edit Branch Modal -->
+<div class="modal-backdrop" id="editBranchModal" style="display: none;">
+    <div class="modal">
+        <div class="modal-header">
+            <h2>{{ t.edit_branch }}</h2>
+            <button class="modal-close" onclick="closeModal('editBranchModal')">×</button>
+        </div>
+        <form id="editBranchForm" onsubmit="updateBranch(event)">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>{{ t.branch_name }}</label>
+                    <input type="text" name="name" value="{{ branch.name }}" required>
+                </div>
+                <div class="form-group">
+                    <label>{{ t.region }}</label>
+                    <select name="region_id" required>
+                        {% for region in regions %}
+                        <option value="{{ region.id }}" {% if region.id == branch.region.id %}selected{% endif %}>{{ region.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>{{ t.address }}</label>
+                    <textarea name="address" rows="2">{{ branch.address }}</textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('editBranchModal')">{{ t.cancel }}</button>
+                <button type="submit" class="btn btn-primary">{{ t.save }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Add User Modal -->
+<div class="modal-backdrop" id="addUserModal" style="display: none;">
+    <div class="modal">
+        <div class="modal-header">
+            <h2>{{ t.add_account }}</h2>
+            <button class="modal-close" onclick="closeModal('addUserModal')">×</button>
+        </div>
+        <form id="addUserForm" onsubmit="submitUser(event)">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>{{ t.username }}</label>
+                    <input type="text" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label>{{ t.name }}</label>
+                    <input type="text" name="first_name" required>
+                </div>
+                <div class="form-group">
+                    <label>{{ t.password }}</label>
+                    <input type="password" name="password" required>
+                </div>
+                <div class="form-group">
+                    <label>{{ t.role }}</label>
+                    <select name="role">
+                        <option value="staff">Staff</option>
+                        <option value="manager">Manager</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('addUserModal')">{{ t.cancel }}</button>
+                <button type="submit" class="btn btn-primary">{{ t.create }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Add Camera Modal -->
+<div class="modal-backdrop" id="addCameraModal" style="display: none;">
+    <div class="modal">
+        <div class="modal-header">
+            <h2>{{ t.add_camera }}</h2>
+            <button class="modal-close" onclick="closeModal('addCameraModal')">×</button>
+        </div>
+        <form id="addCameraForm" onsubmit="submitCamera(event)">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>{{ t.camera_name }}</label>
+                    <input type="text" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label>{{ t.location }}</label>
+                    <input type="text" name="location">
+                </div>
+                <div class="form-group">
+                    <label>{{ t.ip_address }}</label>
+                    <input type="text" name="ip_address">
+                </div>
+                <div class="form-group">
+                    <label>{{ t.rtsp_url }}</label>
+                    <input type="text" name="rtsp_url" placeholder="rtsp://">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('addCameraModal')">{{ t.cancel }}</button>
+                <button type="submit" class="btn btn-primary">{{ t.create }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
 <script>
-const branchId = {{ branch.id }};
-
-function addAccount(event) {
-    event.preventDefault();
+    const branchId = {{ branch.id }};
     
-    const data = {
-        name: document.getElementById('newAccountName').value,
-        email: document.getElementById('newAccountEmail').value,
-        role: document.getElementById('newAccountRole').value
-    };
+    function openEditBranchModal() {
+        document.getElementById('editBranchModal').style.display = 'flex';
+    }
     
-    fetch(`/api/branches/${branchId}/accounts/`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCookie('csrftoken')
-        },
-        body: JSON.stringify(data)
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            alert('계정이 추가되었습니다.');
-            window.location.reload();
-        } else {
-            alert('오류: ' + (result.error || '계정 추가 실패'));
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        alert('계정 추가 중 오류가 발생했습니다.');
-    });
-}
-
-function addCamera(event) {
-    event.preventDefault();
+    function openAddUserModal() {
+        document.getElementById('addUserModal').style.display = 'flex';
+    }
     
-    const data = {
-        camera_id: document.getElementById('newMappingCameraId').value,
-        name: document.getElementById('newMappingCameraName').value,
-        location: document.getElementById('newMappingLocation').value,
-        rtsp_url: document.getElementById('newMappingRtsp').value
-    };
+    function openAddCameraModal() {
+        document.getElementById('addCameraModal').style.display = 'flex';
+    }
     
-    fetch(`/api/branches/${branchId}/cameras/`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCookie('csrftoken')
-        },
-        body: JSON.stringify(data)
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            alert('카메라가 추가되었습니다.');
-            window.location.reload();
-        } else {
-            alert('오류: ' + (result.error || '카메라 추가 실패'));
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        alert('카메라 추가 중 오류가 발생했습니다.');
-    });
-}
-
-function getCookie(name) {
-    let cookieValue = null;
-    if (document.cookie && document.cookie !== '') {
-        const cookies = document.cookie.split(';');
-        for (let i = 0; i < cookies.length; i++) {
-            const cookie = cookies[i].trim();
-            if (cookie.substring(0, name.length + 1) === (name + '=')) {
-                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                break;
+    function closeModal(id) {
+        document.getElementById(id).style.display = 'none';
+    }
+    
+    async function updateBranch(e) {
+        e.preventDefault();
+        const form = e.target;
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData);
+        
+        try {
+            const response = await fetch(`/api/branches/${branchId}/`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
             }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
         }
     }
-    return cookieValue;
-}
+    
+    async function deleteBranch() {
+        if (!confirm('{{ t.confirm_delete }}')) return;
+        
+        try {
+            const response = await fetch(`/api/branches/${branchId}/`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken')
+                }
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.href = '{% url "cctv:manage_branches" %}';
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    async function submitUser(e) {
+        e.preventDefault();
+        const form = e.target;
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData);
+        const editId = form.dataset.editId;
+        
+        // Remove empty password if editing
+        if (editId && !data.password) {
+            delete data.password;
+        }
+        
+        try {
+            let url = '/api/users/';
+            let method = 'POST';
+            
+            if (editId) {
+                url = `/api/users/${editId}/`;
+                method = 'PUT';
+            } else {
+                data.branch_id = branchId;
+            }
+            
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    async function deleteUser(userId) {
+        if (!confirm('{{ t.confirm_delete }}')) return;
+        
+        try {
+            const response = await fetch(`/api/users/${userId}/`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken')
+                }
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    async function editUser(userId) {
+        try {
+            const response = await fetch(`/api/users/${userId}/`);
+            const user = await response.json();
+            
+            // Populate form with user data
+            document.querySelector('#addUserForm [name="username"]').value = user.username;
+            document.querySelector('#addUserForm [name="first_name"]').value = user.first_name;
+            document.querySelector('#addUserForm [name="password"]').value = '';
+            document.querySelector('#addUserForm [name="password"]').placeholder = 'Leave empty to keep current';
+            document.querySelector('#addUserForm [name="role"]').value = user.role;
+            
+            // Change form to edit mode
+            document.getElementById('addUserModal').querySelector('h2').textContent = '{{ t.edit_account }}';
+            document.getElementById('addUserForm').dataset.editId = userId;
+            document.getElementById('addUserModal').style.display = 'flex';
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    async function editCamera(cameraId) {
+        try {
+            const response = await fetch(`/api/cameras/${cameraId}/`);
+            const camera = await response.json();
+            
+            // Populate form with camera data
+            document.querySelector('#addCameraForm [name="name"]').value = camera.name;
+            document.querySelector('#addCameraForm [name="location"]').value = camera.location || '';
+            document.querySelector('#addCameraForm [name="rtsp_url"]').value = camera.rtsp_url || '';
+            
+            // Change form to edit mode
+            document.getElementById('addCameraModal').querySelector('h2').textContent = '{{ t.edit_camera }}';
+            document.getElementById('addCameraForm').dataset.editId = cameraId;
+            document.getElementById('addCameraModal').style.display = 'flex';
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    async function submitCamera(e) {
+        e.preventDefault();
+        const form = e.target;
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData);
+        const editId = form.dataset.editId;
+        
+        try {
+            let url = '{% url "cctv:api_cameras" %}';
+            let method = 'POST';
+            
+            if (editId) {
+                url = `/api/cameras/${editId}/`;
+                method = 'PUT';
+            } else {
+                data.branch_id = branchId;
+                // Generate camera_id if not provided
+                data.camera_id = data.name.toLowerCase().replace(/\s+/g, '-');
+            }
+            
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    }
+    
+    async function deleteCamera(cameraId) {
+        if (!confirm('{{ t.confirm_delete }}')) return;
+        
+        try {
+            const response = await fetch(`/api/cameras/${cameraId}/`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken')
+                }
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
 </script>
 {% endblock %}

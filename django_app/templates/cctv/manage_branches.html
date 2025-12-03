@@ -1,191 +1,278 @@
 {% extends 'cctv/base.html' %}
 
-{% block title %}지점관리 - Hotel CCTV Monitoring{% endblock %}
+{% block title %}{{ t.manage_branches_title }} - {{ t.app_name }}{% endblock %}
 
 {% block content %}
-<div class="panel">
-    <div class="page-header">
-        <div>
-            <p class="eyebrow">관리 · 지점관리</p>
-            <h1>지점 리스트</h1>
-        </div>
+<div class="page-header">
+    <div class="page-header-left">
+        <p class="eyebrow">{{ t.manage_branches_subtitle }}</p>
+        <h1>{{ t.manage_branches_title }}</h1>
     </div>
-    
-    <div class="manage-inline">
-        <form class="manage-filters-inline" method="get">
-            <div class="filter-group">
-                <label>지역</label>
-                <select name="region">
-                    <option value="전체" {% if filters.region == '전체' %}selected{% endif %}>전체</option>
-                    {% for region in regions %}
-                    <option value="{{ region.name }}" {% if filters.region == region.name %}selected{% endif %}>{{ region.name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="filter-group">
-                <label>지점명</label>
-                <input name="search" placeholder="지점명 검색" value="{{ filters.search }}">
-            </div>
-            <button class="ghost-button small" type="submit">검색</button>
-        </form>
-        <div class="manage-create inline-create">
-            <button class="primary-button" onclick="showCreateBranchModal()">지점 생성</button>
-        </div>
+    <div class="page-actions">
+        <button class="btn btn-secondary" onclick="openAddRegionModal()">+ {{ t.add_region }}</button>
+        <button class="btn btn-primary" onclick="openAddBranchModal()">+ {{ t.create_branch }}</button>
     </div>
-    
-    <div class="table manage-table">
-        <div class="table-head">
-            <span>지점</span>
-            <span>지역</span>
-            <span>액션</span>
+</div>
+
+<!-- Filters -->
+<div class="manage-header">
+    <div class="manage-filters">
+        <div class="filter-group">
+            <label>{{ t.select_region }}</label>
+            <select id="regionFilter" onchange="filterBranches()">
+                <option value="">{{ t.all_regions }}</option>
+                {% for region in regions %}
+                <option value="{{ region.id }}">{{ region.name }}</option>
+                {% endfor %}
+            </select>
         </div>
-        <div class="table-body" id="branchTableBody">
-            {% for branch in branches %}
-            <div class="table-row events clickable" onclick="goToBranchDetail({{ branch.id }})">
-                <span class="branch-name">{{ branch.name }}</span>
-                <span>{{ branch.region.name }}</span>
-                <button class="danger-button small" onclick="event.stopPropagation(); confirmDeleteBranch({{ branch.id }}, '{{ branch.name }}')">삭제</button>
-            </div>
-            {% empty %}
-            <div class="table-row empty-row">
-                <span class="empty-text">등록된 지점이 없습니다.</span>
-            </div>
-            {% endfor %}
+        <div class="filter-group">
+            <label>{{ t.search_placeholder }}</label>
+            <input type="text" id="searchInput" placeholder="{{ t.search_placeholder }}" onkeyup="filterBranches()">
         </div>
     </div>
 </div>
 
-<!-- Create Branch Modal -->
-<div id="createBranchModal" class="modal-backdrop" style="display: none;" onclick="closeCreateBranchModal()">
-    <div class="modal" onclick="event.stopPropagation()">
-        <div class="modal-header">
-            <h3>지점 생성</h3>
-            <button class="ghost-button small" onclick="closeCreateBranchModal()">닫기</button>
+<!-- Branch Table -->
+<div class="table manage-table">
+    <div class="table-head">
+        <span>{{ t.branch_name }}</span>
+        <span>{{ t.region }}</span>
+        <span class="text-center">{{ t.camera }}</span>
+        <span class="text-right">{{ t.actions }}</span>
+    </div>
+    <div class="table-body" id="branchTableBody">
+        {% for branch in branches %}
+        <div class="table-row clickable" data-region="{{ branch.region.id }}" data-name="{{ branch.name|lower }}" onclick="goToBranch({{ branch.id }})">
+            <span>{{ branch.name }}</span>
+            <span>{{ branch.region.name }}</span>
+            <span class="text-center">{{ branch.get_camera_count }}</span>
+            <span class="text-right" onclick="event.stopPropagation()">
+                <button class="btn btn-sm btn-ghost" onclick="editBranch({{ branch.id }})">{{ t.edit }}</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteBranch({{ branch.id }})">{{ t.delete }}</button>
+            </span>
         </div>
-        <div class="modal-body">
-            <form id="createBranchForm" onsubmit="createBranch(event)">
-                <div class="manage-create">
-                    <input type="text" id="newBranchName" placeholder="지점명" required>
-                    <select id="newBranchRegion">
+        {% empty %}
+        <div class="empty-state">
+            <p class="empty-state-text">{{ t.no_data }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Add Branch Modal -->
+<div class="modal-backdrop" id="addBranchModal" style="display: none;">
+    <div class="modal">
+        <div class="modal-header">
+            <h2 id="branchModalTitle">{{ t.create_branch }}</h2>
+            <button class="modal-close" onclick="closeModal('addBranchModal')">×</button>
+        </div>
+        <form id="addBranchForm" onsubmit="submitBranch(event)">
+            <input type="hidden" name="branch_id" id="editBranchId">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>{{ t.branch_name }}</label>
+                    <input type="text" name="name" id="branchName" required>
+                </div>
+                <div class="form-group">
+                    <label>{{ t.region }}</label>
+                    <select name="region_id" id="branchRegion" required>
                         {% for region in regions %}
-                        <option value="{{ region.name }}">{{ region.name }}</option>
+                        <option value="{{ region.id }}">{{ region.name }}</option>
                         {% endfor %}
                     </select>
-                    <button type="submit" class="primary-button">생성</button>
                 </div>
-            </form>
-        </div>
+                <div class="form-group">
+                    <label>{{ t.address }}</label>
+                    <textarea name="address" id="branchAddress" rows="2"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('addBranchModal')">{{ t.cancel }}</button>
+                <button type="submit" class="btn btn-primary" id="branchSubmitBtn">{{ t.create }}</button>
+            </div>
+        </form>
     </div>
 </div>
 
-<!-- Delete Confirm Modal -->
-<div id="deleteConfirmModal" class="modal-backdrop" style="display: none;" onclick="closeDeleteConfirmModal()">
-    <div class="modal" onclick="event.stopPropagation()">
+<!-- Add Region Modal -->
+<div class="modal-backdrop" id="addRegionModal" style="display: none;">
+    <div class="modal">
         <div class="modal-header">
-            <h3>삭제 확인</h3>
-            <button class="ghost-button small" onclick="closeDeleteConfirmModal()">닫기</button>
+            <h2 id="regionModalTitle">{{ t.add_region }}</h2>
+            <button class="modal-close" onclick="closeModal('addRegionModal')">×</button>
         </div>
-        <div class="modal-body">
-            <div class="placeholder">
-                <strong id="deleteBranchName"></strong> 지점을 삭제하시겠습니까?
+        <form id="addRegionForm" onsubmit="submitRegion(event)">
+            <input type="hidden" name="region_id" id="editRegionId">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>{{ t.region }}</label>
+                    <input type="text" name="name" id="regionName" required>
+                </div>
+                <div class="form-group">
+                    <label>{{ t.region_code }}</label>
+                    <input type="text" name="code" id="regionCode" placeholder="e.g., SEO, BUS">
+                </div>
             </div>
-            <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px;">
-                <button class="ghost-button small" onclick="closeDeleteConfirmModal()">취소</button>
-                <button class="danger-button small" onclick="deleteBranch()">삭제</button>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('addRegionModal')">{{ t.cancel }}</button>
+                <button type="submit" class="btn btn-primary" id="regionSubmitBtn">{{ t.create }}</button>
             </div>
-        </div>
+        </form>
     </div>
 </div>
+{% endblock %}
 
+{% block extra_js %}
 <script>
-let deleteBranchId = null;
-
-function goToBranchDetail(branchId) {
-    window.location.href = `/manage/branches/${branchId}/`;
-}
-
-function showCreateBranchModal() {
-    document.getElementById('createBranchModal').style.display = 'flex';
-}
-
-function closeCreateBranchModal() {
-    document.getElementById('createBranchModal').style.display = 'none';
-    document.getElementById('createBranchForm').reset();
-}
-
-function createBranch(event) {
-    event.preventDefault();
+    let editMode = false;
+    let regionEditMode = false;
     
-    const data = {
-        name: document.getElementById('newBranchName').value,
-        region: document.getElementById('newBranchRegion').value
-    };
+    function openAddBranchModal() {
+        editMode = false;
+        document.getElementById('branchModalTitle').textContent = '{{ t.create_branch }}';
+        document.getElementById('branchSubmitBtn').textContent = '{{ t.create }}';
+        document.getElementById('editBranchId').value = '';
+        document.getElementById('branchName').value = '';
+        document.getElementById('branchRegion').selectedIndex = 0;
+        document.getElementById('branchAddress').value = '';
+        document.getElementById('addBranchModal').style.display = 'flex';
+    }
     
-    fetch('/api/branches/', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCookie('csrftoken')
-        },
-        body: JSON.stringify(data)
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            alert('지점이 생성되었습니다.');
-            window.location.reload();
-        } else {
-            alert('오류: ' + (result.error || '지점 생성 실패'));
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        alert('지점 생성 중 오류가 발생했습니다.');
-    });
-}
-
-function confirmDeleteBranch(branchId, branchName) {
-    deleteBranchId = branchId;
-    document.getElementById('deleteBranchName').textContent = branchName;
-    document.getElementById('deleteConfirmModal').style.display = 'flex';
-}
-
-function closeDeleteConfirmModal() {
-    document.getElementById('deleteConfirmModal').style.display = 'none';
-    deleteBranchId = null;
-}
-
-function deleteBranch() {
-    if (!deleteBranchId) return;
-    
-    fetch(`/api/branches/${deleteBranchId}/`, {
-        method: 'DELETE',
-        headers: {
-            'X-CSRFToken': getCookie('csrftoken')
-        }
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            alert('지점이 삭제되었습니다.');
-            window.location.reload();
-        }
-    });
-}
-
-function getCookie(name) {
-    let cookieValue = null;
-    if (document.cookie && document.cookie !== '') {
-        const cookies = document.cookie.split(';');
-        for (let i = 0; i < cookies.length; i++) {
-            const cookie = cookies[i].trim();
-            if (cookie.substring(0, name.length + 1) === (name + '=')) {
-                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                break;
-            }
+    async function editBranch(branchId) {
+        editMode = true;
+        try {
+            const response = await fetch(`/api/branches/${branchId}/`);
+            const branch = await response.json();
+            
+            document.getElementById('branchModalTitle').textContent = '{{ t.edit_branch }}';
+            document.getElementById('branchSubmitBtn').textContent = '{{ t.save }}';
+            document.getElementById('editBranchId').value = branchId;
+            document.getElementById('branchName').value = branch.name;
+            document.getElementById('branchRegion').value = branch.region_id;
+            document.getElementById('branchAddress').value = branch.address || '';
+            document.getElementById('addBranchModal').style.display = 'flex';
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
         }
     }
-    return cookieValue;
-}
+    
+    function openAddRegionModal() {
+        regionEditMode = false;
+        document.getElementById('regionModalTitle').textContent = '{{ t.add_region }}';
+        document.getElementById('regionSubmitBtn').textContent = '{{ t.create }}';
+        document.getElementById('editRegionId').value = '';
+        document.getElementById('regionName').value = '';
+        document.getElementById('regionCode').value = '';
+        document.getElementById('addRegionModal').style.display = 'flex';
+    }
+    
+    function closeModal(id) {
+        document.getElementById(id).style.display = 'none';
+    }
+    
+    function goToBranch(branchId) {
+        window.location.href = `{% url 'cctv:manage_branches' %}${branchId}/`;
+    }
+    
+    function filterBranches() {
+        const regionId = document.getElementById('regionFilter').value;
+        const searchText = document.getElementById('searchInput').value.toLowerCase();
+        const rows = document.querySelectorAll('#branchTableBody .table-row');
+        
+        rows.forEach(row => {
+            const rowRegion = row.dataset.region;
+            const rowName = row.dataset.name;
+            
+            const matchRegion = !regionId || rowRegion === regionId;
+            const matchSearch = !searchText || rowName.includes(searchText);
+            
+            row.style.display = (matchRegion && matchSearch) ? 'grid' : 'none';
+        });
+    }
+    
+    async function submitBranch(e) {
+        e.preventDefault();
+        const form = e.target;
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData);
+        const branchId = data.branch_id;
+        delete data.branch_id;
+        
+        try {
+            const url = editMode ? `/api/branches/${branchId}/` : '{% url "cctv:api_branches" %}';
+            const method = editMode ? 'PUT' : 'POST';
+            
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            } else {
+                showToast('{{ t.error }}', 'error');
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    async function submitRegion(e) {
+        e.preventDefault();
+        const form = e.target;
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData);
+        const regionId = data.region_id;
+        delete data.region_id;
+        
+        try {
+            const url = regionEditMode ? `/api/regions/${regionId}/` : '/api/regions/';
+            const method = regionEditMode ? 'PUT' : 'POST';
+            
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            } else {
+                showToast('{{ t.error }}', 'error');
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    async function deleteBranch(branchId) {
+        if (!confirm('{{ t.confirm_delete }}')) return;
+        
+        try {
+            const response = await fetch(`/api/branches/${branchId}/`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken')
+                }
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
 </script>
 {% endblock %}

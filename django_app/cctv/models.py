@@ -96,18 +96,29 @@ class Camera(models.Model):
     name = models.CharField(max_length=100)  # e.g., 로비 카메라 1
     location = models.CharField(max_length=100, blank=True)  # e.g., 출입구, 카운터
     rtsp_url = models.CharField(max_length=500)  # RTSP stream URL
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='offline')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='online')
     
-    # Cashier zone for cash detection [x, y, width, height]
+    # Cashier zone for cash detection [x, y, width, height] - independent per camera
     cashier_zone_x = models.IntegerField(default=0)
-    cashier_zone_y = models.IntegerField(default=280)
-    cashier_zone_width = models.IntegerField(default=900)
-    cashier_zone_height = models.IntegerField(default=400)
+    cashier_zone_y = models.IntegerField(default=0)
+    cashier_zone_width = models.IntegerField(default=640)
+    cashier_zone_height = models.IntegerField(default=480)
+    cashier_zone_enabled = models.BooleanField(default=False)
+    
+    # Independent confidence thresholds per camera
+    cash_confidence = models.FloatField(default=0.5)
+    violence_confidence = models.FloatField(default=0.6)
+    fire_confidence = models.FloatField(default=0.5)
     
     # Detection toggles
     detect_cash = models.BooleanField(default=True)
     detect_violence = models.BooleanField(default=True)
     detect_fire = models.BooleanField(default=True)
+    
+    # Model paths (optional override per camera, uses global if empty)
+    custom_yolo_model = models.CharField(max_length=500, blank=True, null=True)
+    custom_pose_model = models.CharField(max_length=500, blank=True, null=True)
+    custom_fire_model = models.CharField(max_length=500, blank=True, null=True)
     
     last_connected = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -122,16 +133,43 @@ class Camera(models.Model):
         return f"{self.camera_id} - {self.name}"
     
     def get_cashier_zone(self):
-        return [self.cashier_zone_x, self.cashier_zone_y, 
-                self.cashier_zone_width, self.cashier_zone_height]
+        """Get cashier zone as dict"""
+        return {
+            'x': self.cashier_zone_x,
+            'y': self.cashier_zone_y,
+            'width': self.cashier_zone_width,
+            'height': self.cashier_zone_height,
+            'enabled': self.cashier_zone_enabled
+        }
     
-    def set_cashier_zone(self, zone):
-        if len(zone) == 4:
-            self.cashier_zone_x = zone[0]
-            self.cashier_zone_y = zone[1]
-            self.cashier_zone_width = zone[2]
-            self.cashier_zone_height = zone[3]
-            self.save()
+    def set_cashier_zone(self, x, y, width, height, enabled=True):
+        """Set cashier zone from coordinates"""
+        self.cashier_zone_x = int(x)
+        self.cashier_zone_y = int(y)
+        self.cashier_zone_width = int(width)
+        self.cashier_zone_height = int(height)
+        self.cashier_zone_enabled = enabled
+        self.save()
+    
+    def get_confidence_thresholds(self):
+        """Get all confidence thresholds"""
+        return {
+            'cash': self.cash_confidence,
+            'violence': self.violence_confidence,
+            'fire': self.fire_confidence
+        }
+    
+    def get_detection_settings(self):
+        """Get full detection settings for this camera"""
+        return {
+            'detect_cash': self.detect_cash,
+            'detect_violence': self.detect_violence,
+            'detect_fire': self.detect_fire,
+            'cash_confidence': self.cash_confidence,
+            'violence_confidence': self.violence_confidence,
+            'fire_confidence': self.fire_confidence,
+            'cashier_zone': self.get_cashier_zone()
+        }
 
 
 class Event(models.Model):

@@ -3,6 +3,7 @@ Views for Hotel CCTV Monitoring System
 """
 import json
 import cv2
+import numpy as np
 import sys
 import os
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ from django.db.models import Count, Q
 from django.conf import settings
 
 from .models import User, Region, Branch, Camera, Event, VideoRecord, BranchAccount
+from .translations import get_translation, t
 
 # Add flask directory to path for detector imports
 FLASK_DIR = Path(settings.BASE_DIR).parent / 'flask'
@@ -165,7 +167,10 @@ def video_logs(request):
         events = events.filter(event_type=type_filter)
     
     if branch_filter:
-        events = events.filter(branch__name__icontains=branch_filter)
+        try:
+            events = events.filter(branch_id=int(branch_filter))
+        except ValueError:
+            events = events.filter(branch__name__icontains=branch_filter)
     
     events = events.order_by('-created_at')[:100]
     
@@ -177,6 +182,7 @@ def video_logs(request):
     context = {
         'user': user,
         'events': events,
+        'branches': user_branches,
         'offline_cameras': offline_cameras,
         'regions': regions,
         'active_page': 'video-logs',
@@ -222,6 +228,7 @@ def video_full(request):
     context = {
         'user': user,
         'videos': videos,
+        'branches': user_branches,
         'regions': regions,
         'active_page': 'video-full',
         'filters': {
@@ -277,15 +284,34 @@ def manage_branch_detail(request, branch_id):
     
     accounts = branch.accounts.all()
     cameras = branch.cameras.all()
+    regions = Region.objects.all()
     
     context = {
         'user': user,
         'branch': branch,
         'accounts': accounts,
         'cameras': cameras,
+        'regions': regions,
         'active_page': 'manage-branch-detail',
     }
     return render(request, 'cctv/manage_branch_detail.html', context)
+
+
+@login_required
+def camera_settings(request, camera_id):
+    """Camera settings page - configure zone and detection thresholds"""
+    user = request.user
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    if not user.is_admin() and camera.branch not in get_user_branches(user):
+        return redirect('cctv:home')
+    
+    context = {
+        'user': user,
+        'camera': camera,
+        'active_page': 'camera-settings',
+    }
+    return render(request, 'cctv/camera_settings.html', context)
 
 
 @login_required
@@ -333,11 +359,17 @@ def api_branches(request):
             return JsonResponse({'error': 'Permission denied'}, status=403)
         
         data = json.loads(request.body)
-        region = get_object_or_404(Region, name=data.get('region'))
+        
+        # Support both region_id and region name
+        if 'region_id' in data:
+            region = get_object_or_404(Region, id=data['region_id'])
+        else:
+            region = get_object_or_404(Region, name=data.get('region'))
         
         branch = Branch.objects.create(
             name=data.get('name'),
             region=region,
+            address=data.get('address', ''),
             status='pending'
         )
         
@@ -366,11 +398,30 @@ def api_branch_detail(request, branch_id):
             'id': branch.id,
             'name': branch.name,
             'region': branch.region.name,
+            'region_id': branch.region.id,
             'status': branch.status,
             'status_display': branch.get_status_display(),
             'address': branch.address,
             'camera_count': branch.get_camera_count(),
         })
+    
+    elif request.method == 'PUT':
+        if not user.is_admin():
+            return JsonResponse({'error': 'Permission denied'}, status=403)
+        
+        data = json.loads(request.body)
+        branch.name = data.get('name', branch.name)
+        branch.address = data.get('address', branch.address)
+        
+        if 'region_id' in data:
+            region = get_object_or_404(Region, id=data['region_id'])
+            branch.region = region
+        
+        if 'status' in data:
+            branch.status = data['status']
+        
+        branch.save()
+        return JsonResponse({'success': True})
     
     elif request.method == 'DELETE':
         if not user.is_admin():
@@ -446,6 +497,40 @@ def api_cameras(request):
             'status_display': c.get_status_display(),
         } for c in cameras]
         return JsonResponse({'cameras': data})
+    
+    elif request.method == 'POST':
+        data = json.loads(request.body)
+        
+        # Get branch
+        branch_id = data.get('branch_id')
+        if not branch_id:
+            return JsonResponse({'error': 'branch_id is required'}, status=400)
+        
+        branch = get_object_or_404(Branch, id=branch_id)
+        
+        if not user.is_admin() and branch not in user_branches:
+            return JsonResponse({'error': 'Permission denied'}, status=403)
+        
+        # Generate camera_id if not provided
+        camera_id_str = data.get('camera_id') or data.get('name', '').lower().replace(' ', '-')
+        
+        camera = Camera.objects.create(
+            branch=branch,
+            camera_id=camera_id_str,
+            name=data.get('name'),
+            location=data.get('location', ''),
+            rtsp_url=data.get('rtsp_url', ''),
+            status='online'  # Default to online
+        )
+        
+        return JsonResponse({
+            'success': True,
+            'camera': {
+                'id': camera.id,
+                'camera_id': camera.camera_id,
+                'name': camera.name,
+            }
+        })
 
 
 @login_required
@@ -464,22 +549,61 @@ def api_camera_detail(request, camera_id):
             'camera_id': camera.camera_id,
             'name': camera.name,
             'branch': camera.branch.name,
+            'branch_id': camera.branch.id,
             'location': camera.location,
             'status': camera.status,
             'rtsp_url': camera.rtsp_url,
+            # Cashier zone settings
             'cashier_zone': camera.get_cashier_zone(),
+            # Detection toggles
             'detect_cash': camera.detect_cash,
             'detect_violence': camera.detect_violence,
             'detect_fire': camera.detect_fire,
+            # Independent confidence thresholds
+            'cash_confidence': camera.cash_confidence,
+            'violence_confidence': camera.violence_confidence,
+            'fire_confidence': camera.fire_confidence,
+            # Full detection settings
+            'detection_settings': camera.get_detection_settings(),
         })
     
     elif request.method == 'PUT':
         data = json.loads(request.body)
+        
+        # Basic info
+        camera.camera_id = data.get('camera_id', camera.camera_id)
         camera.name = data.get('name', camera.name)
         camera.location = data.get('location', camera.location)
         camera.rtsp_url = data.get('rtsp_url', camera.rtsp_url)
+        camera.status = data.get('status', camera.status)
+        
+        # Detection toggles
+        if 'detect_cash' in data:
+            camera.detect_cash = data['detect_cash']
+        if 'detect_violence' in data:
+            camera.detect_violence = data['detect_violence']
+        if 'detect_fire' in data:
+            camera.detect_fire = data['detect_fire']
+        
+        # Independent confidence thresholds
+        if 'cash_confidence' in data:
+            camera.cash_confidence = float(data['cash_confidence'])
+        if 'violence_confidence' in data:
+            camera.violence_confidence = float(data['violence_confidence'])
+        if 'fire_confidence' in data:
+            camera.fire_confidence = float(data['fire_confidence'])
+        
+        # Cashier zone
+        if 'cashier_zone' in data:
+            zone = data['cashier_zone']
+            camera.cashier_zone_x = int(zone.get('x', camera.cashier_zone_x))
+            camera.cashier_zone_y = int(zone.get('y', camera.cashier_zone_y))
+            camera.cashier_zone_width = int(zone.get('width', camera.cashier_zone_width))
+            camera.cashier_zone_height = int(zone.get('height', camera.cashier_zone_height))
+            camera.cashier_zone_enabled = zone.get('enabled', camera.cashier_zone_enabled)
+        
         camera.save()
-        return JsonResponse({'success': True})
+        return JsonResponse({'success': True, 'camera': camera.get_detection_settings()})
     
     elif request.method == 'DELETE':
         camera.delete()
@@ -534,7 +658,7 @@ def api_events(request):
 
 
 @login_required
-@require_http_methods(["GET", "PUT"])
+@require_http_methods(["GET", "PUT", "DELETE"])
 def api_event_detail(request, event_id):
     """API for single event"""
     user = request.user
@@ -547,7 +671,11 @@ def api_event_detail(request, event_id):
         return JsonResponse({
             'id': event.id,
             'branch': event.branch.name,
+            'branch_name': event.branch.name,
             'camera': event.camera.camera_id,
+            'camera_id': event.camera.id,
+            'camera_name': event.camera.name,
+            'event_type': event.event_type,
             'type': event.event_type,
             'type_display': event.get_event_type_display(),
             'status': event.status,
@@ -556,6 +684,7 @@ def api_event_detail(request, event_id):
             'frame_number': event.frame_number,
             'bbox': event.get_bbox(),
             'clip_path': event.clip_path,
+            'thumbnail_path': event.thumbnail_path if hasattr(event, 'thumbnail_path') else None,
             'created_at': event.created_at.isoformat(),
         })
     
@@ -567,6 +696,12 @@ def api_event_detail(request, event_id):
             event.reviewed_by = user
             event.reviewed_at = timezone.now()
         event.save()
+        return JsonResponse({'success': True})
+    
+    elif request.method == 'DELETE':
+        if not user.is_admin():
+            return JsonResponse({'error': 'Permission denied'}, status=403)
+        event.delete()
         return JsonResponse({'success': True})
 
 
@@ -614,7 +749,14 @@ def api_home_stats(request):
     user_branches = get_user_branches(user)
     today = timezone.now().date()
     
-    stats = []
+    # Calculate overall stats
+    total_branches = user_branches.count()
+    today_events = Event.objects.filter(branch__in=user_branches, created_at__date=today).count()
+    online_cameras = Camera.objects.filter(branch__in=user_branches, status='online').count()
+    pending_review = Event.objects.filter(branch__in=user_branches, status='pending').count()
+    
+    # Branch list with stats
+    branches = []
     for branch in user_branches:
         event_count = branch.events.filter(created_at__date=today).count()
         confirmed = branch.events.filter(created_at__date=today, status='confirmed').count()
@@ -627,13 +769,20 @@ def api_home_stats(request):
         else:
             status = 'reviewing'
         
-        stats.append({
-            'branch': branch.name,
-            'count': event_count,
+        branches.append({
+            'id': branch.id,
+            'name': branch.name,
+            'event_count': event_count,
             'status': status,
         })
     
-    return JsonResponse({'stats': stats})
+    return JsonResponse({
+        'total_branches': total_branches,
+        'today_events': today_events,
+        'online_cameras': online_cameras,
+        'pending_review': pending_review,
+        'branches': branches,
+    })
 
 
 @login_required
@@ -701,6 +850,121 @@ def api_report_stats(request):
 
 
 @login_required
+def api_reports(request):
+    """API for reports page - returns all chart data"""
+    user = request.user
+    if not user.is_admin():
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    user_branches = get_user_branches(user)
+    today = timezone.now().date()
+    
+    # Parse date range
+    date_range = request.GET.get('date_range', 'week')
+    region_id = request.GET.get('region_id')
+    branch_id = request.GET.get('branch_id')
+    
+    if date_range == 'today':
+        start_date = today
+        end_date = today
+    elif date_range == 'week':
+        start_date = today - timedelta(days=7)
+        end_date = today
+    elif date_range == 'month':
+        start_date = today.replace(day=1)
+        end_date = today
+    elif date_range == 'custom':
+        start_date = request.GET.get('start_date', str(today - timedelta(days=7)))
+        end_date = request.GET.get('end_date', str(today))
+        start_date = datetime.strptime(start_date, '%Y-%m-%d').date() if isinstance(start_date, str) else start_date
+        end_date = datetime.strptime(end_date, '%Y-%m-%d').date() if isinstance(end_date, str) else end_date
+    else:
+        start_date = today - timedelta(days=7)
+        end_date = today
+    
+    # Base query
+    events = Event.objects.filter(
+        branch__in=user_branches,
+        created_at__date__gte=start_date,
+        created_at__date__lte=end_date
+    )
+    
+    # Apply filters
+    if region_id:
+        events = events.filter(branch__region_id=region_id)
+    if branch_id:
+        events = events.filter(branch_id=branch_id)
+    
+    # Summary
+    total_events = events.count()
+    high_priority = events.filter(confidence__gte=0.8).count()
+    pending = events.filter(status='pending').count()
+    resolved = events.filter(status='confirmed').count()
+    
+    summary = {
+        'total': total_events,
+        'high_priority': high_priority,
+        'pending': pending,
+        'resolved': resolved,
+    }
+    
+    # Events by type
+    by_type = list(events.values('event_type').annotate(count=Count('id')))
+    by_type = [{'type': t['event_type'].title(), 'count': t['count']} for t in by_type]
+    
+    # Events by branch
+    by_branch = list(events.values('branch__name').annotate(count=Count('id')).order_by('-count')[:10])
+    by_branch = [{'branch': b['branch__name'], 'count': b['count']} for b in by_branch]
+    
+    # Timeline - daily counts
+    timeline = []
+    current = start_date
+    while current <= end_date:
+        count = events.filter(created_at__date=current).count()
+        timeline.append({
+            'date': current.strftime('%m/%d'),
+            'count': count
+        })
+        current += timedelta(days=1)
+    
+    # Events by hour
+    by_hour = []
+    for hour in range(24):
+        count = events.filter(created_at__hour=hour).count()
+        by_hour.append({
+            'hour': hour,
+            'count': count
+        })
+    
+    # Detailed data for table
+    details = []
+    branch_type_groups = events.values('branch__name', 'event_type', 'created_at__date').annotate(
+        count=Count('id'),
+        high_priority=Count('id', filter=Q(confidence__gte=0.8)),
+        resolved=Count('id', filter=Q(status='confirmed'))
+    ).order_by('-created_at__date')[:50]
+    
+    for item in branch_type_groups:
+        details.append({
+            'date': item['created_at__date'].strftime('%Y-%m-%d') if item['created_at__date'] else '',
+            'branch': item['branch__name'],
+            'event_type': item['event_type'].title(),
+            'count': item['count'],
+            'high_priority': item['high_priority'],
+            'resolved': item['resolved'],
+        })
+    
+    return JsonResponse({
+        'summary': summary,
+        'by_type': by_type,
+        'by_branch': by_branch,
+        'timeline': timeline,
+        'by_hour': by_hour,
+        'details': details,
+    })
+
+
+@login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_set_cashier_zone(request, camera_id):
@@ -712,13 +976,137 @@ def api_set_cashier_zone(request, camera_id):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     data = json.loads(request.body)
-    zone = data.get('zone')
     
-    if zone and len(zone) == 4:
-        camera.set_cashier_zone(zone)
-        return JsonResponse({'success': True, 'zone': zone})
+    # Support both formats: dict or list
+    if 'zone' in data:
+        zone = data['zone']
+        if isinstance(zone, list) and len(zone) == 4:
+            camera.set_cashier_zone(zone[0], zone[1], zone[2], zone[3], True)
+        elif isinstance(zone, dict):
+            camera.set_cashier_zone(
+                zone.get('x', 0),
+                zone.get('y', 0),
+                zone.get('width', 640),
+                zone.get('height', 480),
+                zone.get('enabled', True)
+            )
+    else:
+        # Direct parameters
+        camera.set_cashier_zone(
+            data.get('x', camera.cashier_zone_x),
+            data.get('y', camera.cashier_zone_y),
+            data.get('width', camera.cashier_zone_width),
+            data.get('height', camera.cashier_zone_height),
+            data.get('enabled', True)
+        )
     
-    return JsonResponse({'error': 'Invalid zone format'}, status=400)
+    return JsonResponse({'success': True, 'cashier_zone': camera.get_cashier_zone()})
+
+
+@login_required
+@csrf_exempt
+@require_http_methods(["POST"])
+def api_camera_settings(request, camera_id):
+    """Update all camera detection settings at once"""
+    user = request.user
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    if not user.is_admin() and camera.branch not in get_user_branches(user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    data = json.loads(request.body)
+    
+    # Detection toggles
+    if 'detect_cash' in data:
+        camera.detect_cash = bool(data['detect_cash'])
+    if 'detect_violence' in data:
+        camera.detect_violence = bool(data['detect_violence'])
+    if 'detect_fire' in data:
+        camera.detect_fire = bool(data['detect_fire'])
+    
+    # Confidence thresholds (independent per camera)
+    if 'cash_confidence' in data:
+        camera.cash_confidence = max(0.0, min(1.0, float(data['cash_confidence'])))
+    if 'violence_confidence' in data:
+        camera.violence_confidence = max(0.0, min(1.0, float(data['violence_confidence'])))
+    if 'fire_confidence' in data:
+        camera.fire_confidence = max(0.0, min(1.0, float(data['fire_confidence'])))
+    
+    # Cashier zone
+    if 'cashier_zone' in data:
+        zone = data['cashier_zone']
+        camera.cashier_zone_x = int(zone.get('x', camera.cashier_zone_x))
+        camera.cashier_zone_y = int(zone.get('y', camera.cashier_zone_y))
+        camera.cashier_zone_width = int(zone.get('width', camera.cashier_zone_width))
+        camera.cashier_zone_height = int(zone.get('height', camera.cashier_zone_height))
+        camera.cashier_zone_enabled = bool(zone.get('enabled', camera.cashier_zone_enabled))
+    
+    camera.save()
+    
+    return JsonResponse({
+        'success': True,
+        'settings': camera.get_detection_settings()
+    })
+
+
+@login_required
+@csrf_exempt
+@require_http_methods(["POST"])
+def api_test_camera_connection(request, camera_id):
+    """Test camera RTSP connection and update status"""
+    user = request.user
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    if not user.is_admin() and camera.branch not in get_user_branches(user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    try:
+        # Try to connect to the RTSP stream
+        cap = cv2.VideoCapture(camera.rtsp_url)
+        
+        # Set timeout (5 seconds)
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
+        
+        if cap.isOpened():
+            # Try to read one frame
+            ret, frame = cap.read()
+            cap.release()
+            
+            if ret:
+                # Connection successful
+                camera.status = 'online'
+                camera.last_connected = timezone.now()
+                camera.save()
+                return JsonResponse({
+                    'success': True,
+                    'online': True,
+                    'message': 'Camera connected successfully'
+                })
+            else:
+                camera.status = 'offline'
+                camera.save()
+                return JsonResponse({
+                    'success': True,
+                    'online': False,
+                    'error': 'Connected but cannot read frames'
+                })
+        else:
+            camera.status = 'offline'
+            camera.save()
+            return JsonResponse({
+                'success': True,
+                'online': False,
+                'error': 'Cannot connect to RTSP stream'
+            })
+            
+    except Exception as e:
+        camera.status = 'offline'
+        camera.save()
+        return JsonResponse({
+            'success': False,
+            'online': False,
+            'error': str(e)
+        })
 
 
 @login_required
@@ -796,29 +1184,44 @@ def api_branch_accounts(request, branch_id):
 # ==================== VIDEO STREAMING ====================
 
 def get_detector_for_camera(camera):
-    """Get or create detector for a camera"""
+    """Get or create detector for a camera with camera-specific settings"""
     global camera_detectors
     
     if not DETECTOR_AVAILABLE:
         return None
     
-    if camera.id not in camera_detectors:
+    # Always update detector if settings changed
+    cache_key = f"{camera.id}_{camera.updated_at.timestamp()}"
+    
+    if camera.id not in camera_detectors or camera_detectors.get(f'{camera.id}_key') != cache_key:
+        # Use camera-specific confidence thresholds
         config = {
             'models_dir': str(settings.DETECTION_CONFIG['MODELS_DIR']),
-            'cashier_zone': camera.get_cashier_zone(),
-            'hand_touch_distance': settings.DETECTION_CONFIG['HAND_TOUCH_DISTANCE'],
-            'pose_confidence': settings.DETECTION_CONFIG['POSE_CONFIDENCE'],
-            'min_transaction_frames': settings.DETECTION_CONFIG['MIN_TRANSACTION_FRAMES'],
-            'fire_confidence': settings.DETECTION_CONFIG['FIRE_CONFIDENCE'],
-            'min_fire_frames': settings.DETECTION_CONFIG['MIN_FIRE_FRAMES'],
-            'min_fire_area': settings.DETECTION_CONFIG['MIN_FIRE_AREA'],
-            'violence_confidence': settings.DETECTION_CONFIG['VIOLENCE_CONFIDENCE'],
-            'min_violence_frames': settings.DETECTION_CONFIG['VIOLENCE_DURATION'],
+            'cashier_zone': [
+                camera.cashier_zone_x,
+                camera.cashier_zone_y,
+                camera.cashier_zone_width,
+                camera.cashier_zone_height
+            ],
+            'cashier_zone_enabled': camera.cashier_zone_enabled,
+            # Camera-specific confidence thresholds
+            'cash_confidence': camera.cash_confidence,
+            'violence_confidence': camera.violence_confidence,
+            'fire_confidence': camera.fire_confidence,
+            # Detection toggles
             'detect_cash': camera.detect_cash,
             'detect_violence': camera.detect_violence,
             'detect_fire': camera.detect_fire,
+            # Other settings from global config
+            'hand_touch_distance': settings.DETECTION_CONFIG.get('HAND_TOUCH_DISTANCE', 100),
+            'pose_confidence': settings.DETECTION_CONFIG.get('POSE_CONFIDENCE', 0.5),
+            'min_transaction_frames': settings.DETECTION_CONFIG.get('MIN_TRANSACTION_FRAMES', 30),
+            'min_fire_frames': settings.DETECTION_CONFIG.get('MIN_FIRE_FRAMES', 15),
+            'min_fire_area': settings.DETECTION_CONFIG.get('MIN_FIRE_AREA', 500),
+            'violence_duration': settings.DETECTION_CONFIG.get('VIOLENCE_DURATION', 30),
         }
         camera_detectors[camera.id] = UnifiedDetector(config)
+        camera_detectors[f'{camera.id}_key'] = cache_key
     
     return camera_detectors[camera.id]
 
@@ -827,7 +1230,13 @@ def generate_frames(camera):
     """Generator for video frames with detection"""
     cap = cv2.VideoCapture(camera.rtsp_url)
     
+    # Set timeout for connection
+    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)
+    
     if not cap.isOpened():
+        # Only set offline if connection actually failed
+        camera.status = 'offline'
+        camera.save()
         # Return placeholder frame
         frame = create_placeholder_frame("Cannot connect to camera")
         _, buffer = cv2.imencode('.jpg', frame)
@@ -835,7 +1244,7 @@ def generate_frames(camera):
                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
         return
     
-    # Update camera status
+    # Update camera status - connected successfully
     camera.status = 'online'
     camera.last_connected = timezone.now()
     camera.save()
@@ -873,13 +1282,13 @@ def generate_frames(camera):
     
     finally:
         cap.release()
-        camera.status = 'offline'
-        camera.save()
+        # Don't set offline when stream ends normally
+        # Camera stays online until connection actually fails
 
 
 def create_placeholder_frame(text):
     """Create a placeholder frame with text"""
-    frame = cv2.zeros((480, 640, 3), dtype='uint8')
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
     cv2.putText(frame, text, (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
     return frame
 
@@ -912,3 +1321,260 @@ def video_feed(request, camera_id):
         generate_frames(camera),
         content_type='multipart/x-mixed-replace; boundary=frame'
     )
+
+
+# ==================== USER MANAGEMENT ====================
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def api_users(request):
+    """API for users"""
+    user = request.user
+    if not user.is_admin():
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    if request.method == 'GET':
+        users = User.objects.all()
+        data = [{
+            'id': u.id,
+            'username': u.username,
+            'email': u.email,
+            'first_name': u.first_name,
+            'last_name': u.last_name,
+            'role': u.role,
+            'is_active': u.is_active,
+        } for u in users]
+        return JsonResponse({'users': data})
+    
+    elif request.method == 'POST':
+        data = json.loads(request.body)
+        
+        # Create user
+        new_user = User.objects.create_user(
+            username=data.get('username'),
+            email=data.get('email', ''),
+            password=data.get('password', 'password123'),
+            first_name=data.get('first_name', ''),
+            last_name=data.get('last_name', ''),
+            role=data.get('role', 'staff'),
+        )
+        
+        # Add to branch if specified
+        if 'branch_id' in data:
+            branch = get_object_or_404(Branch, id=data['branch_id'])
+            branch.managers.add(new_user)
+        
+        return JsonResponse({
+            'success': True,
+            'user': {
+                'id': new_user.id,
+                'username': new_user.username,
+            }
+        })
+
+
+@login_required
+@require_http_methods(["GET", "PUT", "DELETE"])
+def api_user_detail(request, user_id):
+    """API for single user"""
+    current_user = request.user
+    if not current_user.is_admin():
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    target_user = get_object_or_404(User, id=user_id)
+    
+    if request.method == 'GET':
+        return JsonResponse({
+            'id': target_user.id,
+            'username': target_user.username,
+            'email': target_user.email,
+            'first_name': target_user.first_name,
+            'last_name': target_user.last_name,
+            'role': target_user.role,
+            'is_active': target_user.is_active,
+            'branches': [{'id': b.id, 'name': b.name} for b in target_user.managed_branches.all()],
+        })
+    
+    elif request.method == 'PUT':
+        data = json.loads(request.body)
+        
+        target_user.email = data.get('email', target_user.email)
+        target_user.first_name = data.get('first_name', target_user.first_name)
+        target_user.last_name = data.get('last_name', target_user.last_name)
+        target_user.role = data.get('role', target_user.role)
+        target_user.is_active = data.get('is_active', target_user.is_active)
+        
+        if 'password' in data and data['password']:
+            target_user.set_password(data['password'])
+        
+        target_user.save()
+        return JsonResponse({'success': True})
+    
+    elif request.method == 'DELETE':
+        target_user.delete()
+        return JsonResponse({'success': True})
+
+
+# ==================== REGION MANAGEMENT ====================
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def api_regions(request):
+    """API for regions"""
+    user = request.user
+    
+    if request.method == 'GET':
+        regions = Region.objects.all()
+        data = [{
+            'id': r.id,
+            'name': r.name,
+            'code': r.code,
+            'branch_count': r.branches.count(),
+        } for r in regions]
+        return JsonResponse({'regions': data})
+    
+    elif request.method == 'POST':
+        if not user.is_admin():
+            return JsonResponse({'error': 'Permission denied'}, status=403)
+        
+        data = json.loads(request.body)
+        region = Region.objects.create(
+            name=data.get('name'),
+            code=data.get('code', ''),
+        )
+        
+        return JsonResponse({
+            'success': True,
+            'region': {
+                'id': region.id,
+                'name': region.name,
+            }
+        })
+
+
+@login_required
+@require_http_methods(["GET", "PUT", "DELETE"])
+def api_region_detail(request, region_id):
+    """API for single region"""
+    user = request.user
+    region = get_object_or_404(Region, id=region_id)
+    
+    if request.method == 'GET':
+        return JsonResponse({
+            'id': region.id,
+            'name': region.name,
+            'code': region.code,
+            'branch_count': region.branches.count(),
+        })
+    
+    elif request.method == 'PUT':
+        if not user.is_admin():
+            return JsonResponse({'error': 'Permission denied'}, status=403)
+        
+        data = json.loads(request.body)
+        region.name = data.get('name', region.name)
+        region.code = data.get('code', region.code)
+        region.save()
+        return JsonResponse({'success': True})
+    
+    elif request.method == 'DELETE':
+        if not user.is_admin():
+            return JsonResponse({'error': 'Permission denied'}, status=403)
+        region.delete()
+        return JsonResponse({'success': True})
+
+
+# ==================== BULK OPERATIONS ====================
+
+@login_required
+@require_http_methods(["POST"])
+def api_bulk_delete_events(request):
+    """API for bulk deleting events"""
+    user = request.user
+    if not user.is_admin():
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    data = json.loads(request.body)
+    event_ids = data.get('event_ids', [])
+    
+    if not event_ids:
+        # Delete by filter if no IDs provided
+        filters = {}
+        if 'branch_id' in data:
+            filters['branch_id'] = data['branch_id']
+        if 'event_type' in data:
+            filters['event_type'] = data['event_type']
+        if 'status' in data:
+            filters['status'] = data['status']
+        if 'before_date' in data:
+            filters['created_at__lt'] = data['before_date']
+        
+        if filters:
+            deleted, _ = Event.objects.filter(**filters).delete()
+        else:
+            return JsonResponse({'error': 'No filter or event IDs provided'}, status=400)
+    else:
+        deleted, _ = Event.objects.filter(id__in=event_ids).delete()
+    
+    return JsonResponse({'success': True, 'deleted_count': deleted})
+
+
+@login_required
+@require_http_methods(["POST"])
+def api_bulk_update_events(request):
+    """API for bulk updating event status"""
+    user = request.user
+    
+    data = json.loads(request.body)
+    event_ids = data.get('event_ids', [])
+    new_status = data.get('status')
+    
+    if not event_ids or not new_status:
+        return JsonResponse({'error': 'event_ids and status are required'}, status=400)
+    
+    user_branches = get_user_branches(user)
+    events = Event.objects.filter(id__in=event_ids, branch__in=user_branches)
+    
+    updated = events.update(
+        status=new_status,
+        reviewed_by=user,
+        reviewed_at=timezone.now()
+    )
+    
+    return JsonResponse({'success': True, 'updated_count': updated})
+
+
+# ==================== LANGUAGE ====================
+
+def set_language(request):
+    """Set the user's preferred language"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            lang = data.get('lang', 'ko')
+        except:
+            lang = request.POST.get('lang', 'ko')
+        
+        # Validate language
+        if lang not in ['ko', 'en']:
+            lang = 'ko'
+        
+        # Store in session
+        request.session['lang'] = lang
+        
+        # Create response
+        response = JsonResponse({'success': True, 'lang': lang})
+        
+        # Also set cookie
+        response.set_cookie('lang', lang, max_age=365*24*60*60)  # 1 year
+        
+        return response
+    
+    return JsonResponse({'error': 'POST required'}, status=405)
+
+
+def get_translations_api(request):
+    """Get translations for current language"""
+    lang = request.session.get('lang', request.COOKIES.get('lang', 'ko'))
+    translations = get_translation(lang)
+    return JsonResponse(translations)

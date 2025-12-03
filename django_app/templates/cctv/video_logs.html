@@ -1,211 +1,321 @@
 {% extends 'cctv/base.html' %}
 
-{% block title %}이벤트 로그 - Hotel CCTV Monitoring{% endblock %}
+{% block title %}{{ t.video_logs_title }} - {{ t.app_name }}{% endblock %}
 
 {% block content %}
-<div class="panel">
-    <div class="page-header">
-        <div>
-            <p class="eyebrow">이벤트 로그</p>
-            <h1>영상 이벤트 목록</h1>
+<div class="page-header">
+    <div class="page-header-left">
+        <p class="eyebrow">{{ t.video_logs_subtitle }}</p>
+        <h1>{{ t.video_logs_title }}</h1>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="filters">
+    <div class="filter-group">
+        <label>{{ t.select_region }}</label>
+        <select id="regionFilter" onchange="filterBranchesByRegion()">
+            <option value="">{{ t.all_regions }}</option>
+            {% for region in regions %}
+            <option value="{{ region.id }}">{{ region.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label>{{ t.select_branch }}</label>
+        <select id="branchFilter">
+            <option value="">{{ t.all_branches }}</option>
+            {% for branch in branches %}
+            <option value="{{ branch.id }}" data-region="{{ branch.region.id }}">{{ branch.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label>{{ t.event_type }}</label>
+        <select id="eventTypeFilter">
+            <option value="">All</option>
+            <option value="cash">{{ t.event_cash }}</option>
+            <option value="violence">{{ t.event_violence }}</option>
+            <option value="fire">{{ t.event_fire }}</option>
+        </select>
+    </div>
+    <div class="filter-group">
+        <label>{{ t.from_date }}</label>
+        <input type="date" id="dateFrom">
+    </div>
+    <div class="filter-group">
+        <label>{{ t.to_date }}</label>
+        <input type="date" id="dateTo">
+    </div>
+    <button class="btn btn-secondary" onclick="applyFilters()">{{ t.apply_filter }}</button>
+</div>
+
+<!-- Three Column Layout -->
+<div class="video-three-col">
+    <!-- Event List -->
+    <div class="video-col">
+        <div class="panel">
+            <h3 style="margin-bottom: 12px;">{{ t.nav_video_logs }}</h3>
+            <div class="event-list" id="eventList">
+                {% for event in events %}
+                <div class="event-item" data-id="{{ event.id }}" onclick="selectEvent({{ event.id }})">
+                    <div class="branch-cell">
+                        <span class="branch-name">{{ event.branch.name }}</span>
+                        <span class="camera-name">{{ event.camera.name }}</span>
+                    </div>
+                    <span class="event-type-badge {{ event.event_type }}">
+                        {% if event.event_type == 'cash' %}{{ t.event_cash }}
+                        {% elif event.event_type == 'violence' %}{{ t.event_violence }}
+                        {% elif event.event_type == 'fire' %}{{ t.event_fire }}
+                        {% endif %}
+                    </span>
+                    <span>{{ event.created_at|date:"H:i" }}</span>
+                    <span class="status-pill status-{{ event.status }}">
+                        {% if event.status == 'confirmed' %}{{ t.status_confirmed }}
+                        {% elif event.status == 'reviewing' %}{{ t.status_reviewing }}
+                        {% else %}{{ t.status_pending }}
+                        {% endif %}
+                    </span>
+                </div>
+                {% empty %}
+                <div class="empty-state">
+                    <p class="empty-state-text">{{ t.no_events }}</p>
+                </div>
+                {% endfor %}
+            </div>
         </div>
     </div>
     
-    <form class="filters" method="get">
-        <div class="filter-group">
-            <label>날짜</label>
-            <input type="date" name="date" id="logDate" value="{{ filters.date }}">
-        </div>
-        {% if user.is_admin %}
-        <div class="filter-group">
-            <label>지역</label>
-            <select name="region" id="logRegion">
-                <option value="all" {% if filters.region == 'all' %}selected{% endif %}>전체</option>
-                {% for region in regions %}
-                <option value="{{ region.name }}" {% if filters.region == region.name %}selected{% endif %}>{{ region.name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div class="filter-group">
-            <label>이벤트 종류</label>
-            <select name="type" id="logType">
-                <option value="all" {% if filters.type == 'all' %}selected{% endif %}>전체</option>
-                <option value="cash" {% if filters.type == 'cash' %}selected{% endif %}>현금</option>
-                <option value="fire" {% if filters.type == 'fire' %}selected{% endif %}>화재</option>
-                <option value="violence" {% if filters.type == 'violence' %}selected{% endif %}>난동</option>
-            </select>
-        </div>
-        <div class="filter-group">
-            <label>지점명</label>
-            <input name="branch" placeholder="지점 검색" value="{{ filters.branch }}">
-        </div>
-        {% endif %}
-        <button class="ghost-button small" type="submit">검색</button>
-    </form>
-
-    <div class="video-three-col">
-        <!-- Events List -->
-        <div class="video-col">
-            <div class="video-events">
-                <div class="table-body" id="eventsList">
-                    {% for event in events %}
-                    <button class="table-row-button {% if forloop.first %}active{% endif %}" 
-                            data-event-id="{{ event.id }}"
-                            onclick="selectEvent({{ event.id }})">
-                        <div class="branch-cell">
-                            <span class="branch-name">{{ event.branch.name }}</span>
-                            <span class="subtext mono">{{ event.camera.camera_id }}</span>
-                        </div>
-                        <div class="event-type">{{ event.get_event_type_display }}</div>
-                        <div class="event-time mono">
-                            {{ event.created_at|date:"Y-m-d" }}<br>
-                            {{ event.created_at|time:"H:i" }}
-                        </div>
-                        <div class="status-col">
-                            <span class="status-pill status-{% if event.status == 'confirmed' %}confirmed{% elif event.status == 'pending' %}pending{% else %}review{% endif %}">
-                                {{ event.get_status_display }}
-                            </span>
-                        </div>
-                    </button>
-                    {% empty %}
-                    <div class="table-row empty-row">
-                        <span class="empty-text">이벤트가 없습니다.</span>
-                    </div>
-                    {% endfor %}
-                </div>
+    <!-- Video Viewer -->
+    <div class="video-col">
+        <div class="panel video-viewer">
+            <div class="viewer-header">
+                <h3 id="viewerTitle">{{ t.no_events }}</h3>
+            </div>
+            <div class="viewer-body" id="viewerBody">
+                <span>{{ t.no_events }}</span>
             </div>
         </div>
-        
-        <!-- Event Viewer -->
-        <div class="video-col">
-            <div class="video-viewer">
-                <div class="viewer-header">
-                    <p class="eyebrow">이벤트 영상</p>
-                    <h3 id="viewerTitle">
-                        {% if events %}
-                        {{ events.0.branch.name }} | {{ events.0.camera.camera_id }}
-                        {% else %}
-                        선택된 이벤트 없음
-                        {% endif %}
-                    </h3>
+    </div>
+    
+    <!-- Status Panel -->
+    <div class="video-col">
+        <div class="panel">
+            <h3 style="margin-bottom: 16px;">{{ t.status }}</h3>
+            <div class="status-panel" id="statusPanel">
+                <div class="status-row">
+                    <span class="status-label">{{ t.branch_name }}</span>
+                    <span class="status-value" id="statusBranch">-</span>
                 </div>
-                <div class="viewer-body" id="viewerBody">영상 썸네일</div>
-                <div class="viewer-meta" id="viewerMeta">
-                    {% if events %}
-                    {{ events.0.created_at|date:"Y-m-d" }} {{ events.0.created_at|time:"H:i" }} · {{ events.0.get_event_type_display }}
-                    <span class="status-pill status-{% if events.0.status == 'confirmed' %}confirmed{% elif events.0.status == 'pending' %}pending{% else %}review{% endif %}">
-                        {{ events.0.get_status_display }}
-                    </span>
-                    {% endif %}
+                <div class="status-row">
+                    <span class="status-label">{{ t.camera }}</span>
+                    <span class="status-value" id="statusCamera">-</span>
                 </div>
-                <div class="viewer-actions" style="margin-top: 12px;">
-                    <button class="ghost-button small" onclick="showEventDetail()">자세히 보기</button>
-                    <button class="primary-button" onclick="updateEventStatus('confirmed')" style="margin-left: 8px;">확인 완료</button>
+                <div class="status-row">
+                    <span class="status-label">{{ t.event_type }}</span>
+                    <span class="status-value" id="statusType">-</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">{{ t.confidence }}</span>
+                    <span class="status-value" id="statusConfidence">-</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">{{ t.time }}</span>
+                    <span class="status-value" id="statusTime">-</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">{{ t.status }}</span>
+                    <span id="statusStatus">-</span>
                 </div>
             </div>
-        </div>
-        
-        <!-- Camera Status -->
-        <div class="video-col status-col">
-            <div class="panel video-status">
-                <div class="table-head">카메라 상태</div>
-                <div class="table-body">
-                    {% for cam in offline_cameras %}
-                    <div class="table-row events">
-                        <div class="status-inner">
-                            <div class="branch-cell">
-                                <span class="branch-name">{{ cam.branch.name }}</span>
-                                <span class="subtext mono">{{ cam.camera_id }}</span>
-                            </div>
-                            <div class="status-col">
-                                <span class="status-pill status-offline">{{ cam.get_status_display }}</span>
-                            </div>
-                        </div>
-                    </div>
-                    {% empty %}
-                    <div class="table-row">
-                        <span class="empty-text">모든 카메라 정상</span>
-                    </div>
-                    {% endfor %}
-                </div>
+            
+            <div style="margin-top: 20px; display: flex; gap: 8px;">
+                <button class="btn btn-primary btn-sm" onclick="updateEventStatus('confirmed')">{{ t.status_confirmed }}</button>
+                <button class="btn btn-secondary btn-sm" onclick="updateEventStatus('reviewing')">{{ t.status_reviewing }}</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteEvent()">{{ t.delete }}</button>
             </div>
         </div>
     </div>
 </div>
+{% endblock %}
 
+{% block extra_js %}
 <script>
-let selectedEventId = {% if events %}{{ events.0.id }}{% else %}null{% endif %};
-
-function selectEvent(eventId) {
-    selectedEventId = eventId;
+    let selectedEventId = null;
     
-    // Update active state
-    document.querySelectorAll('.table-row-button').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.dataset.eventId == eventId) {
-            btn.classList.add('active');
-        }
-    });
-    
-    // Load event details
-    fetch(`/api/events/${eventId}/`)
-        .then(response => response.json())
-        .then(event => {
-            document.getElementById('viewerTitle').textContent = `${event.branch} | ${event.camera}`;
-            document.getElementById('viewerMeta').innerHTML = `
-                ${event.created_at.split('T')[0]} ${event.created_at.split('T')[1].substring(0, 5)} · ${event.type_display}
-                <span class="status-pill status-${event.status === 'confirmed' ? 'confirmed' : event.status === 'pending' ? 'pending' : 'review'}">
-                    ${event.status_display}
-                </span>
-            `;
-        });
-}
-
-function showEventDetail() {
-    if (!selectedEventId) {
-        alert('이벤트를 선택해주세요.');
-        return;
-    }
-    // Could open a modal with more details
-    alert('이벤트 상세 보기: ' + selectedEventId);
-}
-
-function updateEventStatus(status) {
-    if (!selectedEventId) {
-        alert('이벤트를 선택해주세요.');
-        return;
+    function selectEvent(eventId) {
+        selectedEventId = eventId;
+        
+        // Highlight selected
+        document.querySelectorAll('.event-item').forEach(el => el.classList.remove('active'));
+        document.querySelector(`.event-item[data-id="${eventId}"]`).classList.add('active');
+        
+        // Load event details
+        loadEventDetails(eventId);
     }
     
-    fetch(`/api/events/${selectedEventId}/`, {
-        method: 'PUT',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCookie('csrftoken')
-        },
-        body: JSON.stringify({ status: status })
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            alert('상태가 업데이트되었습니다.');
-            window.location.reload();
-        }
-    });
-}
-
-function getCookie(name) {
-    let cookieValue = null;
-    if (document.cookie && document.cookie !== '') {
-        const cookies = document.cookie.split(';');
-        for (let i = 0; i < cookies.length; i++) {
-            const cookie = cookies[i].trim();
-            if (cookie.substring(0, name.length + 1) === (name + '=')) {
-                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                break;
+    async function loadEventDetails(eventId) {
+        try {
+            const response = await fetch(`/api/events/${eventId}/`);
+            const event = await response.json();
+            
+            document.getElementById('viewerTitle').textContent = `${event.branch_name} - ${event.camera_name}`;
+            document.getElementById('statusBranch').textContent = event.branch_name;
+            document.getElementById('statusCamera').textContent = event.camera_name;
+            document.getElementById('statusType').textContent = event.event_type;
+            document.getElementById('statusConfidence').textContent = (event.confidence * 100).toFixed(1) + '%';
+            document.getElementById('statusTime').textContent = event.created_at;
+            document.getElementById('statusStatus').innerHTML = `<span class="status-pill status-${event.status}">${event.status}</span>`;
+            
+            // Show live feed from the camera
+            const viewerBody = document.getElementById('viewerBody');
+            
+            if (event.clip_path) {
+                // If video clip exists, show it
+                viewerBody.innerHTML = `<video src="${event.clip_path}" controls autoplay style="width:100%;height:100%;object-fit:contain;"></video>`;
+            } else if (event.camera_id) {
+                // Show live video feed from camera with click-to-play
+                viewerBody.innerHTML = `
+                    <div class="live-video-container" style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+                        <div class="video-thumbnail" data-camera-id="${event.camera_id}" onclick="startLiveStream(this, ${event.camera_id})" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:#1a1a2e;">
+                            <div class="play-content" style="text-align:center;">
+                                <div style="font-size:4rem;color:rgba(255,255,255,0.8);margin-bottom:10px;">▶</div>
+                                <div style="color:rgba(255,255,255,0.7);">Click to view live stream</div>
+                                <div style="color:rgba(255,255,255,0.5);font-size:0.9rem;margin-top:5px;">Camera: ${event.camera_name}</div>
+                            </div>
+                            <img class="stream-img" src="" style="display:none;width:100%;height:100%;object-fit:contain;">
+                        </div>
+                        <a href="/camera/${event.camera_id}/settings/" class="btn btn-sm btn-secondary" style="margin-top:10px;">⚙️ {{ t.camera_settings }}</a>
+                    </div>`;
+            } else if (event.thumbnail_path) {
+                viewerBody.innerHTML = `<img src="${event.thumbnail_path}" style="width:100%;height:100%;object-fit:contain;">`;
+            } else {
+                viewerBody.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#6b7684;">
+                    <div style="font-size:3rem;margin-bottom:10px;">📹</div>
+                    <div>No video available</div>
+                </div>`;
             }
+        } catch (error) {
+            console.error('Error loading event:', error);
         }
     }
-    return cookieValue;
-}
+    
+    let currentStream = null;
+    
+    function startLiveStream(element, cameraId) {
+        // Stop any existing stream
+        if (currentStream) {
+            currentStream.src = '';
+        }
+        
+        const img = element.querySelector('.stream-img');
+        const playContent = element.querySelector('.play-content');
+        
+        img.src = `/video-feed/${cameraId}/`;
+        img.style.display = 'block';
+        if (playContent) playContent.style.display = 'none';
+        
+        currentStream = img;
+    }
+    
+    // Stop stream when leaving page
+    window.addEventListener('beforeunload', function() {
+        if (currentStream) {
+            currentStream.src = '';
+        }
+    });
+    
+    async function updateEventStatus(status) {
+        if (!selectedEventId) {
+            showToast('{{ t.no_events }}', 'error');
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/events/${selectedEventId}/`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify({ status: status })
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    async function deleteEvent() {
+        if (!selectedEventId) {
+            showToast('{{ t.no_events }}', 'error');
+            return;
+        }
+        
+        if (!confirm('{{ t.confirm_delete }}')) return;
+        
+        try {
+            const response = await fetch(`/api/events/${selectedEventId}/`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken')
+                }
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    function filterBranchesByRegion() {
+        const regionId = document.getElementById('regionFilter').value;
+        const branchSelect = document.getElementById('branchFilter');
+        const options = branchSelect.querySelectorAll('option');
+        
+        // Reset branch selection
+        branchSelect.value = '';
+        
+        options.forEach(option => {
+            if (option.value === '') {
+                // Keep "All Branches" visible
+                option.style.display = 'block';
+                option.hidden = false;
+            } else {
+                const optionRegion = option.dataset.region;
+                if (!regionId || optionRegion === regionId) {
+                    option.style.display = 'block';
+                    option.hidden = false;
+                } else {
+                    option.style.display = 'none';
+                    option.hidden = true;
+                }
+            }
+        });
+    }
+    
+    function applyFilters() {
+        const region = document.getElementById('regionFilter').value;
+        const branch = document.getElementById('branchFilter').value;
+        const eventType = document.getElementById('eventTypeFilter').value;
+        const dateFrom = document.getElementById('dateFrom').value;
+        const dateTo = document.getElementById('dateTo').value;
+        
+        let params = new URLSearchParams();
+        if (region) params.append('region', region);
+        if (branch) params.append('branch', branch);
+        if (eventType) params.append('type', eventType);
+        if (dateFrom) params.append('from', dateFrom);
+        if (dateTo) params.append('to', dateTo);
+        
+        window.location.href = `{% url 'cctv:video_logs' %}?${params.toString()}`;
+    }
 </script>
 {% endblock %}

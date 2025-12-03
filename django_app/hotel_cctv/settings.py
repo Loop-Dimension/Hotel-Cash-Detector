@@ -3,17 +3,21 @@ Django settings for Hotel CCTV Monitoring System
 """
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-hotel-cctv-secret-key-change-in-production-2024'
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-fallback-key-change-in-production')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 # Application definition
 INSTALLED_APPS = [
@@ -49,6 +53,8 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'cctv.context_processors.language_context',
+                'cctv.context_processors.app_context',
             ],
         },
     },
@@ -84,10 +90,21 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 # Internationalization
-LANGUAGE_CODE = 'ko-kr'
+LANGUAGE_CODE = os.getenv('DEFAULT_LANGUAGE', 'ko')
+if LANGUAGE_CODE == 'ko':
+    LANGUAGE_CODE = 'ko-kr'
+elif LANGUAGE_CODE == 'en':
+    LANGUAGE_CODE = 'en-us'
+    
 TIME_ZONE = 'Asia/Seoul'
 USE_I18N = True
 USE_TZ = True
+
+# Available languages
+LANGUAGES = [
+    ('ko', '한국어'),
+    ('en', 'English'),
+]
 
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
@@ -112,30 +129,47 @@ LOGOUT_REDIRECT_URL = '/login/'
 
 # Detection settings
 DETECTION_CONFIG = {
-    'MODELS_DIR': BASE_DIR.parent / 'flask' / 'models',
+    # Models are now inside django_app/models/
+    'MODELS_DIR': BASE_DIR / 'models',
     'INPUT_DIR': BASE_DIR / 'input',
-    'OUTPUT_DIR': BASE_DIR / 'output',
-    'UPLOAD_DIR': BASE_DIR / 'uploads',
+    'OUTPUT_DIR': BASE_DIR / os.getenv('OUTPUT_DIR', 'output'),
+    'UPLOAD_DIR': BASE_DIR / os.getenv('UPLOAD_DIR', 'uploads'),
     
-    # Detection thresholds
-    'CONFIDENCE_THRESHOLD': 0.5,
+    # Model paths from environment (relative to MODELS_DIR)
+    'YOLO_MODEL': os.getenv('YOLO_MODEL_PATH', 'models/yolov8s.pt'),
+    'POSE_MODEL': os.getenv('POSE_MODEL_PATH', 'models/yolov8s-pose.pt'),
+    'FIRE_MODEL': os.getenv('FIRE_MODEL_PATH', 'models/fire_smoke_yolov8.pt'),
+    
+    # Default detection thresholds (can be overridden per camera)
+    'CONFIDENCE_THRESHOLD': float(os.getenv('CASH_DETECTION_CONFIDENCE', '0.5')),
     'POSE_CONFIDENCE': 0.5,
     'HAND_TOUCH_DISTANCE': 80,
     'MIN_TRANSACTION_FRAMES': 3,
     
-    # Violence detection
-    'VIOLENCE_CONFIDENCE': 0.6,
+    # Violence detection defaults
+    'VIOLENCE_CONFIDENCE': float(os.getenv('VIOLENCE_DETECTION_CONFIDENCE', '0.6')),
     'VIOLENCE_DURATION': 5,
     
-    # Fire detection
-    'FIRE_CONFIDENCE': 0.3,
+    # Fire detection defaults
+    'FIRE_CONFIDENCE': float(os.getenv('FIRE_DETECTION_CONFIDENCE', '0.5')),
     'MIN_FIRE_FRAMES': 4,
     'MIN_FIRE_AREA': 100,
     
-    # Cashier zone
-    'DEFAULT_CASHIER_ZONE': [0, 280, 900, 400],
+    # Cashier zone defaults (can be set per camera)
+    'DEFAULT_CASHIER_ZONE': [0, 0, 640, 480],
     
     # Processing
     'FRAME_SKIP': 2,
     'ALERT_COOLDOWN': 30,
+    
+    # RTSP settings
+    'RTSP_TIMEOUT': int(os.getenv('RTSP_TIMEOUT', '10')),
+    'RTSP_BUFFER_SIZE': int(os.getenv('RTSP_BUFFER_SIZE', '10')),
+}
+
+# Admin credentials from environment (for seed command)
+ADMIN_CREDENTIALS = {
+    'username': os.getenv('ADMIN_USERNAME', 'admin'),
+    'email': os.getenv('ADMIN_EMAIL', 'admin@hotel.com'),
+    'password': os.getenv('ADMIN_PASSWORD', 'admin123'),
 }

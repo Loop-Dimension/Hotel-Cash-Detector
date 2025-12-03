@@ -62,17 +62,33 @@ document.addEventListener('DOMContentLoaded', function() {
     // Sub-navigation toggle
     const navParents = document.querySelectorAll('.nav-parent');
     navParents.forEach(parent => {
-        parent.addEventListener('click', function() {
+        parent.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            
             const navGroup = this.closest('.nav-group');
             const sublist = navGroup?.querySelector('.nav-sublist');
             const caret = this.querySelector('.caret');
             
             if (sublist) {
-                const isHidden = sublist.style.display === 'none';
+                // Check current display state - handle both '' and 'none' as hidden
+                const isHidden = !sublist.style.display || sublist.style.display === 'none';
                 sublist.style.display = isHidden ? 'flex' : 'none';
-                caret?.classList.toggle('open', isHidden);
+                if (caret) {
+                    caret.classList.toggle('open', isHidden);
+                }
             }
         });
+    });
+    
+    // Initialize sublists that should be visible
+    document.querySelectorAll('.nav-sublist').forEach(sublist => {
+        // If it doesn't have explicit display style set, hide it by default
+        // unless it has items that are active
+        const hasActiveItem = sublist.querySelector('.active');
+        if (!sublist.style.display && !hasActiveItem) {
+            sublist.style.display = 'none';
+        }
     });
 });
 

@@ -1,230 +1,411 @@
 {% extends 'cctv/base.html' %}
 
-{% block title %}{{ branch.name }} 모니터링 - Hotel CCTV Monitoring{% endblock %}
+{% block title %}{{ t.monitor_local_title }} - {{ t.app_name }}{% endblock %}
 
 {% block content %}
-<div class="panel">
-    <div class="page-header">
-        <div>
-            <p class="eyebrow">실시간 모니터링</p>
-            <h1>{{ branch.name }} CCTV 피드</h1>
-        </div>
-        {% if user.is_admin %}
-        <a href="{% url 'cctv:monitor_all' %}" class="ghost-button small">이전 화면</a>
-        {% endif %}
+<div class="page-header">
+    <div class="page-header-left">
+        <p class="eyebrow">{{ t.monitor_local_subtitle }}</p>
+        <h1>{{ t.monitor_local_title }}</h1>
     </div>
-    
-    {% if user.is_admin %}
-    <div class="monitor-filters">
-        <div class="monitor-filter">
-            <label>지점 선택</label>
-            <select id="branchSelect" onchange="changeBranch(this.value)">
-                {% for b in branches %}
-                <option value="{{ b.id }}" {% if b.id == branch.id %}selected{% endif %}>{{ b.name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div class="monitor-filter">
-            <label>카메라 검색</label>
-            <input id="cameraSearch" placeholder="카메라명 검색" oninput="filterCameras()">
-        </div>
-        <button class="ghost-button small" onclick="filterCameras()">검색</button>
+    <button class="btn btn-primary" onclick="openAddCameraModal()">+ {{ t.add_camera }}</button>
+</div>
+
+<!-- Filters -->
+<div class="filters">
+    <div class="filter-group">
+        <label>{{ t.select_region }}</label>
+        <select id="regionFilter" onchange="filterBranchesByRegion(true)">
+            <option value="">{{ t.all_regions }}</option>
+            {% for region in regions %}
+            <option value="{{ region.id }}" {% if branch and branch.region.id == region.id %}selected{% endif %}>{{ region.name }}</option>
+            {% endfor %}
+        </select>
     </div>
-    {% endif %}
-    
-    <!-- Add Camera Button -->
-    <div class="add-camera-section" style="margin-bottom: 16px;">
-        <button class="primary-button" onclick="showAddCameraModal()">+ 카메라 추가</button>
+    <div class="filter-group">
+        <label>{{ t.select_branch }}</label>
+        <select id="branchFilter" onchange="loadCameras()">
+            <option value="">{{ t.all_branches }}</option>
+            {% for b in branches %}
+            <option value="{{ b.id }}" data-region="{{ b.region.id }}" {% if branch and branch.id == b.id %}selected{% endif %}>{{ b.name }}</option>
+            {% endfor %}
+        </select>
     </div>
-    
-    <div class="monitor-grid" id="cameraGrid">
-        {% for camera in cameras %}
-        <div class="monitor-card" data-camera-name="{{ camera.name }}">
-            <div class="monitor-header">
-                <h3>{{ camera.name }}</h3>
-                <span class="mono">{{ camera.camera_id }}</span>
+</div>
+
+<!-- Camera Grid -->
+<div class="monitor-grid" id="cameraGrid">
+    {% for camera in cameras %}
+    <div class="monitor-card">
+        <div class="monitor-header">
+            <h3>{{ camera.name }}</h3>
+            <span class="status-pill status-{{ camera.status }}">
+                {% if camera.status == 'online' %}{{ t.status_online }}{% else %}{{ t.status_offline }}{% endif %}
+            </span>
+        </div>
+        <div class="monitor-video">
+            {% if camera.status == 'online' %}
+            <span class="live-badge">{{ t.live }}</span>
+            <div class="video-thumbnail" 
+                 data-camera-id="{{ camera.id }}"
+                 data-feed-url="{% url 'cctv:video_feed' camera.id %}"
+                 onclick="startStream(this)">
+                <div class="play-overlay">▶</div>
+                <img class="stream-img" src="" alt="{{ camera.name }}" style="display:none;">
+                <div class="click-to-play">Click to stream</div>
             </div>
-            <div class="monitor-video">
-                {% if camera.status == 'online' %}
-                <img src="{% url 'cctv:video_feed' camera.id %}" alt="Live Feed" style="width: 100%; height: 100%; object-fit: cover;">
-                {% else %}
-                <div class="video-placeholder">
-                    <span class="status-pill status-offline">{{ camera.get_status_display }}</span>
-                </div>
-                {% endif %}
-            </div>
-            <div class="monitor-footer">
-                <div class="viewer-meta">
-                    위치: {{ camera.location|default:"미설정" }}<br>
-                    <span class="mono">상태: {{ camera.get_status_display }}</span>
-                </div>
-                <button class="ghost-button small" onclick="showCameraDetail({{ camera.id }})">자세히 보기</button>
+            {% else %}
+            <div class="video-placeholder">{{ t.status_offline }}</div>
+            {% endif %}
+        </div>
+        <div class="monitor-footer">
+            <span class="viewer-meta">{{ camera.camera_id }}</span>
+            <div style="display: flex; gap: 8px;">
+                <a href="{% url 'cctv:camera_settings' camera.id %}" class="btn btn-sm btn-ghost" title="{{ t.camera_settings }}">⚙️</a>
+                <button class="btn btn-sm btn-ghost" onclick="editCamera({{ camera.id }})" title="{{ t.edit }}">✏️</button>
+                <button class="btn btn-sm btn-ghost" onclick="testCameraConnection({{ camera.id }})" title="Test Connection">🔌</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteCamera({{ camera.id }})" title="{{ t.delete }}">🗑️</button>
             </div>
         </div>
-        {% empty %}
-        <div class="empty-text">등록된 카메라가 없습니다. 카메라를 추가해주세요.</div>
-        {% endfor %}
     </div>
+    {% empty %}
+    <div class="empty-state" style="grid-column: 1/-1;">
+        <p class="empty-state-text">{{ t.no_cameras }}</p>
+    </div>
+    {% endfor %}
 </div>
 
 <!-- Add Camera Modal -->
-<div id="addCameraModal" class="modal-backdrop" style="display: none;" onclick="closeAddCameraModal()">
-    <div class="modal" onclick="event.stopPropagation()">
+<div class="modal-backdrop" id="addCameraModal" style="display: none;">
+    <div class="modal">
         <div class="modal-header">
-            <h3>카메라 추가</h3>
-            <button class="ghost-button small" onclick="closeAddCameraModal()">닫기</button>
+            <h2>{{ t.add_camera }}</h2>
+            <button class="modal-close" onclick="closeModal('addCameraModal')">×</button>
         </div>
-        <div class="modal-body">
-            <form id="addCameraForm" onsubmit="addCamera(event)">
-                <div class="filter-group" style="margin-bottom: 16px;">
-                    <label>카메라 ID</label>
-                    <input type="text" id="newCameraId" placeholder="CAM-001" required>
+        <form id="addCameraForm" onsubmit="submitCamera(event)">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>{{ t.select_branch }}</label>
+                    <select name="branch_id" required>
+                        {% for branch in branches %}
+                        <option value="{{ branch.id }}">{{ branch.name }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
-                <div class="filter-group" style="margin-bottom: 16px;">
-                    <label>카메라 이름</label>
-                    <input type="text" id="newCameraName" placeholder="로비 카메라 1" required>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Camera ID</label>
+                        <input type="text" name="camera_id" placeholder="CAM-001" required>
+                    </div>
+                    <div class="form-group">
+                        <label>{{ t.camera }}</label>
+                        <input type="text" name="name" placeholder="Lobby Camera 1" required>
+                    </div>
                 </div>
-                <div class="filter-group" style="margin-bottom: 16px;">
-                    <label>설치 위치</label>
-                    <input type="text" id="newCameraLocation" placeholder="출입구, 카운터 등">
-                </div>
-                <div class="filter-group" style="margin-bottom: 16px;">
+                <div class="form-group">
                     <label>RTSP URL</label>
-                    <input type="text" id="newCameraRtsp" placeholder="rtsp://admin:password@192.168.1.100:554/stream" required>
-                </div>
-                <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                    <button type="button" class="ghost-button small" onclick="closeAddCameraModal()">취소</button>
-                    <button type="submit" class="primary-button">추가</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-<!-- Camera Detail Modal -->
-<div id="cameraDetailModal" class="modal-backdrop" style="display: none;" onclick="closeCameraDetail()">
-    <div class="modal" onclick="event.stopPropagation()" style="max-width: 800px;">
-        <div class="modal-header">
-            <h3 id="cameraDetailTitle">카메라 상세</h3>
-            <button class="ghost-button small" onclick="closeCameraDetail()">닫기</button>
-        </div>
-        <div class="modal-body">
-            <div id="cameraDetailContent">
-                <div class="modal-video" id="cameraDetailVideo">
-                    라이브 피드
-                </div>
-                <div class="modal-meta" id="cameraDetailMeta">
-                    <span class="mono">LIVE</span>
-                    <span class="status-col">스트리밍 중</span>
+                    <input type="text" name="rtsp_url" placeholder="rtsp://admin:password@192.168.1.100:554/stream" required>
                 </div>
             </div>
-        </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('addCameraModal')">{{ t.cancel }}</button>
+                <button type="submit" class="btn btn-primary">{{ t.create }}</button>
+            </div>
+        </form>
     </div>
 </div>
 
-<script>
-const branchId = {{ branch.id }};
-
-function changeBranch(newBranchId) {
-    window.location.href = `/monitor/local/${newBranchId}/`;
-}
-
-function filterCameras() {
-    const search = document.getElementById('cameraSearch').value.toLowerCase();
-    const cards = document.querySelectorAll('.monitor-card');
-    
-    cards.forEach(card => {
-        const name = card.dataset.cameraName.toLowerCase();
-        card.style.display = name.includes(search) ? 'flex' : 'none';
-    });
-}
-
-function showAddCameraModal() {
-    document.getElementById('addCameraModal').style.display = 'flex';
-}
-
-function closeAddCameraModal() {
-    document.getElementById('addCameraModal').style.display = 'none';
-    document.getElementById('addCameraForm').reset();
-}
-
-function addCamera(event) {
-    event.preventDefault();
-    
-    const data = {
-        camera_id: document.getElementById('newCameraId').value,
-        name: document.getElementById('newCameraName').value,
-        location: document.getElementById('newCameraLocation').value,
-        rtsp_url: document.getElementById('newCameraRtsp').value
-    };
-    
-    fetch(`/api/branches/${branchId}/cameras/`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCookie('csrftoken')
-        },
-        body: JSON.stringify(data)
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            alert('카메라가 추가되었습니다.');
-            window.location.reload();
-        } else {
-            alert('오류: ' + (result.error || '카메라 추가 실패'));
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        alert('카메라 추가 중 오류가 발생했습니다.');
-    });
-}
-
-function showCameraDetail(cameraId) {
-    fetch(`/api/cameras/${cameraId}/`)
-        .then(response => response.json())
-        .then(camera => {
-            document.getElementById('cameraDetailTitle').textContent = `${camera.name} (${camera.camera_id})`;
-            
-            if (camera.status === 'online') {
-                document.getElementById('cameraDetailVideo').innerHTML = `
-                    <img src="/video-feed/${cameraId}/" alt="Live Feed" style="width: 100%; height: 100%; object-fit: contain;">
-                `;
-            } else {
-                document.getElementById('cameraDetailVideo').innerHTML = `
-                    <div class="video-placeholder">
-                        <span class="status-pill status-offline">${camera.status_display}</span>
+<!-- Edit Camera Modal -->
+<div class="modal-backdrop" id="editCameraModal" style="display: none;">
+    <div class="modal">
+        <div class="modal-header">
+            <h2>{{ t.edit }} {{ t.camera }}</h2>
+            <button class="modal-close" onclick="closeModal('editCameraModal')">×</button>
+        </div>
+        <form id="editCameraForm" onsubmit="submitEditCamera(event)">
+            <input type="hidden" name="camera_id_hidden" id="editCameraId">
+            <div class="modal-body">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Camera ID</label>
+                        <input type="text" name="camera_id" id="editCameraCode" placeholder="CAM-001" required>
                     </div>
-                `;
-            }
-            
-            document.getElementById('cameraDetailMeta').innerHTML = `
-                <span class="mono">RTSP: ${camera.rtsp_url}</span>
-                <span class="status-col">위치: ${camera.location || '미설정'}</span>
-            `;
-            
-            document.getElementById('cameraDetailModal').style.display = 'flex';
+                    <div class="form-group">
+                        <label>{{ t.camera }}</label>
+                        <input type="text" name="name" id="editCameraName" placeholder="Lobby Camera 1" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>RTSP URL</label>
+                    <input type="text" name="rtsp_url" id="editCameraRtsp" placeholder="rtsp://admin:password@192.168.1.100:554/stream" required>
+                </div>
+                <div class="form-group">
+                    <label>{{ t.status }}</label>
+                    <select name="status" id="editCameraStatus">
+                        <option value="online">{{ t.status_online }}</option>
+                        <option value="offline">{{ t.status_offline }}</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('editCameraModal')">{{ t.cancel }}</button>
+                <button type="submit" class="btn btn-primary">{{ t.save }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .video-thumbnail {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        background: #1a1a2e;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 150px;
+    }
+    .video-thumbnail .play-overlay {
+        position: absolute;
+        font-size: 3rem;
+        color: rgba(255,255,255,0.8);
+        z-index: 2;
+        transition: transform 0.2s;
+    }
+    .video-thumbnail:hover .play-overlay {
+        transform: scale(1.2);
+    }
+    .video-thumbnail.streaming .play-overlay,
+    .video-thumbnail.streaming .click-to-play {
+        display: none;
+    }
+    .video-thumbnail .click-to-play {
+        position: absolute;
+        bottom: 10px;
+        color: rgba(255,255,255,0.6);
+        font-size: 0.85rem;
+    }
+    .video-thumbnail .stream-img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Track active streams
+    let activeStreams = [];
+    
+    function startStream(element) {
+        if (element.classList.contains('streaming')) return;
+        
+        const feedUrl = element.dataset.feedUrl;
+        const img = element.querySelector('.stream-img');
+        
+        element.classList.add('streaming');
+        img.src = feedUrl;
+        img.style.display = 'block';
+        
+        activeStreams.push(img);
+    }
+    
+    function stopAllStreams() {
+        activeStreams.forEach(img => {
+            img.src = '';
         });
-}
+        activeStreams = [];
+    }
+    
+    // Stop streams when leaving page
+    window.addEventListener('beforeunload', stopAllStreams);
+    window.addEventListener('pagehide', stopAllStreams);
+    
+    // Also stop when clicking navigation links
+    document.addEventListener('click', function(e) {
+        const link = e.target.closest('a');
+        if (link && link.href && !link.href.includes('#')) {
+            stopAllStreams();
+        }
+    });
 
-function closeCameraDetail() {
-    document.getElementById('cameraDetailModal').style.display = 'none';
-}
-
-function getCookie(name) {
-    let cookieValue = null;
-    if (document.cookie && document.cookie !== '') {
-        const cookies = document.cookie.split(';');
-        for (let i = 0; i < cookies.length; i++) {
-            const cookie = cookies[i].trim();
-            if (cookie.substring(0, name.length + 1) === (name + '=')) {
-                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                break;
+    function openAddCameraModal() {
+        document.getElementById('addCameraModal').style.display = 'flex';
+    }
+    
+    function closeModal(id) {
+        document.getElementById(id).style.display = 'none';
+    }
+    
+    async function submitCamera(e) {
+        e.preventDefault();
+        const form = e.target;
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData);
+        
+        try {
+            const response = await fetch('{% url "cctv:api_cameras" %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            } else {
+                showToast('{{ t.error }}', 'error');
             }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
         }
     }
-    return cookieValue;
-}
+    
+    async function testCameraConnection(cameraId) {
+        showToast('Testing connection...', 'info');
+        
+        try {
+            const response = await fetch(`/api/cameras/${cameraId}/test-connection/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken')
+                }
+            });
+            
+            const data = await response.json();
+            
+            if (data.online) {
+                showToast('Camera connected successfully!', 'success');
+                // Reload to show updated status
+                setTimeout(() => window.location.reload(), 1000);
+            } else {
+                showToast('Connection failed: ' + (data.error || 'Unknown error'), 'error');
+            }
+        } catch (error) {
+            showToast('Connection test failed', 'error');
+        }
+    }
+    
+    async function deleteCamera(cameraId) {
+        if (!confirm('{{ t.confirm_delete }}')) return;
+        
+        try {
+            const response = await fetch(`/api/cameras/${cameraId}/`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken')
+                }
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    async function editCamera(cameraId) {
+        try {
+            const response = await fetch(`/api/cameras/${cameraId}/`);
+            const camera = await response.json();
+            
+            document.getElementById('editCameraId').value = cameraId;
+            document.getElementById('editCameraCode').value = camera.camera_id || '';
+            document.getElementById('editCameraName').value = camera.name || '';
+            document.getElementById('editCameraRtsp').value = camera.rtsp_url || '';
+            document.getElementById('editCameraStatus').value = camera.status || 'online';
+            
+            document.getElementById('editCameraModal').style.display = 'flex';
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    async function submitEditCamera(e) {
+        e.preventDefault();
+        const cameraId = document.getElementById('editCameraId').value;
+        const form = e.target;
+        const formData = new FormData(form);
+        const data = {
+            camera_id: formData.get('camera_id'),
+            name: formData.get('name'),
+            rtsp_url: formData.get('rtsp_url'),
+            status: formData.get('status')
+        };
+        
+        try {
+            const response = await fetch(`/api/cameras/${cameraId}/`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (response.ok) {
+                showToast('{{ t.success }}', 'success');
+                window.location.reload();
+            } else {
+                showToast('{{ t.error }}', 'error');
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    function filterBranchesByRegion(resetBranch = true) {
+        const regionId = document.getElementById('regionFilter').value;
+        const branchSelect = document.getElementById('branchFilter');
+        const options = branchSelect.querySelectorAll('option');
+        const currentBranchId = branchSelect.value;
+        
+        // Reset branch selection only if resetBranch is true and we're filtering
+        if (resetBranch && regionId) {
+            // Check if current branch is still valid for selected region
+            const currentOption = branchSelect.querySelector(`option[value="${currentBranchId}"]`);
+            if (currentOption && currentOption.dataset.region !== regionId) {
+                branchSelect.value = '';
+            }
+        }
+        
+        options.forEach(option => {
+            if (option.value === '') {
+                option.style.display = 'block';
+                option.hidden = false;
+            } else {
+                const optionRegion = option.dataset.region;
+                if (!regionId || optionRegion === regionId) {
+                    option.style.display = 'block';
+                    option.hidden = false;
+                } else {
+                    option.style.display = 'none';
+                    option.hidden = true;
+                }
+            }
+        });
+    }
+    
+    // Initialize filter on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        filterBranchesByRegion(false);
+    });
+    
+    function loadCameras() {
+        const branchId = document.getElementById('branchFilter').value;
+        if (branchId) {
+            window.location.href = `{% url 'cctv:monitor_local' %}${branchId}/`;
+        }
+    }
 </script>
 {% endblock %}

@@ -1,10 +1,10 @@
 {% load static %}
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="{{ current_lang }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Hotel CCTV Monitoring{% endblock %}</title>
+    <title>{% block title %}{{ t.app_name }}{% endblock %}</title>
     <link rel="stylesheet" href="{% static 'css/style.css' %}">
     {% block extra_css %}{% endblock %}
 </head>
@@ -12,114 +12,124 @@
     <div class="app-shell">
         <!-- Header -->
         <header class="top-bar">
-            <div class="brand">관리자페이지</div>
+            <div class="brand">{{ t.app_short }}</div>
             <div class="top-actions">
-                <span class="user-info">{{ user.username }} ({{ user.get_role_display }})</span>
-                <a href="{% url 'cctv:logout' %}" class="ghost-button small">로그아웃</a>
+                <!-- Language Switch -->
+                <div class="lang-switch">
+                    <button class="lang-btn {% if current_lang == 'ko' %}active{% endif %}" onclick="setLanguage('ko')">한국어</button>
+                    <button class="lang-btn {% if current_lang == 'en' %}active{% endif %}" onclick="setLanguage('en')">EN</button>
+                </div>
+                <span class="user-info">{{ user.first_name|default:user.username }}</span>
+                <a href="{% url 'cctv:logout' %}" class="logout-btn">{{ t.logout }}</a>
             </div>
         </header>
 
-        <div class="layout {% if sidebar_collapsed %}layout-collapsed{% endif %}">
+        <div class="layout {% if sidebar_collapsed %}layout-collapsed{% endif %}" id="mainLayout">
             <!-- Sidebar -->
-            <aside class="sidebar">
+            <aside class="sidebar" id="sidebar">
                 <div class="sidebar-header">
-                    <button class="collapse-btn" id="toggleSidebar" aria-label="사이드바 접기">
-                        <
+                    <button class="collapse-btn" id="toggleSidebar" aria-label="Toggle Sidebar">
+                        ←
                     </button>
                 </div>
                 <nav class="nav-list">
                     {% if user.is_admin %}
                     <!-- Admin Navigation -->
                     <a href="{% url 'cctv:home' %}" class="nav-item {% if active_page == 'home' %}active{% endif %}">
-                        <span class="nav-dot"></span>
-                        <span class="nav-label">홈</span>
+                        <span class="nav-icon">🏠</span>
+                        <span class="nav-label">{{ t.nav_home }}</span>
                     </a>
                     
                     <div class="nav-group">
-                        <button class="nav-item nav-parent {% if 'monitor' in active_page %}active{% endif %}" onclick="toggleSubmenu('monitor')">
-                            <span class="nav-dot"></span>
-                            <span class="nav-label">실시간 모니터링</span>
-                            <span class="caret" id="monitor-caret">⌄</span>
+                        <button class="nav-item nav-parent" type="button">
+                            <span class="nav-icon">📹</span>
+                            <span class="nav-label">{{ t.nav_monitor }}</span>
+                            <span class="caret {% if 'monitor' in active_page %}open{% endif %}">▼</span>
                         </button>
-                        <div class="nav-sublist" id="monitor-submenu" style="display: {% if 'monitor' in active_page %}flex{% else %}none{% endif %}">
+                        <div class="nav-sublist" style="{% if 'monitor' in active_page %}display:flex{% endif %}">
                             <a href="{% url 'cctv:monitor_all' %}" class="nav-item nav-sub {% if active_page == 'monitor-all' %}active{% endif %}">
                                 <span class="nav-dot"></span>
-                                <span class="nav-label">전지점</span>
+                                <span class="nav-label">{{ t.nav_monitor_all }}</span>
                             </a>
                             <a href="{% url 'cctv:monitor_local' %}" class="nav-item nav-sub {% if active_page == 'monitor-local' %}active{% endif %}">
                                 <span class="nav-dot"></span>
-                                <span class="nav-label">현장</span>
+                                <span class="nav-label">{{ t.nav_monitor_local }}</span>
                             </a>
                         </div>
                     </div>
                     
                     <div class="nav-group">
-                        <button class="nav-item nav-parent {% if 'video' in active_page %}active{% endif %}" onclick="toggleSubmenu('video')">
-                            <span class="nav-dot"></span>
-                            <span class="nav-label">영상관리</span>
-                            <span class="caret" id="video-caret">⌄</span>
+                        <button class="nav-item nav-parent" type="button">
+                            <span class="nav-icon">🎬</span>
+                            <span class="nav-label">{{ t.nav_video }}</span>
+                            <span class="caret {% if 'video' in active_page %}open{% endif %}">▼</span>
                         </button>
-                        <div class="nav-sublist" id="video-submenu" style="display: {% if 'video' in active_page %}flex{% else %}none{% endif %}">
+                        <div class="nav-sublist" style="{% if 'video' in active_page %}display:flex{% endif %}">
                             <a href="{% url 'cctv:video_logs' %}" class="nav-item nav-sub {% if active_page == 'video-logs' %}active{% endif %}">
                                 <span class="nav-dot"></span>
-                                <span class="nav-label">이벤트 로그</span>
+                                <span class="nav-label">{{ t.nav_video_logs }}</span>
                             </a>
                             <a href="{% url 'cctv:video_full' %}" class="nav-item nav-sub {% if active_page == 'video-full' %}active{% endif %}">
                                 <span class="nav-dot"></span>
-                                <span class="nav-label">풀영상</span>
+                                <span class="nav-label">{{ t.nav_video_full }}</span>
                             </a>
                         </div>
                     </div>
                     
                     <div class="nav-group">
-                        <button class="nav-item nav-parent {% if 'manage' in active_page %}active{% endif %}" onclick="toggleSubmenu('manage')">
-                            <span class="nav-dot"></span>
-                            <span class="nav-label">관리</span>
-                            <span class="caret" id="manage-caret">⌄</span>
+                        <button class="nav-item nav-parent" type="button">
+                            <span class="nav-icon">⚙️</span>
+                            <span class="nav-label">{{ t.nav_manage }}</span>
+                            <span class="caret {% if 'manage' in active_page %}open{% endif %}">▼</span>
                         </button>
-                        <div class="nav-sublist" id="manage-submenu" style="display: {% if 'manage' in active_page %}flex{% else %}none{% endif %}">
+                        <div class="nav-sublist" style="{% if 'manage' in active_page %}display:flex{% endif %}">
                             <a href="{% url 'cctv:manage_branches' %}" class="nav-item nav-sub {% if active_page == 'manage-branches' %}active{% endif %}">
                                 <span class="nav-dot"></span>
-                                <span class="nav-label">지점관리</span>
+                                <span class="nav-label">{{ t.nav_manage_branches }}</span>
                             </a>
                         </div>
                     </div>
                     
                     <a href="{% url 'cctv:reports' %}" class="nav-item {% if active_page == 'reports' %}active{% endif %}">
-                        <span class="nav-dot"></span>
-                        <span class="nav-label">기본 리포트</span>
+                        <span class="nav-icon">📊</span>
+                        <span class="nav-label">{{ t.nav_reports }}</span>
                     </a>
                     
                     {% else %}
                     <!-- Project Manager Navigation -->
+                    <a href="{% url 'cctv:home' %}" class="nav-item {% if active_page == 'home' %}active{% endif %}">
+                        <span class="nav-icon">🏠</span>
+                        <span class="nav-label">{{ t.nav_home }}</span>
+                    </a>
+                    
                     <div class="nav-group">
-                        <button class="nav-item nav-parent {% if 'monitor' in active_page %}active{% endif %}" onclick="toggleSubmenu('monitor')">
-                            <span class="nav-dot"></span>
-                            <span class="nav-label">실시간 모니터링</span>
-                            <span class="caret" id="monitor-caret">⌄</span>
+                        <button class="nav-item nav-parent" type="button">
+                            <span class="nav-icon">📹</span>
+                            <span class="nav-label">{{ t.nav_monitor }}</span>
+                            <span class="caret {% if 'monitor' in active_page %}open{% endif %}">▼</span>
                         </button>
-                        <div class="nav-sublist" id="monitor-submenu" style="display: {% if 'monitor' in active_page %}flex{% else %}none{% endif %}">
+                        <div class="nav-sublist" style="{% if 'monitor' in active_page %}display:flex{% endif %}">
                             <a href="{% url 'cctv:monitor_local' %}" class="nav-item nav-sub {% if active_page == 'monitor-local' %}active{% endif %}">
                                 <span class="nav-dot"></span>
-                                <span class="nav-label">현장</span>
+                                <span class="nav-label">{{ t.nav_monitor_local }}</span>
                             </a>
                         </div>
                     </div>
                     
                     <div class="nav-group">
-                        <button class="nav-item nav-parent {% if 'video' in active_page %}active{% endif %}" onclick="toggleSubmenu('video')">
-                            <span class="nav-dot"></span>
-                            <span class="nav-label">영상관리</span>
-                            <span class="caret" id="video-caret">⌄</span>
+                        <button class="nav-item nav-parent" type="button">
+                            <span class="nav-icon">🎬</span>
+                            <span class="nav-label">{{ t.nav_video }}</span>
+                            <span class="caret {% if 'video' in active_page %}open{% endif %}">▼</span>
                         </button>
-                        <div class="nav-sublist" id="video-submenu" style="display: {% if 'video' in active_page %}flex{% else %}none{% endif %}">
+                        <div class="nav-sublist" style="{% if 'video' in active_page %}display:flex{% endif %}">
                             <a href="{% url 'cctv:video_logs' %}" class="nav-item nav-sub {% if active_page == 'video-logs' %}active{% endif %}">
                                 <span class="nav-dot"></span>
-                                <span class="nav-label">이벤트 로그</span>
+                                <span class="nav-label">{{ t.nav_video_logs }}</span>
                             </a>
                             <a href="{% url 'cctv:video_full' %}" class="nav-item nav-sub {% if active_page == 'video-full' %}active{% endif %}">
                                 <span class="nav-dot"></span>
-                                <span class="nav-label">풀영상</span>
+                                <span class="nav-label">{{ t.nav_video_full }}</span>
                             </a>
                         </div>
                     </div>
@@ -138,6 +148,25 @@
     <div id="modalContainer"></div>
 
     <script src="{% static 'js/main.js' %}"></script>
+    <script>
+        // Language switching
+        function setLanguage(lang) {
+            fetch('{% url "cctv:set_language" %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify({ lang: lang })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    window.location.reload();
+                }
+            });
+        }
+    </script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>

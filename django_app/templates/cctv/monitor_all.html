@@ -1,70 +1,160 @@
 {% extends 'cctv/base.html' %}
 
-{% block title %}전지점 모니터링 - Hotel CCTV Monitoring{% endblock %}
+{% block title %}{{ t.monitor_all_title }} - {{ t.app_name }}{% endblock %}
 
 {% block content %}
-<div class="panel">
-    <div class="page-header">
-        <div>
-            <p class="eyebrow">실시간 모니터링</p>
-            <h1>전지점</h1>
-        </div>
-    </div>
-    <div class="monitor-filters">
-        <div class="monitor-filter">
-            <label>지역</label>
-            <select id="regionFilter" onchange="filterBranches()">
-                <option value="all">전체</option>
-                {% for region in regions %}
-                <option value="{{ region.name }}">{{ region.name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div class="monitor-filter">
-            <label>검색</label>
-            <input id="searchFilter" placeholder="지점명 입력" oninput="filterBranches()">
-        </div>
-        <button class="ghost-button small" onclick="filterBranches()">검색</button>
-    </div>
-    <div class="monitor-grid" id="branchGrid">
-        {% for branch in branches %}
-        <div class="monitor-card" data-region="{{ branch.region.name }}" data-name="{{ branch.name }}">
-            <div class="monitor-header">
-                <h3>{{ branch.name }}</h3>
-                <span class="mono">{{ branch.region.name }}</span>
-            </div>
-            <div class="monitor-video">
-                <div class="video-placeholder">전지점 요약 화면</div>
-            </div>
-            <div class="monitor-footer">
-                <div class="viewer-meta">
-                    카메라: {{ branch.get_camera_count }}대<br>
-                    <span class="mono">오늘 이벤트: {{ branch.get_today_event_count }}건</span>
-                </div>
-                <a href="{% url 'cctv:monitor_local_branch' branch.id %}" class="ghost-button small">현장보기</a>
-            </div>
-        </div>
-        {% empty %}
-        <div class="empty-text">등록된 지점이 없습니다.</div>
-        {% endfor %}
+<div class="page-header">
+    <div class="page-header-left">
+        <p class="eyebrow">{{ t.monitor_all_subtitle }}</p>
+        <h1>{{ t.monitor_all_title }}</h1>
     </div>
 </div>
 
+<!-- Filters -->
+<div class="filters">
+    <div class="filter-group">
+        <label>{{ t.select_region }}</label>
+        <select id="regionFilter" onchange="filterBranches()">
+            <option value="">{{ t.all_regions }}</option>
+            {% for region in regions %}
+            <option value="{{ region.id }}">{{ region.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label>{{ t.search_placeholder }}</label>
+        <input type="text" id="searchInput" placeholder="{{ t.search_placeholder }}" onkeyup="filterBranches()">
+    </div>
+</div>
+
+<!-- Monitor Grid -->
+<div class="monitor-grid" id="monitorGrid">
+    {% for branch in branches %}
+    <div class="monitor-card" data-region="{{ branch.region.id }}" data-name="{{ branch.name|lower }}">
+        <div class="monitor-header">
+            <h3>{{ branch.name }}</h3>
+            <span class="status-pill status-{{ branch.status }}">{{ branch.get_status_display }}</span>
+        </div>
+        <div class="monitor-video">
+            {% if branch.cameras.first %}
+            <span class="live-badge">{{ t.live }}</span>
+            <div class="video-thumbnail" 
+                 data-camera-id="{{ branch.cameras.first.id }}"
+                 data-feed-url="{% url 'cctv:video_feed' branch.cameras.first.id %}"
+                 onclick="startStream(this)">
+                <div class="play-overlay">▶</div>
+                <img class="stream-img" src="" alt="{{ branch.name }}" style="display:none;">
+                <div class="click-to-play">Click to stream</div>
+            </div>
+            {% else %}
+            <div class="video-placeholder">{{ t.no_cameras }}</div>
+            {% endif %}
+        </div>
+        <div class="monitor-footer">
+            <span class="viewer-meta">{{ branch.region.name }}</span>
+            <a href="{% url 'cctv:monitor_local_branch' branch.id %}" class="btn btn-sm btn-ghost">{{ t.view_all }}</a>
+        </div>
+    </div>
+    {% empty %}
+    <div class="empty-state">
+        <p class="empty-state-text">{{ t.no_data }}</p>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .video-thumbnail {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        background: #1a1a2e;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 150px;
+    }
+    .video-thumbnail .play-overlay {
+        position: absolute;
+        font-size: 3rem;
+        color: rgba(255,255,255,0.8);
+        z-index: 2;
+        transition: transform 0.2s;
+    }
+    .video-thumbnail:hover .play-overlay {
+        transform: scale(1.2);
+    }
+    .video-thumbnail.streaming .play-overlay,
+    .video-thumbnail.streaming .click-to-play {
+        display: none;
+    }
+    .video-thumbnail .click-to-play {
+        position: absolute;
+        bottom: 10px;
+        color: rgba(255,255,255,0.6);
+        font-size: 0.85rem;
+    }
+    .video-thumbnail .stream-img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+</style>
+{% endblock %}
+
+{% block extra_js %}
 <script>
-function filterBranches() {
-    const region = document.getElementById('regionFilter').value;
-    const search = document.getElementById('searchFilter').value.toLowerCase();
-    const cards = document.querySelectorAll('.monitor-card');
+    // Track active streams
+    let activeStreams = [];
     
-    cards.forEach(card => {
-        const cardRegion = card.dataset.region;
-        const cardName = card.dataset.name.toLowerCase();
+    function startStream(element) {
+        if (element.classList.contains('streaming')) return;
         
-        const regionMatch = region === 'all' || cardRegion === region;
-        const searchMatch = cardName.includes(search);
+        const feedUrl = element.dataset.feedUrl;
+        const img = element.querySelector('.stream-img');
         
-        card.style.display = regionMatch && searchMatch ? 'flex' : 'none';
+        element.classList.add('streaming');
+        img.src = feedUrl;
+        img.style.display = 'block';
+        
+        activeStreams.push(img);
+    }
+    
+    function stopAllStreams() {
+        activeStreams.forEach(img => {
+            img.src = '';
+        });
+        activeStreams = [];
+    }
+    
+    // Stop streams when leaving page
+    window.addEventListener('beforeunload', stopAllStreams);
+    window.addEventListener('pagehide', stopAllStreams);
+    
+    // Also stop when clicking navigation links
+    document.addEventListener('click', function(e) {
+        const link = e.target.closest('a');
+        if (link && link.href && !link.href.includes('#')) {
+            stopAllStreams();
+        }
     });
-}
+
+    function filterBranches() {
+        const regionId = document.getElementById('regionFilter').value;
+        const searchText = document.getElementById('searchInput').value.toLowerCase();
+        const cards = document.querySelectorAll('.monitor-card');
+        
+        cards.forEach(card => {
+            const cardRegion = card.dataset.region;
+            const cardName = card.dataset.name;
+            
+            const matchRegion = !regionId || cardRegion === regionId;
+            const matchSearch = !searchText || cardName.includes(searchText);
+            
+            card.style.display = (matchRegion && matchSearch) ? 'flex' : 'none';
+        });
+    }
 </script>
 {% endblock %}
