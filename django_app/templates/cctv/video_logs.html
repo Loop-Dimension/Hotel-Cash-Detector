@@ -17,7 +17,7 @@
         <select id="regionFilter" onchange="filterBranchesByRegion()">
             <option value="">{{ t.all_regions }}</option>
             {% for region in regions %}
-            <option value="{{ region.id }}">{{ region.name }}</option>
+            <option value="{{ region.id }}" {% if filters.region == region.id|stringformat:"s" %}selected{% endif %}>{{ region.name }}</option>
             {% endfor %}
         </select>
     </div>
@@ -26,7 +26,7 @@
         <select id="branchFilter">
             <option value="">{{ t.all_branches }}</option>
             {% for branch in branches %}
-            <option value="{{ branch.id }}" data-region="{{ branch.region.id }}">{{ branch.name }}</option>
+            <option value="{{ branch.id }}" data-region="{{ branch.region.id }}" {% if filters.branch == branch.id|stringformat:"s" %}selected{% endif %}>{{ branch.name }}</option>
             {% endfor %}
         </select>
     </div>
@@ -34,20 +34,23 @@
         <label>{{ t.event_type }}</label>
         <select id="eventTypeFilter">
             <option value="">All</option>
-            <option value="cash">{{ t.event_cash }}</option>
-            <option value="violence">{{ t.event_violence }}</option>
-            <option value="fire">{{ t.event_fire }}</option>
+            <option value="cash" {% if filters.type == "cash" %}selected{% endif %}>{{ t.event_cash }}</option>
+            <option value="violence" {% if filters.type == "violence" %}selected{% endif %}>{{ t.event_violence }}</option>
+            <option value="fire" {% if filters.type == "fire" %}selected{% endif %}>{{ t.event_fire }}</option>
         </select>
     </div>
     <div class="filter-group">
         <label>{{ t.from_date }}</label>
-        <input type="date" id="dateFrom">
+        <input type="date" id="dateFrom" value="{{ filters.date_from }}">
     </div>
     <div class="filter-group">
         <label>{{ t.to_date }}</label>
-        <input type="date" id="dateTo">
+        <input type="date" id="dateTo" value="{{ filters.date_to }}">
     </div>
     <button class="btn btn-secondary" onclick="applyFilters()">{{ t.apply_filter }}</button>
+    {% if filters.region or filters.branch or filters.type or filters.date_from or filters.date_to %}
+    <button class="btn btn-outline" onclick="window.location.href='{% url 'cctv:video_logs' %}'">Clear</button>
+    {% endif %}
 </div>
 
 <!-- Three Column Layout -->

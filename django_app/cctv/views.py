@@ -153,9 +153,10 @@ def video_logs(request):
     regions = Region.objects.all()
     
     # Get filter parameters
-    date_filter = request.GET.get('date', timezone.now().date().isoformat())
-    region_filter = request.GET.get('region', 'all')
-    type_filter = request.GET.get('type', 'all')
+    date_from = request.GET.get('from', '')
+    date_to = request.GET.get('to', '')
+    region_filter = request.GET.get('region', '')
+    type_filter = request.GET.get('type', '')
     branch_filter = request.GET.get('branch', '')
     
     # Build query
@@ -164,15 +165,24 @@ def video_logs(request):
     if not user.is_admin():
         events = events.filter(branch__in=user_branches)
     
-    if date_filter:
-        events = events.filter(created_at__date=date_filter)
+    # Date range filter
+    if date_from:
+        events = events.filter(created_at__date__gte=date_from)
+    if date_to:
+        events = events.filter(created_at__date__lte=date_to)
     
-    if region_filter != 'all':
-        events = events.filter(branch__region__name=region_filter)
+    # Region filter (by ID)
+    if region_filter:
+        try:
+            events = events.filter(branch__region_id=int(region_filter))
+        except ValueError:
+            pass
     
-    if type_filter != 'all':
+    # Event type filter
+    if type_filter:
         events = events.filter(event_type=type_filter)
     
+    # Branch filter (by ID)
     if branch_filter:
         try:
             events = events.filter(branch_id=int(branch_filter))
@@ -194,7 +204,8 @@ def video_logs(request):
         'regions': regions,
         'active_page': 'video-logs',
         'filters': {
-            'date': date_filter,
+            'date_from': date_from,
+            'date_to': date_to,
             'region': region_filter,
             'type': type_filter,
             'branch': branch_filter,
@@ -2234,9 +2245,10 @@ class BackgroundCameraWorker:
         
         import cv2
         import subprocess
-        import shutil
+        import uuid
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        unique_id = uuid.uuid4().hex[:6]  # Add unique ID to prevent conflicts
         
         # Save to media/clips for web access
         clip_dir = Path(settings.MEDIA_ROOT) / 'clips'
@@ -2245,7 +2257,7 @@ class BackgroundCameraWorker:
         thumb_dir = Path(settings.MEDIA_ROOT) / 'thumbnails'
         thumb_dir.mkdir(parents=True, exist_ok=True)
         
-        temp_filename = f"{camera.camera_id}_{detection_type}_{timestamp}_temp.avi"
+        temp_filename = f"{camera.camera_id}_{detection_type}_{timestamp}_{unique_id}_temp.avi"
         final_filename = f"{camera.camera_id}_{detection_type}_{timestamp}.mp4"
         
         temp_path = clip_dir / temp_filename
@@ -2275,6 +2287,7 @@ class BackgroundCameraWorker:
             frame_count += 1
         
         out.release()
+        out = None  # Ensure handle is released
         
         print(f"[Clip] Wrote {frame_count} frames to temp file")
         
@@ -2289,9 +2302,8 @@ class BackgroundCameraWorker:
                 str(final_path)
             ], capture_output=True, timeout=180)
             
-            # Clean up temp file
-            if temp_path.exists():
-                temp_path.unlink()
+            # Clean up temp file with retry for Windows file locking
+            self._safe_delete(temp_path)
             
             if result.returncode == 0 and final_path.exists():
                 print(f"[Clip] Saved: {final_path} ({final_path.stat().st_size / 1024:.1f} KB)")
@@ -2301,18 +2313,15 @@ class BackgroundCameraWorker:
                 
         except subprocess.TimeoutExpired:
             print(f"[Clip] FFmpeg timeout")
-            if temp_path.exists():
-                temp_path.unlink()
+            self._safe_delete(temp_path)
             return None
         except FileNotFoundError:
             print(f"[Clip] FFmpeg not found")
-            if temp_path.exists():
-                temp_path.unlink()
+            self._safe_delete(temp_path)
             return None
         except Exception as e:
             print(f"[Clip] Error: {e}")
-            if temp_path.exists():
-                temp_path.unlink()
+            self._safe_delete(temp_path)
             return None
         
         # Save thumbnail from last frame
@@ -2330,10 +2339,46 @@ class BackgroundCameraWorker:
         
         return f'/media/clips/{final_filename}', f'/media/thumbnails/{thumb_filename}'
     
+    def _safe_delete(self, file_path, retries=3, delay=0.5):
+        """Safely delete a file with retries for Windows file locking issues."""
+        import time as time_module
+        for attempt in range(retries):
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+                return True
+            except PermissionError:
+                if attempt < retries - 1:
+                    time_module.sleep(delay)
+                else:
+                    # File will be deleted on next cleanup
+                    print(f"[Clip] Note: Temp file will be cleaned up later: {file_path.name}")
+                    return False
+            except Exception:
+                return False
+        return False
+    
+    def _cleanup_temp_files(self):
+        """Clean up any leftover temp files from previous runs."""
+        try:
+            clip_dir = Path(settings.MEDIA_ROOT) / 'clips'
+            if clip_dir.exists():
+                for temp_file in clip_dir.glob('*_temp.avi'):
+                    try:
+                        temp_file.unlink()
+                        print(f"[Clip] Cleaned up old temp file: {temp_file.name}")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    
     def run(self):
         import cv2
         from django.db import connection
         connection.close()
+        
+        # Clean up any leftover temp files from previous runs
+        self._cleanup_temp_files()
         
         camera = self.get_camera()
         if not camera:
