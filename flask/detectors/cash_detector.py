@@ -140,8 +140,57 @@ class CashTransactionDetector(BaseDetector):
         zx, zy, zw, zh = self.cashier_zone
         return zx <= x <= zx + zw and zy <= y <= zy + zh
     
+    def get_person_center(self, keypoints: np.ndarray, bbox: Tuple[int, int, int, int]) -> Tuple[int, int]:
+        """
+        Get the center point of a person using hip keypoints (most stable).
+        Falls back to bbox center if keypoints not available.
+        
+        COCO keypoint indices:
+        - 11: left_hip, 12: right_hip
+        - 5: left_shoulder, 6: right_shoulder
+        """
+        LEFT_HIP = 11
+        RIGHT_HIP = 12
+        LEFT_SHOULDER = 5
+        RIGHT_SHOULDER = 6
+        
+        # Try to use hip center (most stable for determining position)
+        if keypoints is not None and len(keypoints) > RIGHT_HIP:
+            left_hip = keypoints[LEFT_HIP]
+            right_hip = keypoints[RIGHT_HIP]
+            
+            # Check if hips are detected with good confidence
+            if (len(left_hip) >= 3 and left_hip[2] > 0.3 and 
+                len(right_hip) >= 3 and right_hip[2] > 0.3):
+                center_x = int((left_hip[0] + right_hip[0]) / 2)
+                center_y = int((left_hip[1] + right_hip[1]) / 2)
+                return (center_x, center_y)
+            
+            # Fallback to shoulder center
+            if len(keypoints) > RIGHT_SHOULDER:
+                left_shoulder = keypoints[LEFT_SHOULDER]
+                right_shoulder = keypoints[RIGHT_SHOULDER]
+                
+                if (len(left_shoulder) >= 3 and left_shoulder[2] > 0.3 and 
+                    len(right_shoulder) >= 3 and right_shoulder[2] > 0.3):
+                    center_x = int((left_shoulder[0] + right_shoulder[0]) / 2)
+                    center_y = int((left_shoulder[1] + right_shoulder[1]) / 2)
+                    return (center_x, center_y)
+        
+        # Fallback to bbox center
+        x1, y1, x2, y2 = bbox
+        return (int((x1 + x2) / 2), int((y1 + y2) / 2))
+    
+    def is_person_in_cashier_zone(self, keypoints: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
+        """
+        Check if a person is in the cashier zone using their CENTER POINT.
+        This ensures one person = one classification (not split between zones).
+        """
+        center = self.get_person_center(keypoints, bbox)
+        return self.is_in_cashier_zone(center)
+    
     def is_box_in_cashier_zone(self, bbox: Tuple[int, int, int, int], threshold: float = 0.3) -> bool:
-        """Check if a bounding box overlaps with cashier zone"""
+        """Check if a bounding box overlaps with cashier zone (legacy, kept for compatibility)"""
         x1, y1, x2, y2 = bbox
         zx, zy, zw, zh = self.cashier_zone
         
@@ -274,11 +323,18 @@ class CashTransactionDetector(BaseDetector):
                     bbox = tuple(map(int, box))
                     hands = self.get_hand_positions(kpts)
                     
+                    # Use CENTER POINT to determine if person is in cashier zone
+                    # This ensures one person = one classification (not split)
+                    center = self.get_person_center(kpts, bbox)
+                    in_zone = self.is_in_cashier_zone(center)
+                    
                     person_info = {
                         'idx': idx,
                         'bbox': bbox,
                         'hands': hands,
-                        'in_cashier_zone': self.is_box_in_cashier_zone(bbox)
+                        'keypoints': kpts,
+                        'center': center,
+                        'in_cashier_zone': in_zone
                     }
                     
                     people_hands.append(person_info)
@@ -399,7 +455,7 @@ class CashTransactionDetector(BaseDetector):
     
     def draw_pose_overlay(self, frame: np.ndarray) -> np.ndarray:
         """Draw pose estimation overlay with hand positions and distances on frame.
-        Shows hand positions and distance lines between people's hands.
+        Shows hand positions, center point, and distance lines between people's hands.
         """
         if not self.is_initialized or self.pose_model is None:
             return frame
@@ -422,7 +478,10 @@ class CashTransactionDetector(BaseDetector):
                     bbox = tuple(map(int, box))
                     x1, y1, x2, y2 = bbox
                     hands = self.get_hand_positions(kpts)
-                    in_zone = self.is_box_in_cashier_zone(bbox)
+                    
+                    # Use CENTER POINT for zone determination
+                    center = self.get_person_center(kpts, bbox)
+                    in_zone = self.is_in_cashier_zone(center)
                     
                     # Color based on zone (green = cashier, orange = customer)
                     color = (0, 255, 0) if in_zone else (0, 165, 255)
@@ -430,6 +489,12 @@ class CashTransactionDetector(BaseDetector):
                     
                     # Draw person bounding box
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    
+                    # Draw CENTER POINT (larger, visible marker)
+                    cv2.circle(frame, center, 12, color, -1)
+                    cv2.circle(frame, center, 12, (255, 255, 255), 2)
+                    cv2.putText(frame, "C", (center[0] - 5, center[1] + 5), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 2)
                     
                     # Draw role label
                     (text_w, text_h), _ = cv2.getTextSize(role, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
