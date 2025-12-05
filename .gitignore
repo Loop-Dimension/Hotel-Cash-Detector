@@ -1,8 +1,81 @@
+# Environment files
+.env
+.env.example
+.env.local
+.env.production
 django_app/.env
 django_app/.env.example
-/django_app/models
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.venv/
+ENV/
+
+# YOLO Models (large files)
+*.pt
+/models/
+/django_app/models/
+/flask/models/
+
+# Media files (generated)
 *.mp4
+*.avi
 *.jpg
-.env.example
-.env
-/models
+*.jpeg
+*.png
+*.gif
+/django_app/media/
+/flask/output/
+/flask/uploads/
+
+# Database
+*.sqlite3
+*.db
+db.sqlite3
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temp files
+*_temp.avi
+*.tmp
+temp/
+
+# Node modules (React dashboard)
+node_modules/
+/flask/cctv-dashboard-main/node_modules/
+
+# Build outputs
+/flask/cctv-dashboard-main/dist/
