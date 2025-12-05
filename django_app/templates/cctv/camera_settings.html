@@ -246,7 +246,7 @@
         <p class="text-muted">{{ t.camera_settings }} - {{ camera.camera_id }}</p>
     </div>
     <div class="page-actions">
-        <button class="btn btn-primary" onclick="saveAllSettings()">{{ t.save }}</button>
+        <!-- Save button removed - now inside Developer Mode only -->
     </div>
 </div>
 
@@ -273,153 +273,270 @@
             <img id="liveVideo" src="" alt="Live Preview" style="display:none;">
             <canvas id="zoneCanvas" width="1024" height="576"></canvas>
         </div>
-        
-        <!-- Cashier Zone Toggle Button (Hidden by default, click to show) -->
-        <div class="toggle-group" style="margin-top: 16px;">
-            <div class="toggle-info">
-                <span class="toggle-label">{{ t.setup_cashier_zone }}</span>
-                <span class="toggle-desc">{{ t.cashier_zone }}</span>
-            </div>
-            <button class="btn btn-sm btn-ghost" id="toggleCashierZoneBtn" onclick="toggleCashierZoneSettings()">
-                <span id="cashierZoneBtnText">▼ Show</span>
-            </button>
-        </div>
-        
-        <!-- Cashier Zone Settings (Hidden by default) -->
-        <div id="cashierZoneSettings" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-light);">
-            <div class="toggle-group">
-                <div class="toggle-info">
-                    <span class="toggle-label">{{ t.zone_enabled }}</span>
-                    <span class="toggle-desc">{{ t.cashier_zone }}</span>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="zoneEnabled" {% if camera.cashier_zone_enabled %}checked{% endif %}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            
-            <div class="zone-controls">
-                <div class="form-group">
-                    <label>{{ t.zone_x }}</label>
-                    <input type="number" id="zoneX" value="{{ camera.cashier_zone_x }}" min="0" max="640">
-                </div>
-                <div class="form-group">
-                    <label>{{ t.zone_y }}</label>
-                    <input type="number" id="zoneY" value="{{ camera.cashier_zone_y }}" min="0" max="480">
-                </div>
-                <div class="form-group">
-                    <label>{{ t.zone_width }}</label>
-                    <input type="number" id="zoneWidth" value="{{ camera.cashier_zone_width }}" min="50" max="640">
-                </div>
-                <div class="form-group">
-                    <label>{{ t.zone_height }}</label>
-                    <input type="number" id="zoneHeight" value="{{ camera.cashier_zone_height }}" min="50" max="480">
-                </div>
-            </div>
-            
-            <div class="btn-group">
-                <button class="btn btn-secondary" onclick="resetZone()">{{ t.reset_zone }}</button>
-                <button class="btn btn-primary" onclick="saveZone()">{{ t.save_zone }}</button>
-            </div>
-        </div>
     </div>
     
-    <!-- Detection Settings -->
-    <div class="settings-section">
-        <h3>{{ t.detection_settings }}</h3>
-        
-        <!-- Show Cashier Zone Box Toggle (UI only - hidden by default) -->
-        <div class="toggle-group" style="background: var(--yellow-50); border: 1px solid var(--yellow-200);">
-            <div class="toggle-info">
-                <span class="toggle-label">{{ t.show_zone_overlay }}</span>
-                <span class="toggle-desc">{{ t.cashier_zone }}</span>
-            </div>
-            <label class="toggle-switch">
-                <input type="checkbox" id="showZoneOverlay" onchange="toggleZoneOverlay()">
-                <span class="toggle-slider"></span>
-            </label>
+    <!-- Developer Mode Section (Contains ALL settings) -->
+    <div class="settings-section" style="background: #1a1a2e; border: 2px solid var(--gray-700);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h3 style="color: #fff; margin: 0;">🔧 {{ t.developer_mode }}</h3>
+            <button class="btn btn-sm btn-secondary" id="devModeToggleBtn" onclick="toggleDevModeSection()">
+                <span id="devModeBtnText">▼ Show</span>
+            </button>
         </div>
+        <p style="color: var(--gray-400); font-size: 13px; margin-bottom: 16px;">{{ t.developer_mode_desc }}</p>
         
-        <!-- Detection Toggles -->
-        <div class="toggle-group">
-            <div class="toggle-info">
-                <span class="toggle-label">{{ t.detect_cash }}</span>
-                <span class="toggle-desc">{{ t.event_cash }}</span>
+        <!-- Developer Mode Settings (Hidden by default) -->
+        <div id="devModeSettings" style="display: none;">
+            
+            <!-- Password Entry (shown when locked) -->
+            <div id="devPasswordSection" style="padding: 20px; background: var(--gray-800); border-radius: 12px;">
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <input type="password" id="devPassword" placeholder="{{ t.enter_dev_password }}" 
+                           style="flex: 1; padding: 12px; border-radius: 8px; border: 1px solid var(--gray-600); background: var(--gray-900); color: #fff;">
+                    <button class="btn btn-primary" onclick="unlockDevMode()">🔓 {{ t.unlock_dev_mode }}</button>
+                </div>
+                <p id="devPasswordError" style="color: #ef4444; margin-top: 8px; display: none;">{{ t.wrong_password }}</p>
             </div>
-            <label class="toggle-switch">
-                <input type="checkbox" id="detectCash" {% if camera.detect_cash %}checked{% endif %}>
-                <span class="toggle-slider"></span>
-            </label>
-        </div>
-        
-        <div class="toggle-group">
-            <div class="toggle-info">
-                <span class="toggle-label">{{ t.detect_violence }}</span>
-                <span class="toggle-desc">{{ t.event_violence }}</span>
+            
+            <!-- Developer Controls (shown when unlocked) -->
+            <div id="devControlsSection" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding: 12px 16px; background: rgba(34, 197, 94, 0.2); border-radius: 8px; border: 1px solid var(--green-600);">
+                    <span style="color: #22c55e; font-weight: 600;">✓ {{ t.dev_mode_unlocked }}</span>
+                    <button class="btn btn-sm btn-ghost" style="color: #ef4444;" onclick="lockDevMode()">🔒 {{ t.lock_dev_mode }}</button>
+                </div>
+                
+                <!-- ==================== CASHIER ZONE SETUP ==================== -->
+                <div style="margin-bottom: 24px; padding: 20px; background: var(--gray-800); border-radius: 12px;">
+                    <h4 style="color: #fff; margin-bottom: 16px;">📍 {{ t.setup_cashier_zone }}</h4>
+                    
+                    <div class="toggle-group" style="background: var(--gray-700); margin-bottom: 16px;">
+                        <div class="toggle-info">
+                            <span class="toggle-label" style="color: #fff;">{{ t.zone_enabled }}</span>
+                            <span class="toggle-desc" style="color: var(--gray-400);">{{ t.cashier_zone }}</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="zoneEnabled" {% if camera.cashier_zone_enabled %}checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="toggle-group" style="background: var(--yellow-900); border: 1px solid var(--yellow-600); margin-bottom: 16px;">
+                        <div class="toggle-info">
+                            <span class="toggle-label" style="color: #fbbf24;">{{ t.show_zone_overlay }}</span>
+                            <span class="toggle-desc" style="color: var(--yellow-200);">Show yellow box on video</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="showZoneOverlay" onchange="toggleZoneOverlay()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="zone-controls" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px;">
+                        <div class="form-group">
+                            <label style="color: var(--gray-300);">{{ t.zone_x }}</label>
+                            <input type="number" id="zoneX" value="{{ camera.cashier_zone_x }}" min="0" max="1920" 
+                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
+                        </div>
+                        <div class="form-group">
+                            <label style="color: var(--gray-300);">{{ t.zone_y }}</label>
+                            <input type="number" id="zoneY" value="{{ camera.cashier_zone_y }}" min="0" max="1080"
+                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
+                        </div>
+                        <div class="form-group">
+                            <label style="color: var(--gray-300);">{{ t.zone_width }}</label>
+                            <input type="number" id="zoneWidth" value="{{ camera.cashier_zone_width }}" min="50" max="1920"
+                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
+                        </div>
+                        <div class="form-group">
+                            <label style="color: var(--gray-300);">{{ t.zone_height }}</label>
+                            <input type="number" id="zoneHeight" value="{{ camera.cashier_zone_height }}" min="50" max="1080"
+                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
+                        </div>
+                    </div>
+                    
+                    <p style="color: var(--gray-400); font-size: 12px; margin-bottom: 12px;">💡 Tip: Click and drag on the video to draw the cashier zone</p>
+                    
+                    <div class="btn-group" style="display: flex; gap: 12px;">
+                        <button class="btn btn-secondary" onclick="resetZone()">{{ t.reset_zone }}</button>
+                        <button class="btn btn-primary" onclick="saveZone()">{{ t.save_zone }}</button>
+                    </div>
+                </div>
+                
+                <!-- ==================== DETECTION TOGGLES ==================== -->
+                <div style="margin-bottom: 24px; padding: 20px; background: var(--gray-800); border-radius: 12px;">
+                    <h4 style="color: #fff; margin-bottom: 16px;">🎯 {{ t.detection_settings }}</h4>
+                    
+                    <div class="toggle-group" style="background: var(--gray-700);">
+                        <div class="toggle-info">
+                            <span class="toggle-label" style="color: #fff;">{{ t.detect_cash }}</span>
+                            <span class="toggle-desc" style="color: var(--gray-400);">{{ t.event_cash }}</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="detectCash" {% if camera.detect_cash %}checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="toggle-group" style="background: var(--gray-700);">
+                        <div class="toggle-info">
+                            <span class="toggle-label" style="color: #fff;">{{ t.detect_violence }}</span>
+                            <span class="toggle-desc" style="color: var(--gray-400);">{{ t.event_violence }}</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="detectViolence" {% if camera.detect_violence %}checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="toggle-group" style="background: var(--gray-700);">
+                        <div class="toggle-info">
+                            <span class="toggle-label" style="color: #fff;">{{ t.detect_fire }}</span>
+                            <span class="toggle-desc" style="color: var(--gray-400);">{{ t.event_fire }}</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="detectFire" {% if camera.detect_fire %}checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                
+                <!-- ==================== CONFIDENCE THRESHOLDS ==================== -->
+                <div style="margin-bottom: 24px; padding: 20px; background: var(--gray-800); border-radius: 12px;">
+                    <h4 style="color: #fff; margin-bottom: 16px;">📊 {{ t.confidence_threshold }}</h4>
+                    
+                    <!-- Cash Confidence Slider -->
+                    <div class="slider-group" style="margin-bottom: 20px;">
+                        <div class="slider-header" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span class="slider-label" style="color: var(--gray-300);">{{ t.cash_confidence }}</span>
+                            <span class="slider-value" id="cashConfValue" style="color: #22c55e; background: var(--gray-700); padding: 4px 12px; border-radius: 6px;">{{ camera.cash_confidence|floatformat:2 }}</span>
+                        </div>
+                        <input type="range" class="slider-input" id="cashConfidence" 
+                               min="0" max="1" step="0.05" value="{{ camera.cash_confidence }}"
+                               oninput="updateSliderValue('cash')">
+                    </div>
+                    
+                    <!-- Hand Touch Distance Slider -->
+                    <div class="slider-group" style="margin-bottom: 20px;">
+                        <div class="slider-header" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span class="slider-label" style="color: var(--gray-300);">{{ t.hand_touch_distance }}</span>
+                            <span class="slider-value" id="handDistanceValue" style="color: #3b82f6; background: var(--gray-700); padding: 4px 12px; border-radius: 6px;">{{ camera.hand_touch_distance|default:100 }}px</span>
+                        </div>
+                        <input type="range" class="slider-input" id="handTouchDistance" 
+                               min="30" max="300" step="10" value="{{ camera.hand_touch_distance|default:100 }}"
+                               oninput="updateSliderValue('handDistance')">
+                    </div>
+                    
+                    <!-- Violence Confidence Slider -->
+                    <div class="slider-group" style="margin-bottom: 20px;">
+                        <div class="slider-header" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span class="slider-label" style="color: var(--gray-300);">{{ t.violence_confidence }}</span>
+                            <span class="slider-value" id="violenceConfValue" style="color: #ef4444; background: var(--gray-700); padding: 4px 12px; border-radius: 6px;">{{ camera.violence_confidence|floatformat:2 }}</span>
+                        </div>
+                        <input type="range" class="slider-input" id="violenceConfidence" 
+                               min="0" max="1" step="0.05" value="{{ camera.violence_confidence }}"
+                               oninput="updateSliderValue('violence')">
+                    </div>
+                    
+                    <!-- Fire Confidence Slider -->
+                    <div class="slider-group">
+                        <div class="slider-header" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span class="slider-label" style="color: var(--gray-300);">{{ t.fire_confidence }}</span>
+                            <span class="slider-value" id="fireConfValue" style="color: #f97316; background: var(--gray-700); padding: 4px 12px; border-radius: 6px;">{{ camera.fire_confidence|floatformat:2 }}</span>
+                        </div>
+                        <input type="range" class="slider-input" id="fireConfidence" 
+                               min="0" max="1" step="0.05" value="{{ camera.fire_confidence }}"
+                               oninput="updateSliderValue('fire')">
+                    </div>
+                </div>
+                
+                <!-- ==================== DEBUG OVERLAY ==================== -->
+                <div style="margin-bottom: 24px; padding: 20px; background: var(--gray-800); border-radius: 12px; border: 1px solid var(--green-700);">
+                    <h4 style="color: #22c55e; margin-bottom: 16px;">🐛 {{ t.debug_overlay }}</h4>
+                    
+                    <div class="toggle-group" style="background: var(--gray-700); border: 1px solid var(--green-600);">
+                        <div class="toggle-info">
+                            <span class="toggle-label" style="color: #fff;">Enable Debug Overlay</span>
+                            <span class="toggle-desc" style="color: var(--gray-400);">{{ t.debug_overlay_desc }}</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="debugOverlayEnabled" onchange="toggleDebugMode()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    
+                    <!-- Person Confidence Threshold Slider -->
+                    <div class="slider-group" style="margin-top: 16px; padding: 16px; background: var(--gray-700); border-radius: 8px;">
+                        <div class="slider-header" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span class="slider-label" style="color: var(--gray-300);">📊 Person Detection Confidence</span>
+                            <span class="slider-value" id="poseConfValue" style="color: #a855f7; background: var(--gray-800); padding: 4px 12px; border-radius: 6px;">{{ camera.pose_confidence|default:0.3|floatformat:2 }}</span>
+                        </div>
+                        <input type="range" class="slider-input" id="poseConfidence" 
+                               min="0.1" max="0.9" step="0.05" value="{{ camera.pose_confidence|default:0.3 }}"
+                               oninput="updateSliderValue('pose')"
+                               style="accent-color: #a855f7;">
+                        <p style="color: var(--gray-500); font-size: 12px; margin-top: 8px;">Minimum confidence to show person in debug overlay (lower = more detections)</p>
+                    </div>
+                    
+                    <!-- Debug Features when enabled -->
+                    <div id="debugFeaturesPanel" style="display: none; margin-top: 16px; padding: 16px; background: #0a0a0a; border-radius: 8px; border: 1px solid var(--green-600);">
+                        <h5 style="color: #22c55e; margin-bottom: 12px;">Debug Features Active:</h5>
+                        <ul style="color: #e5e5e5; list-style: none; padding: 0; margin: 0; font-size: 13px;">
+                            <li style="margin-bottom: 8px;">👤 <strong>{{ t.label_persons }}</strong> - <span style="color: #22c55e;">CASHIER</span> (in zone) / <span style="color: #f97316;">CLIENT</span> (outside)</li>
+                            <li style="margin-bottom: 8px;">✋ <strong>{{ t.show_poses }}</strong> - Skeleton overlay showing body keypoints</li>
+                            <li style="margin-bottom: 8px;">📏 <strong>{{ t.show_hand_distance }}</strong> - Lines between hands with distance in pixels</li>
+                            <li>📊 <strong>{{ t.event_processing_debug }}</strong> - Detection frame counters and thresholds</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <!-- ==================== EVENT PROCESSING DEBUG INFO ==================== -->
+                <div style="padding: 20px; background: #0a0a0a; border-radius: 12px; border: 1px solid var(--gray-700);">
+                    <h4 style="color: #fff; margin-bottom: 12px;">{{ t.event_processing_debug }}</h4>
+                    <p style="color: var(--gray-400); font-size: 13px; margin-bottom: 16px;">{{ t.event_processing_desc }}</p>
+                    
+                    <div id="debugInfoPanel" style="background: #000; border-radius: 8px; padding: 16px; font-family: 'Consolas', monospace; font-size: 13px; border: 1px solid var(--gray-800);">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            <div>
+                                <span style="color: #888;">Frame Count:</span>
+                                <span id="debugFrameCount" style="color: #fff; margin-left: 8px;">-</span>
+                            </div>
+                            <div>
+                                <span style="color: #888;">Cash Frames:</span>
+                                <span id="debugCashFrames" style="color: #22c55e; margin-left: 8px;">-</span>
+                            </div>
+                            <div>
+                                <span style="color: #888;">Violence Frames:</span>
+                                <span id="debugViolenceFrames" style="color: #ef4444; margin-left: 8px;">-</span>
+                            </div>
+                            <div>
+                                <span style="color: #888;">Fire Frames:</span>
+                                <span id="debugFireFrames" style="color: #f97316; margin-left: 8px;">-</span>
+                            </div>
+                            <div>
+                                <span style="color: #888;">Hand Distance:</span>
+                                <span id="debugHandDistance" style="color: #3b82f6; margin-left: 8px;">-</span>
+                            </div>
+                            <div>
+                                <span style="color: #888;">Frames Since Event:</span>
+                                <span id="debugFramesSinceEvent" style="color: #fff; margin-left: 8px;">-</span>
+                            </div>
+                        </div>
+                        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
+                            <span style="color: #888;">Last Alert:</span>
+                            <span id="debugLastAlert" style="color: #fbbf24; margin-left: 8px;">None</span>
+                        </div>
+                    </div>
+                    
+                    <button class="btn btn-sm btn-secondary" style="margin-top: 12px;" onclick="refreshDebugInfo()">🔄 Refresh Debug Info</button>
+                </div>
+                
+                <!-- Save All Button -->
+                <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--gray-700);">
+                    <button class="btn btn-primary" style="width: 100%; padding: 16px; font-size: 16px;" onclick="saveAllSettings()">
+                        💾 {{ t.save }} All Settings
+                    </button>
+                </div>
             </div>
-            <label class="toggle-switch">
-                <input type="checkbox" id="detectViolence" {% if camera.detect_violence %}checked{% endif %}>
-                <span class="toggle-slider"></span>
-            </label>
-        </div>
-        
-        <div class="toggle-group">
-            <div class="toggle-info">
-                <span class="toggle-label">{{ t.detect_fire }}</span>
-                <span class="toggle-desc">{{ t.event_fire }}</span>
-            </div>
-            <label class="toggle-switch">
-                <input type="checkbox" id="detectFire" {% if camera.detect_fire %}checked{% endif %}>
-                <span class="toggle-slider"></span>
-            </label>
-        </div>
-        
-        <hr style="margin: 24px 0; border: 0; border-top: 1px solid var(--border-light);">
-        
-        <h4 style="margin-bottom: 16px;">{{ t.confidence_threshold }}</h4>
-        
-        <!-- Cash Confidence Slider -->
-        <div class="slider-group">
-            <div class="slider-header">
-                <span class="slider-label">{{ t.cash_confidence }}</span>
-                <span class="slider-value" id="cashConfValue">{{ camera.cash_confidence|floatformat:2 }}</span>
-            </div>
-            <input type="range" class="slider-input" id="cashConfidence" 
-                   min="0" max="1" step="0.05" value="{{ camera.cash_confidence }}"
-                   oninput="updateSliderValue('cash')">
-        </div>
-        
-        <!-- Hand Touch Distance Slider (pixels) -->
-        <div class="slider-group">
-            <div class="slider-header">
-                <span class="slider-label">{{ t.hand_touch_distance }}</span>
-                <span class="slider-value" id="handDistanceValue">{{ camera.hand_touch_distance|default:100 }}px</span>
-            </div>
-            <input type="range" class="slider-input" id="handTouchDistance" 
-                   min="30" max="300" step="10" value="{{ camera.hand_touch_distance|default:100 }}"
-                   oninput="updateSliderValue('handDistance')">
-        </div>
-        
-        <!-- Violence Confidence Slider -->
-        <div class="slider-group">
-            <div class="slider-header">
-                <span class="slider-label">{{ t.violence_confidence }}</span>
-                <span class="slider-value" id="violenceConfValue">{{ camera.violence_confidence|floatformat:2 }}</span>
-            </div>
-            <input type="range" class="slider-input" id="violenceConfidence" 
-                   min="0" max="1" step="0.05" value="{{ camera.violence_confidence }}"
-                   oninput="updateSliderValue('violence')">
-        </div>
-        
-        <!-- Fire Confidence Slider -->
-        <div class="slider-group">
-            <div class="slider-header">
-                <span class="slider-label">{{ t.fire_confidence }}</span>
-                <span class="slider-value" id="fireConfValue">{{ camera.fire_confidence|floatformat:2 }}</span>
-            </div>
-            <input type="range" class="slider-input" id="fireConfidence" 
-                   min="0" max="1" step="0.05" value="{{ camera.fire_confidence }}"
-                   oninput="updateSliderValue('fire')">
         </div>
     </div>
 </div>
@@ -436,7 +553,6 @@
     let videoActive = false;
     let canvasWidth = 1024;
     let canvasHeight = 576;
-    let cashierZoneVisible = false;
     let showZoneOverlay = false;  // Yellow box hidden by default
     let currentZone = {
         x: {{ camera.cashier_zone_x }},
@@ -449,25 +565,6 @@
     function toggleZoneOverlay() {
         showZoneOverlay = document.getElementById('showZoneOverlay').checked;
         drawZone();
-    }
-    
-    // Toggle cashier zone settings visibility
-    function toggleCashierZoneSettings() {
-        const settings = document.getElementById('cashierZoneSettings');
-        const btnText = document.getElementById('cashierZoneBtnText');
-        cashierZoneVisible = !cashierZoneVisible;
-        
-        if (cashierZoneVisible) {
-            settings.style.display = 'block';
-            btnText.textContent = '▲ Hide';
-            // Auto-enable zone overlay when editing
-            showZoneOverlay = true;
-            document.getElementById('showZoneOverlay').checked = true;
-            drawZone();
-        } else {
-            settings.style.display = 'none';
-            btnText.textContent = '▼ Show';
-        }
     }
     
     // Initialize canvas with placeholder or transparent overlay
@@ -590,6 +687,10 @@
             const slider = document.getElementById('handTouchDistance');
             const display = document.getElementById('handDistanceValue');
             display.textContent = slider.value + 'px';
+        } else if (type === 'pose') {
+            const slider = document.getElementById('poseConfidence');
+            const display = document.getElementById('poseConfValue');
+            display.textContent = parseFloat(slider.value).toFixed(2);
         } else {
             const slider = document.getElementById(type + 'Confidence');
             const display = document.getElementById(type + 'ConfValue');
@@ -627,6 +728,7 @@
     }
     
     async function saveAllSettings() {
+        const poseConfEl = document.getElementById('poseConfidence');
         const data = {
             detect_cash: document.getElementById('detectCash').checked,
             detect_violence: document.getElementById('detectViolence').checked,
@@ -635,6 +737,7 @@
             hand_touch_distance: parseInt(document.getElementById('handTouchDistance').value),
             violence_confidence: parseFloat(document.getElementById('violenceConfidence').value),
             fire_confidence: parseFloat(document.getElementById('fireConfidence').value),
+            pose_confidence: poseConfEl ? parseFloat(poseConfEl.value) : 0.3,
             cashier_zone: {
                 x: currentZone.x,
                 y: currentZone.y,
@@ -755,6 +858,215 @@
         
         indicator.className = 'status-indicator online';
         statusText.textContent = '{{ t.status_online }} ✓';
+    }
+    
+    // ==================== DEVELOPER MODE ====================
+    let devModeVisible = false;
+    let devModeUnlocked = false;
+    let debugRefreshInterval = null;
+    
+    // Toggle developer mode section visibility
+    function toggleDevModeSection() {
+        const settings = document.getElementById('devModeSettings');
+        const btnText = document.getElementById('devModeBtnText');
+        devModeVisible = !devModeVisible;
+        
+        if (devModeVisible) {
+            settings.style.display = 'block';
+            btnText.textContent = '▲ Hide';
+            // Check if already unlocked
+            checkDevModeStatus();
+        } else {
+            settings.style.display = 'none';
+            btnText.textContent = '▼ Show';
+        }
+    }
+    
+    // Check developer mode status
+    async function checkDevModeStatus() {
+        try {
+            const response = await fetch(`/api/cameras/${cameraId}/dev-mode/status/`);
+            const data = await response.json();
+            
+            if (data.enabled) {
+                devModeUnlocked = true;
+                showDevControls();
+            }
+        } catch (error) {
+            console.error('Failed to check dev mode status:', error);
+        }
+    }
+    
+    // Unlock developer mode with password
+    async function unlockDevMode() {
+        const password = document.getElementById('devPassword').value;
+        const errorEl = document.getElementById('devPasswordError');
+        
+        try {
+            const response = await fetch(`/api/cameras/${cameraId}/dev-mode/verify/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify({ password: password })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                devModeUnlocked = true;
+                errorEl.style.display = 'none';
+                showDevControls();
+                showToast('{{ t.dev_mode_unlocked }}', 'success');
+            } else {
+                errorEl.style.display = 'block';
+                document.getElementById('devPassword').value = '';
+            }
+        } catch (error) {
+            errorEl.style.display = 'block';
+        }
+    }
+    
+    // Lock developer mode
+    async function lockDevMode() {
+        try {
+            await fetch(`/api/cameras/${cameraId}/dev-mode/lock/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken')
+                }
+            });
+            
+            devModeUnlocked = false;
+            hideDevControls();
+            
+            // Stop debug refresh
+            if (debugRefreshInterval) {
+                clearInterval(debugRefreshInterval);
+                debugRefreshInterval = null;
+            }
+            
+            // Switch back to normal video feed
+            const liveVideo = document.getElementById('liveVideo');
+            if (videoActive) {
+                liveVideo.src = `/video-feed/${cameraId}/`;
+            }
+            
+            showToast('Developer mode locked', 'success');
+        } catch (error) {
+            console.error('Failed to lock dev mode:', error);
+        }
+    }
+    
+    // Show developer controls
+    function showDevControls() {
+        document.getElementById('devPasswordSection').style.display = 'none';
+        document.getElementById('devControlsSection').style.display = 'block';
+        refreshDebugInfo();
+    }
+    
+    // Hide developer controls
+    function hideDevControls() {
+        document.getElementById('devPasswordSection').style.display = 'block';
+        document.getElementById('devControlsSection').style.display = 'none';
+        document.getElementById('devPassword').value = '';
+        document.getElementById('debugOverlayEnabled').checked = false;
+        document.getElementById('debugFeaturesPanel').style.display = 'none';
+    }
+    
+    // Toggle debug overlay mode
+    function toggleDebugMode() {
+        const enabled = document.getElementById('debugOverlayEnabled').checked;
+        const featuresPanel = document.getElementById('debugFeaturesPanel');
+        const liveVideo = document.getElementById('liveVideo');
+        
+        if (enabled) {
+            featuresPanel.style.display = 'block';
+            
+            // Switch to debug video feed (always start it)
+            liveVideo.src = `/video-feed-debug/${cameraId}/`;
+            liveVideo.style.display = 'block';
+            videoActive = true;
+            drawZone();
+            
+            // Update status indicator
+            const indicator = document.querySelector('.status-indicator');
+            const statusText = document.querySelector('.status-text');
+            if (indicator) indicator.className = 'status-indicator online';
+            if (statusText) statusText.textContent = 'DEBUG MODE ✓';
+            
+            // Start auto-refresh of debug info
+            debugRefreshInterval = setInterval(refreshDebugInfo, 2000);
+            
+            showToast('Debug overlay enabled - showing poses and distances', 'success');
+        } else {
+            featuresPanel.style.display = 'none';
+            
+            // Switch back to normal video feed
+            liveVideo.src = `/video-feed/${cameraId}/`;
+            
+            // Update status indicator
+            const indicator = document.querySelector('.status-indicator');
+            const statusText = document.querySelector('.status-text');
+            if (indicator) indicator.className = 'status-indicator online';
+            if (statusText) statusText.textContent = '{{ t.status_online }} ✓';
+            
+            // Stop auto-refresh
+            if (debugRefreshInterval) {
+                clearInterval(debugRefreshInterval);
+                debugRefreshInterval = null;
+            }
+        }
+    }
+    
+    // Refresh debug info from server
+    async function refreshDebugInfo() {
+        if (!devModeUnlocked) return;
+        
+        try {
+            const response = await fetch(`/api/cameras/${cameraId}/dev-mode/debug-info/`);
+            const data = await response.json();
+            
+            if (data.error) {
+                document.getElementById('debugFrameCount').textContent = 'N/A';
+                return;
+            }
+            
+            // Update debug panel
+            document.getElementById('debugFrameCount').textContent = data.frame_count || 0;
+            
+            if (data.cash_detection) {
+                const cash = data.cash_detection;
+                document.getElementById('debugCashFrames').textContent = 
+                    `${cash.consecutive_frames}/${cash.min_frames_required}`;
+                document.getElementById('debugHandDistance').textContent = 
+                    `${cash.hand_touch_distance}px`;
+                document.getElementById('debugFramesSinceEvent').textContent = 
+                    data.frame_count - cash.last_transaction_frame;
+            }
+            
+            if (data.violence_detection) {
+                const violence = data.violence_detection;
+                document.getElementById('debugViolenceFrames').textContent = 
+                    `${violence.consecutive_frames}/${violence.min_frames_required}`;
+            }
+            
+            if (data.fire_detection) {
+                const fire = data.fire_detection;
+                document.getElementById('debugFireFrames').textContent = 
+                    `${fire.consecutive_frames}/${fire.min_frames_required}`;
+            }
+            
+            if (data.recent_alerts && data.recent_alerts.length > 0) {
+                const lastAlert = data.recent_alerts[data.recent_alerts.length - 1];
+                document.getElementById('debugLastAlert').textContent = 
+                    `${lastAlert.detection?.label || 'Unknown'} @ frame ${lastAlert.frame_number}`;
+            }
+            
+        } catch (error) {
+            console.error('Failed to refresh debug info:', error);
+        }
     }
     
     // Auto-start live preview if camera is online

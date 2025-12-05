@@ -36,6 +36,8 @@ class UnifiedDetector:
         self.cashier_zone_enabled = self.config.get('cashier_zone_enabled', True)
         # Show zone overlay on video (UI only - hidden by default)
         self.show_zone_overlay = self.config.get('show_zone_overlay', False)
+        # Show pose overlay with hand positions and distances (enabled by default)
+        self.show_pose_overlay = self.config.get('show_pose_overlay', True)
         
         # Initialize individual detectors
         self.cash_detector = CashTransactionDetector({
@@ -45,6 +47,7 @@ class UnifiedDetector:
             'pose_confidence': self.config.get('pose_confidence', 0.5),
             'min_transaction_frames': self.config.get('min_transaction_frames', 3),
             'cash_confidence': self.config.get('cash_confidence', 0.5),
+            'show_pose_overlay': self.config.get('show_pose_overlay', True),
         })
         
         self.violence_detector = ViolenceDetector({
@@ -225,6 +228,10 @@ class UnifiedDetector:
         # Draw cashier zone only if show_zone_overlay is enabled (hidden by default)
         if self.detect_cash and self.show_zone_overlay:
             frame = self.cash_detector.draw_cashier_zone(frame)
+        
+        # Draw pose overlay with hand positions and distances (enabled by default)
+        if self.detect_cash and self.show_pose_overlay:
+            frame = self.cash_detector.draw_pose_overlay(frame)
         
         # Draw detections
         for det in detections:

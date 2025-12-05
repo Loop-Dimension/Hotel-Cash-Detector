@@ -109,6 +109,7 @@ class Camera(models.Model):
     cash_confidence = models.FloatField(default=0.5)
     violence_confidence = models.FloatField(default=0.6)
     fire_confidence = models.FloatField(default=0.5)
+    pose_confidence = models.FloatField(default=0.3)  # Person detection confidence for debug overlay
     
     # Hand touch distance threshold (pixels) for cash detection
     hand_touch_distance = models.IntegerField(default=100)

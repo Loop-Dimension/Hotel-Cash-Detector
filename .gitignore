@@ -1,3 +1,5 @@
 django_app/.env
 django_app/.env.example
 /django_app/models
+*.mp4
+*.jpg

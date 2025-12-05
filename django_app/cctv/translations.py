@@ -200,6 +200,28 @@ TRANSLATIONS = {
         'print': '인쇄',
         'from_date': '시작일',
         'to_date': '종료일',
+        
+        # Developer Mode
+        'developer_mode': '개발자 모드',
+        'developer_mode_desc': '디버깅 및 고급 설정 (비밀번호 필요)',
+        'enter_dev_password': '개발자 비밀번호 입력',
+        'unlock_dev_mode': '잠금 해제',
+        'dev_mode_unlocked': '개발자 모드 활성화됨',
+        'wrong_password': '비밀번호가 올바르지 않습니다',
+        'debug_overlay': '디버그 오버레이',
+        'debug_overlay_desc': '포즈, 거리, 역할 표시',
+        'show_poses': '포즈 표시',
+        'show_hand_distance': '손 거리 표시',
+        'label_persons': '인물 레이블 (캐셔/고객)',
+        'event_processing_debug': '이벤트 처리 디버그',
+        'event_processing_desc': '감지 로직 상태 확인',
+        'cashier_label': '캐셔',
+        'client_label': '고객',
+        'hand_distance_px': '손 거리',
+        'processing_status': '처리 상태',
+        'frames_since_event': '이벤트 후 프레임',
+        'consecutive_frames': '연속 프레임',
+        'lock_dev_mode': '개발자 모드 잠금',
     },
     
     'en': {
@@ -398,6 +420,28 @@ TRANSLATIONS = {
         'print': 'Print',
         'from_date': 'From Date',
         'to_date': 'To Date',
+        
+        # Developer Mode
+        'developer_mode': 'Developer Mode',
+        'developer_mode_desc': 'Debugging & advanced settings (password required)',
+        'enter_dev_password': 'Enter developer password',
+        'unlock_dev_mode': 'Unlock',
+        'dev_mode_unlocked': 'Developer mode unlocked',
+        'wrong_password': 'Incorrect password',
+        'debug_overlay': 'Debug Overlay',
+        'debug_overlay_desc': 'Show poses, distances, roles',
+        'show_poses': 'Show Poses',
+        'show_hand_distance': 'Show Hand Distance',
+        'label_persons': 'Label Persons (Cashier/Client)',
+        'event_processing_debug': 'Event Processing Debug',
+        'event_processing_desc': 'Check detection logic status',
+        'cashier_label': 'CASHIER',
+        'client_label': 'CLIENT',
+        'hand_distance_px': 'Hand Distance',
+        'processing_status': 'Processing Status',
+        'frames_since_event': 'Frames Since Event',
+        'consecutive_frames': 'Consecutive Frames',
+        'lock_dev_mode': 'Lock Developer Mode',
     }
 }
 

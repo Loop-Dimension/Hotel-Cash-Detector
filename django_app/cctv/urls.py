@@ -71,6 +71,13 @@ urlpatterns = [
     
     # Video streaming
     path('video-feed/<int:camera_id>/', views.video_feed, name='video_feed'),
+    path('video-feed-debug/<int:camera_id>/', views.video_feed_debug, name='video_feed_debug'),
+    
+    # Developer Mode API
+    path('api/cameras/<int:camera_id>/dev-mode/verify/', views.api_verify_dev_password, name='api_verify_dev_password'),
+    path('api/cameras/<int:camera_id>/dev-mode/lock/', views.api_lock_dev_mode, name='api_lock_dev_mode'),
+    path('api/cameras/<int:camera_id>/dev-mode/status/', views.api_dev_mode_status, name='api_dev_mode_status'),
+    path('api/cameras/<int:camera_id>/dev-mode/debug-info/', views.api_detection_debug_info, name='api_detection_debug_info'),
     
     # Background workers API
     path('api/workers/status/', views.get_background_worker_status, name='api_workers_status'),

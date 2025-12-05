@@ -599,6 +599,8 @@ def api_camera_detail(request, camera_id):
             camera.violence_confidence = float(data['violence_confidence'])
         if 'fire_confidence' in data:
             camera.fire_confidence = float(data['fire_confidence'])
+        if 'pose_confidence' in data:
+            camera.pose_confidence = max(0.1, min(0.9, float(data['pose_confidence'])))
         
         # Hand touch distance for cash detection
         if 'hand_touch_distance' in data:
@@ -1042,6 +1044,8 @@ def api_camera_settings(request, camera_id):
         camera.violence_confidence = max(0.0, min(1.0, float(data['violence_confidence'])))
     if 'fire_confidence' in data:
         camera.fire_confidence = max(0.0, min(1.0, float(data['fire_confidence'])))
+    if 'pose_confidence' in data:
+        camera.pose_confidence = max(0.1, min(0.9, float(data['pose_confidence'])))
     
     # Hand touch distance for cash detection
     if 'hand_touch_distance' in data:
@@ -1076,11 +1080,16 @@ def api_test_camera_connection(request, camera_id):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     try:
+        import os
+        # Use TCP transport to avoid RTP packet ordering issues
+        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|stimeout;5000000'
+        
         # Try to connect to the RTSP stream
-        cap = cv2.VideoCapture(camera.rtsp_url)
+        cap = cv2.VideoCapture(camera.rtsp_url, cv2.CAP_FFMPEG)
         
         # Set timeout (5 seconds)
         cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
         
         if cap.isOpened():
             # Try to read one frame
@@ -1122,7 +1131,6 @@ def api_test_camera_connection(request, camera_id):
             'online': False,
             'error': str(e)
         })
-
 
 @login_required
 @csrf_exempt
@@ -1251,26 +1259,35 @@ def generate_frames(camera):
     use its frames instead of making a new connection (no delay!)
     """
     
-    # Check if background worker is running for this camera
+    # Check if background worker is running for this camera - get reference quickly, release lock
+    worker = None
     with background_worker_lock:
         if camera.id in background_workers and background_workers[camera.id].running:
             worker = background_workers[camera.id]
-            print(f"[{camera.camera_id}] Using shared connection from background worker (no delay!)")
-            
-            while worker.running:
-                frame = worker.get_current_frame(with_overlay=True)
-                if frame is not None:
-                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                time.sleep(0.033)  # ~30fps
-            return
+    
+    # If worker exists, use its frames (lock is released now)
+    if worker is not None:
+        print(f"[{camera.camera_id}] Using shared connection from background worker (no delay!)")
+        
+        while worker.running:
+            frame = worker.get_current_frame(with_overlay=True)
+            if frame is not None:
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            time.sleep(0.033)  # ~30fps
+        return
     
     # No background worker - make new connection (legacy behavior)
-    cap = cv2.VideoCapture(camera.rtsp_url)
+    # Use TCP transport to avoid RTP packet ordering issues (bad cseq errors)
+    import os
+    os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|stimeout;5000000'
+    cap = cv2.VideoCapture(camera.rtsp_url, cv2.CAP_FFMPEG)
     
     # Set timeout for connection
     cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)
+    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10000)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
     
     if not cap.isOpened():
         # Only set offline if connection actually failed
@@ -1360,6 +1377,449 @@ def video_feed(request, camera_id):
         generate_frames(camera),
         content_type='multipart/x-mixed-replace; boundary=frame'
     )
+
+
+# ==================== DEVELOPER MODE / DEBUG ====================
+
+# Store debug mode state per camera (session-like)
+camera_debug_state = {}
+
+DEVELOPER_PASSWORD = "00oo00oo"
+
+# Cache for pose model in debug frames
+_debug_pose_model = None
+
+def get_debug_pose_model():
+    """Get or create pose model for debug overlay"""
+    global _debug_pose_model
+    if _debug_pose_model is None:
+        try:
+            from ultralytics import YOLO
+            from pathlib import Path
+            models_dir = Path(settings.DETECTION_CONFIG['MODELS_DIR'])
+            pose_path = models_dir / "yolov8n-pose.pt"
+            if pose_path.exists():
+                _debug_pose_model = YOLO(str(pose_path))
+            else:
+                _debug_pose_model = YOLO("yolov8n-pose.pt")
+        except Exception as e:
+            print(f"Failed to load debug pose model: {e}")
+    return _debug_pose_model
+
+
+def generate_debug_frames(camera):
+    """Generator for video frames with debug overlay showing poses, distances, roles"""
+    
+    # Check if background worker is running - get reference quickly, release lock
+    worker = None
+    with background_worker_lock:
+        if camera.id in background_workers and background_workers[camera.id].running:
+            worker = background_workers[camera.id]
+    
+    # If background worker is running, use its frames
+    if worker is not None:
+        # Pre-load pose model for this debug session
+        pose_model = get_debug_pose_model()
+        
+        while worker.running:
+            # Get raw frame (no overlay from UnifiedDetector)
+            frame = worker.get_current_frame(with_overlay=False)
+            if frame is not None:
+                # Draw our own debug overlay with poses, distances, labels
+                debug_frame = draw_debug_frame(frame.copy(), camera, pose_model)
+                _, buffer = cv2.imencode('.jpg', debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            time.sleep(0.033)  # ~30fps
+        return
+    
+    # No background worker - make new connection with TCP transport
+    import os
+    os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|stimeout;5000000'
+    cap = cv2.VideoCapture(camera.rtsp_url, cv2.CAP_FFMPEG)
+    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)
+    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10000)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+    
+    if not cap.isOpened():
+        frame = create_placeholder_frame("Cannot connect to camera")
+        _, buffer = cv2.imencode('.jpg', frame)
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        return
+    
+    pose_model = get_debug_pose_model()
+    
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            debug_frame = draw_debug_frame(frame.copy(), camera, pose_model)
+            _, buffer = cv2.imencode('.jpg', debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+    finally:
+        cap.release()
+
+
+def draw_debug_frame(frame, camera, pose_model=None):
+    """Draw comprehensive debug overlay on frame with poses, distances, and roles"""
+    h, w = frame.shape[:2]
+    
+    # Get cashier zone
+    cashier_zone = [camera.cashier_zone_x, camera.cashier_zone_y, 
+                    camera.cashier_zone_width, camera.cashier_zone_height]
+    zx, zy, zw, zh = cashier_zone
+    
+    # Draw cashier zone with label
+    cv2.rectangle(frame, (zx, zy), (zx + zw, zy + zh), (0, 255, 255), 3)
+    cv2.rectangle(frame, (zx, zy - 30), (zx + 150, zy), (0, 255, 255), -1)
+    cv2.putText(frame, "CASHIER ZONE", (zx + 5, zy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+    
+    # Get pose model if not provided
+    if pose_model is None:
+        pose_model = get_debug_pose_model()
+    
+    if pose_model is None:
+        cv2.putText(frame, "No pose model available", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        draw_debug_panel(frame, camera)
+        return frame
+    
+    # Get pose confidence threshold from camera settings
+    pose_conf = getattr(camera, 'pose_confidence', 0.3) or 0.3
+    
+    try:
+        # Run pose estimation with camera's confidence threshold
+        results = pose_model(frame, verbose=False, conf=pose_conf)
+        
+        if results and len(results) > 0:
+            result = results[0]
+            
+            people_info = []
+            
+            if result.keypoints is not None and result.boxes is not None:
+                keypoints_data = result.keypoints.data.cpu().numpy()
+                boxes = result.boxes.xyxy.cpu().numpy()
+                confs = result.boxes.conf.cpu().numpy()  # Get confidence scores
+                
+                for idx, (kpts, box, conf) in enumerate(zip(keypoints_data, boxes, confs)):
+                    x1, y1, x2, y2 = map(int, box)
+                    person_conf = float(conf)  # Person detection confidence
+                    
+                    # Determine if person is in cashier zone
+                    person_center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                    in_zone = (zx <= person_center[0] <= zx + zw and 
+                               zy <= person_center[1] <= zy + zh)
+                    
+                    # Label as Cashier or Client with confidence
+                    role = "CASHIER" if in_zone else "CLIENT"
+                    color = (0, 255, 0) if in_zone else (0, 165, 255)  # Green for cashier, orange for client
+                    
+                    # Draw person bounding box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+                    
+                    # Draw role label with confidence and black background
+                    label_text = f"{role} {person_conf:.0%}"
+                    (text_w, text_h), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                    cv2.rectangle(frame, (x1, y1 - 30), (x1 + text_w + 10, y1), (0, 0, 0), -1)
+                    cv2.putText(frame, label_text, (x1 + 5, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                    
+                    # Draw skeleton/pose
+                    draw_skeleton(frame, kpts, color)
+                    
+                    # Get hand positions (wrists)
+                    LEFT_WRIST, RIGHT_WRIST = 9, 10
+                    hands = {}
+                    
+                    if len(kpts) > LEFT_WRIST:
+                        lw = kpts[LEFT_WRIST]
+                        if len(lw) >= 3 and lw[2] >= 0.3:
+                            hands['left'] = (int(lw[0]), int(lw[1]), float(lw[2]))
+                            cv2.circle(frame, (int(lw[0]), int(lw[1])), 12, (255, 0, 255), -1)
+                            cv2.circle(frame, (int(lw[0]), int(lw[1])), 12, (255, 255, 255), 2)
+                    
+                    if len(kpts) > RIGHT_WRIST:
+                        rw = kpts[RIGHT_WRIST]
+                        if len(rw) >= 3 and rw[2] >= 0.3:
+                            hands['right'] = (int(rw[0]), int(rw[1]), float(rw[2]))
+                            cv2.circle(frame, (int(rw[0]), int(rw[1])), 12, (255, 0, 255), -1)
+                            cv2.circle(frame, (int(rw[0]), int(rw[1])), 12, (255, 255, 255), 2)
+                    
+                    people_info.append({
+                        'idx': idx,
+                        'role': role,
+                        'in_zone': in_zone,
+                        'hands': hands,
+                        'bbox': (x1, y1, x2, y2)
+                    })
+            
+            # Calculate and draw hand distances between people
+            hand_touch_distance = camera.hand_touch_distance or 100
+            
+            for i, p1 in enumerate(people_info):
+                for j, p2 in enumerate(people_info):
+                    if i >= j:
+                        continue
+                    
+                    for hand1_name, hand1_pos in p1.get('hands', {}).items():
+                        for hand2_name, hand2_pos in p2.get('hands', {}).items():
+                            # Calculate distance
+                            dx = hand1_pos[0] - hand2_pos[0]
+                            dy = hand1_pos[1] - hand2_pos[1]
+                            distance = int(np.sqrt(dx*dx + dy*dy))
+                            
+                            # Draw line between hands
+                            is_close = distance < hand_touch_distance
+                            line_color = (0, 255, 0) if is_close else (0, 0, 255)
+                            cv2.line(frame, (hand1_pos[0], hand1_pos[1]), 
+                                    (hand2_pos[0], hand2_pos[1]), line_color, 3)
+                            
+                            # Draw distance label at midpoint with black background
+                            mid_x = (hand1_pos[0] + hand2_pos[0]) // 2
+                            mid_y = (hand1_pos[1] + hand2_pos[1]) // 2
+                            
+                            dist_text = f"{distance}px"
+                            status = "CLOSE!" if is_close else "FAR"
+                            full_text = f"{dist_text} {status}"
+                            
+                            # Black background for text
+                            (text_w, text_h), _ = cv2.getTextSize(full_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                            cv2.rectangle(frame, (mid_x - 5, mid_y - text_h - 10), 
+                                         (mid_x + text_w + 10, mid_y + 5), (0, 0, 0), -1)
+                            cv2.putText(frame, full_text, (mid_x, mid_y - 5), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, line_color, 2)
+            
+            # Show people count
+            cv2.rectangle(frame, (w - 200, h - 40), (w - 5, h - 5), (0, 0, 0), -1)
+            cv2.putText(frame, f"People: {len(people_info)}", (w - 190, h - 15), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        else:
+            # No people detected
+            cv2.rectangle(frame, (w - 200, h - 40), (w - 5, h - 5), (0, 0, 0), -1)
+            cv2.putText(frame, "No people detected", (w - 190, h - 15), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1)
+    
+    except Exception as e:
+        cv2.putText(frame, f"Debug error: {str(e)[:50]}", (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+    
+    # Draw debug info panel
+    draw_debug_panel(frame, camera)
+    
+    return frame
+
+
+def draw_skeleton(frame, keypoints, color=(0, 255, 0)):
+    """Draw pose skeleton on frame"""
+    # COCO skeleton connections
+    skeleton = [
+        (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),  # Arms
+        (5, 11), (6, 12), (11, 12),  # Torso
+        (11, 13), (13, 15), (12, 14), (14, 16)  # Legs
+    ]
+    
+    for start_idx, end_idx in skeleton:
+        if len(keypoints) > max(start_idx, end_idx):
+            start = keypoints[start_idx]
+            end = keypoints[end_idx]
+            
+            if len(start) >= 3 and len(end) >= 3 and start[2] >= 0.3 and end[2] >= 0.3:
+                cv2.line(frame, (int(start[0]), int(start[1])), 
+                        (int(end[0]), int(end[1])), color, 2)
+
+
+def draw_debug_panel(frame, camera, cached_worker=None):
+    """Draw debug info panel on frame"""
+    h, w = frame.shape[:2]
+    
+    # Use cached worker if provided, otherwise try to get it (quick lock)
+    worker = cached_worker
+    if worker is None:
+        with background_worker_lock:
+            if camera.id in background_workers:
+                worker = background_workers[camera.id]
+    
+    detector = worker.detector if worker else None
+    
+    # Panel background
+    cv2.rectangle(frame, (5, 5), (400, 200), (0, 0, 0), -1)
+    cv2.rectangle(frame, (5, 5), (400, 200), (0, 255, 255), 2)
+    
+    y = 25
+    cv2.putText(frame, "DEVELOPER DEBUG MODE", (15, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    
+    y += 25
+    cv2.putText(frame, f"Camera: {camera.name} ({camera.camera_id})", (15, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    
+    y += 20
+    cv2.putText(frame, f"Hand Touch Distance: {camera.hand_touch_distance or 100}px", (15, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    
+    # Detector state
+    if detector:
+        y += 25
+        cash_consec = getattr(detector.cash_detector, 'consecutive_detections', 0) if hasattr(detector, 'cash_detector') else 0
+        cash_thresh = getattr(detector.cash_detector, 'min_transaction_frames', 3) if hasattr(detector, 'cash_detector') else 3
+        cash_status = f"TRIGGERED!" if cash_consec >= cash_thresh else f"{cash_consec}/{cash_thresh}"
+        cash_color = (0, 255, 0) if cash_consec >= cash_thresh else (255, 255, 255)
+        cv2.putText(frame, f"Cash Detection: {cash_status}", (15, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, cash_color, 1)
+        
+        y += 20
+        violence_consec = getattr(detector.violence_detector, 'consecutive_violence', 0) if hasattr(detector, 'violence_detector') else 0
+        violence_thresh = getattr(detector.violence_detector, 'min_violence_frames', 10) if hasattr(detector, 'violence_detector') else 10
+        cv2.putText(frame, f"Violence Detection: {violence_consec}/{violence_thresh}", (15, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        y += 20
+        fire_consec = getattr(detector.fire_detector, 'consecutive_fire', 0) if hasattr(detector, 'fire_detector') else 0
+        fire_thresh = getattr(detector.fire_detector, 'min_fire_frames', 10) if hasattr(detector, 'fire_detector') else 10
+        cv2.putText(frame, f"Fire Detection: {fire_consec}/{fire_thresh}", (15, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        y += 25
+        frame_count = getattr(detector, 'frame_count', 0)
+        cv2.putText(frame, f"Frame: {frame_count}", (15, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        
+        y += 20
+        last_tx = getattr(detector.cash_detector, 'last_transaction_frame', 0) if hasattr(detector, 'cash_detector') else 0
+        cooldown = getattr(detector.cash_detector, 'transaction_cooldown', 45) if hasattr(detector, 'cash_detector') else 45
+        frames_since = frame_count - last_tx
+        cv2.putText(frame, f"Frames since last event: {frames_since} (cooldown: {cooldown})", (15, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    else:
+        y += 25
+        cv2.putText(frame, "No detector attached", (15, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1)
+    
+    # Legend
+    cv2.rectangle(frame, (w - 180, 5), (w - 5, 85), (0, 0, 0), -1)
+    cv2.putText(frame, "Legend:", (w - 170, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    cv2.rectangle(frame, (w - 170, 35), (w - 155, 50), (0, 255, 0), -1)
+    cv2.putText(frame, "Cashier", (w - 150, 47), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+    cv2.rectangle(frame, (w - 170, 55), (w - 155, 70), (0, 165, 255), -1)
+    cv2.putText(frame, "Client", (w - 150, 67), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
+
+@login_required
+def video_feed_debug(request, camera_id):
+    """Debug video streaming endpoint with pose/distance overlay"""
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    user = request.user
+    if not user.is_admin() and camera.branch not in get_user_branches(user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    # Check if debug mode is enabled for this camera
+    if camera.id not in camera_debug_state or not camera_debug_state[camera.id].get('enabled'):
+        return JsonResponse({'error': 'Developer mode not enabled'}, status=403)
+    
+    return StreamingHttpResponse(
+        generate_debug_frames(camera),
+        content_type='multipart/x-mixed-replace; boundary=frame'
+    )
+
+
+@login_required
+@csrf_exempt
+@require_http_methods(["POST"])
+def api_verify_dev_password(request, camera_id):
+    """Verify developer password and enable debug mode"""
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    user = request.user
+    if not user.is_admin() and camera.branch not in get_user_branches(user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    data = json.loads(request.body)
+    password = data.get('password', '')
+    
+    if password == DEVELOPER_PASSWORD:
+        camera_debug_state[camera.id] = {
+            'enabled': True,
+            'unlocked_at': timezone.now().isoformat(),
+            'unlocked_by': user.username
+        }
+        return JsonResponse({
+            'success': True,
+            'message': 'Developer mode unlocked'
+        })
+    else:
+        return JsonResponse({
+            'success': False,
+            'error': 'Incorrect password'
+        }, status=401)
+
+
+@login_required
+@csrf_exempt
+@require_http_methods(["POST"])
+def api_lock_dev_mode(request, camera_id):
+    """Lock developer mode for a camera"""
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    if camera.id in camera_debug_state:
+        del camera_debug_state[camera.id]
+    
+    return JsonResponse({'success': True, 'message': 'Developer mode locked'})
+
+
+@login_required
+@require_http_methods(["GET"])
+def api_dev_mode_status(request, camera_id):
+    """Get developer mode status for a camera"""
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    is_enabled = camera.id in camera_debug_state and camera_debug_state[camera.id].get('enabled', False)
+    
+    return JsonResponse({
+        'enabled': is_enabled,
+        'unlocked_at': camera_debug_state.get(camera.id, {}).get('unlocked_at'),
+        'unlocked_by': camera_debug_state.get(camera.id, {}).get('unlocked_by')
+    })
+
+
+@login_required
+@require_http_methods(["GET"])
+def api_detection_debug_info(request, camera_id):
+    """Get live detection debug information"""
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    # Check if debug mode is enabled
+    if camera.id not in camera_debug_state or not camera_debug_state[camera.id].get('enabled'):
+        return JsonResponse({'error': 'Developer mode not enabled'}, status=403)
+    
+    # Get detector info
+    detector = camera_detectors.get(camera.id)
+    
+    if not detector:
+        return JsonResponse({
+            'error': 'Detector not initialized',
+            'detector_available': DETECTOR_AVAILABLE
+        })
+    
+    # Collect debug info
+    info = {
+        'frame_count': getattr(detector, 'frame_count', 0),
+        'debug_mode': getattr(detector, 'debug_mode', False),
+        'cash_detection': {
+            'enabled': detector.detect_cash,
+            'consecutive_frames': getattr(detector.cash_detector, 'consecutive_detections', 0),
+            'min_frames_required': getattr(detector.cash_detector, 'min_transaction_frames', 3),
+            'last_transaction_frame': getattr(detector.cash_detector, 'last_transaction_frame', 0),
+            'cooldown': getattr(detector.cash_detector, 'transaction_cooldown', 45),
+            'hand_touch_distance': getattr(detector.cash_detector, 'hand_touch_distance', 100),
+            'cashier_zone': detector.cash_detector.cashier_zone,
+        },
+        'violence_detection': {
+            'enabled': detector.detect_violence,
+            'consecutive_frames': getattr(detector.violence_detector, 'consecutive_violence', 0),
+            'min_frames_required': getattr(detector.violence_detector, 'min_violence_frames', 10),
+        },
+        'fire_detection': {
+            'enabled': detector.detect_fire,
+            'consecutive_frames': getattr(detector.fire_detector, 'consecutive_fire', 0),
+            'min_frames_required': getattr(detector.fire_detector, 'min_fire_frames', 10),
+        },
+        'recent_alerts': detector.alerts_history[-10:] if hasattr(detector, 'alerts_history') else [],
+    }
+    
+    return JsonResponse(info)
 
 
 # ==================== USER MANAGEMENT ====================
@@ -1669,6 +2129,27 @@ class BackgroundCameraWorker:
             'running': self.running,
         }
     
+    def _create_rtsp_capture(self, rtsp_url):
+        """Create RTSP capture with optimized settings for stability.
+        
+        Uses TCP transport to avoid RTP packet ordering issues (bad cseq errors).
+        Sets buffer sizes and timeouts for better stream handling.
+        """
+        import os
+        
+        # Set FFmpeg options via environment for better RTSP handling
+        # Use TCP transport to avoid UDP packet loss/reordering issues
+        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|stimeout;5000000'
+        
+        cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+        
+        # Set additional capture properties
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)  # 10s connection timeout
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10000)  # 10s read timeout
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)  # Smaller buffer for lower latency
+        
+        return cap
+    
     def get_current_frame(self, with_overlay=True):
         """Get the current frame for live viewing (shared from background worker)"""
         with self.frame_lock:
@@ -1734,17 +2215,54 @@ class BackgroundCameraWorker:
             return None
         
         import cv2
+        import subprocess
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"{camera.camera_id}_{detection_type}_{timestamp}.mp4"
-        clip_path = Path(self.output_dir) / 'clips' / filename
-        clip_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Save as temporary mp4 first, then convert to web-compatible format
+        temp_filename = f"{camera.camera_id}_{detection_type}_{timestamp}_temp.mp4"
+        final_filename = f"{camera.camera_id}_{detection_type}_{timestamp}.mp4"
+        
+        clip_dir = Path(self.output_dir) / 'clips'
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        
+        temp_path = clip_dir / temp_filename
+        final_path = clip_dir / final_filename
         
         height, width = frames[0].shape[:2]
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(str(clip_path), fourcc, fps, (width, height))
+        out = cv2.VideoWriter(str(temp_path), fourcc, fps, (width, height))
         for frame in frames:
             out.write(frame)
         out.release()
+        
+        # Try to convert to H.264 using ffmpeg for browser compatibility and seeking support
+        try:
+            result = subprocess.run([
+                'ffmpeg', '-y', '-i', str(temp_path),
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+                '-pix_fmt', 'yuv420p',  # Ensure browser compatibility
+                '-movflags', '+faststart',  # Move moov atom to beginning for seeking
+                '-g', '30',  # Keyframe every 30 frames for better seeking
+                str(final_path)
+            ], capture_output=True, timeout=120)
+            
+            if result.returncode == 0 and final_path.exists():
+                # Remove temp file
+                temp_path.unlink(missing_ok=True)
+                print(f"[Clip] Saved H.264 clip: {final_filename}")
+            else:
+                # ffmpeg failed, try alternative encoding
+                print(f"[Clip] FFmpeg failed, trying fallback: {result.stderr.decode()[:200]}")
+                temp_path.rename(final_path)
+        except subprocess.TimeoutExpired:
+            print(f"[Clip] FFmpeg timeout, using original file")
+            if temp_path.exists():
+                temp_path.rename(final_path)
+        except FileNotFoundError:
+            # ffmpeg not available, use original file (seeking may not work)
+            print(f"[Clip] FFmpeg not found, using mp4v codec (seeking may not work)")
+            if temp_path.exists():
+                temp_path.rename(final_path)
         
         # Thumbnail
         thumb_filename = f"{camera.camera_id}_{detection_type}_{timestamp}.jpg"
@@ -1753,7 +2271,7 @@ class BackgroundCameraWorker:
         cv2.imwrite(str(thumb_path), frames[len(frames)//2])
         
         # Return relative URLs for web access
-        return f'/media/clips/{filename}', f'/media/thumbnails/{thumb_filename}'
+        return f'/media/clips/{final_filename}', f'/media/thumbnails/{thumb_filename}'
     
     def run(self):
         import cv2
@@ -1776,7 +2294,7 @@ class BackgroundCameraWorker:
             self.last_error = 'Detector not available'
             return
         
-        cap = cv2.VideoCapture(camera.rtsp_url)
+        cap = self._create_rtsp_capture(camera.rtsp_url)
         if not cap.isOpened():
             self.status = 'error'
             self.last_error = f'Cannot open stream: {camera.rtsp_url}'
@@ -1791,17 +2309,26 @@ class BackgroundCameraWorker:
         camera.save()
         
         last_settings_check = time.time()
+        consecutive_failures = 0
+        max_failures = 10  # Max consecutive read failures before reconnect
         
         while self.running:
             ret, frame = cap.read()
             if not ret:
-                self.status = 'reconnecting'
-                cap.release()
-                time.sleep(5)
-                cap = cv2.VideoCapture(camera.rtsp_url)
-                if cap.isOpened():
-                    self.status = 'running'
+                consecutive_failures += 1
+                if consecutive_failures >= max_failures:
+                    self.status = 'reconnecting'
+                    self.last_error = 'Stream lost, reconnecting...'
+                    cap.release()
+                    time.sleep(3)
+                    cap = self._create_rtsp_capture(camera.rtsp_url)
+                    if cap.isOpened():
+                        self.status = 'running'
+                        self.last_error = None
+                        consecutive_failures = 0
                 continue
+            
+            consecutive_failures = 0  # Reset on successful read
             
             self.frame_count += 1
             
@@ -1843,15 +2370,16 @@ class BackgroundCameraWorker:
             
             if result.get('detections'):
                 for det in result['detections']:
-                    det_type = det.get('type', '').lower()
+                    # Detection uses 'label' not 'type'
+                    det_label = det.get('label', '').lower()
                     confidence = det.get('confidence', 0)
                     bbox = det.get('bbox')
                     
-                    if 'cash' in det_type:
+                    if 'cash' in det_label:
                         event_type = 'cash'
-                    elif 'violence' in det_type:
+                    elif 'violence' in det_label:
                         event_type = 'violence'
-                    elif 'fire' in det_type:
+                    elif 'fire' in det_label:
                         event_type = 'fire'
                     else:
                         continue
@@ -1862,7 +2390,10 @@ class BackgroundCameraWorker:
                         if paths:
                             clip_path, thumb_path = paths
                     
-                    self.save_event(camera, event_type, confidence, self.frame_count, bbox, clip_path, thumb_path)
+                    try:
+                        self.save_event(camera, event_type, confidence, self.frame_count, bbox, clip_path, thumb_path)
+                    except Exception as e:
+                        self.last_error = f"Event save error: {str(e)}"
             
             time.sleep(0.01)
         

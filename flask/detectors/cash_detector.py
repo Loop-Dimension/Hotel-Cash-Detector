@@ -47,6 +47,9 @@ class CashTransactionDetector(BaseDetector):
         self.min_transaction_frames = config.get('min_transaction_frames', 3)
         self.min_cash_confidence = config.get('min_cash_confidence', 0.70)  # 70% minimum
         
+        # Show pose overlay with hand positions and distances
+        self.show_pose_overlay = config.get('show_pose_overlay', True)
+        
         # Tracking state
         self.potential_transactions = deque(maxlen=30)  # Last 30 frames
         self.consecutive_detections = 0
@@ -304,17 +307,20 @@ class CashTransactionDetector(BaseDetector):
             # Look for hand proximity events
             hand_events = self.detect_hand_proximity(people_hands)
             
-            # Filter for events: one person INSIDE cashier zone, one OUTSIDE
-            # This represents customer handing cash to cashier (or vice versa)
+            # Accept ANY hand proximity event between two different people
+            # No longer require one person inside and one outside cashier zone
+            # Just require that at least one person is near/in the cashier zone area
             transaction_events = []
             for event in hand_events:
                 p1 = people_hands[event['person1_idx']]
                 p2 = people_hands[event['person2_idx']]
                 
-                # One person must be IN zone, other must be OUTSIDE
-                # XOR: exactly one of them in the cashier zone
-                if p1['in_cashier_zone'] != p2['in_cashier_zone']:
-                    # And the hand interaction should be near the zone boundary
+                # Accept if at least one person is in or near cashier zone
+                # OR if the midpoint of the hand interaction is in the zone
+                either_in_zone = p1['in_cashier_zone'] or p2['in_cashier_zone']
+                midpoint_in_zone = self.is_in_cashier_zone(event['midpoint'])
+                
+                if either_in_zone or midpoint_in_zone:
                     transaction_events.append(event)
             
             # Track potential transactions
@@ -410,5 +416,92 @@ class CashTransactionDetector(BaseDetector):
         # Draw label
         cv2.putText(frame, "CASHIER ZONE", (x + 5, y + 25),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        
+        return frame
+    
+    def draw_pose_overlay(self, frame: np.ndarray) -> np.ndarray:
+        """Draw pose estimation overlay with hand positions and distances on frame.
+        Shows hand positions and distance lines between people's hands.
+        """
+        if not self.is_initialized or self.pose_model is None:
+            return frame
+        
+        try:
+            # Run pose estimation
+            results = self.pose_model(frame, verbose=False, conf=self.pose_confidence)
+            
+            if not results or len(results) == 0:
+                return frame
+            
+            result = results[0]
+            people_hands = []
+            
+            if result.keypoints is not None and result.boxes is not None:
+                keypoints_data = result.keypoints.data.cpu().numpy()
+                boxes = result.boxes.xyxy.cpu().numpy()
+                
+                for idx, (kpts, box) in enumerate(zip(keypoints_data, boxes)):
+                    bbox = tuple(map(int, box))
+                    x1, y1, x2, y2 = bbox
+                    hands = self.get_hand_positions(kpts)
+                    in_zone = self.is_box_in_cashier_zone(bbox)
+                    
+                    # Color based on zone (green = cashier, orange = customer)
+                    color = (0, 255, 0) if in_zone else (0, 165, 255)
+                    role = "CASHIER" if in_zone else "CLIENT"
+                    
+                    # Draw person bounding box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    
+                    # Draw role label
+                    (text_w, text_h), _ = cv2.getTextSize(role, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                    cv2.rectangle(frame, (x1, y1 - 22), (x1 + text_w + 6, y1), color, -1)
+                    cv2.putText(frame, role, (x1 + 3, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                    
+                    # Draw hand circles
+                    for hand_name, hand_pos in hands.items():
+                        cv2.circle(frame, (hand_pos[0], hand_pos[1]), 8, (255, 0, 255), -1)
+                        cv2.circle(frame, (hand_pos[0], hand_pos[1]), 8, (255, 255, 255), 2)
+                    
+                    people_hands.append({
+                        'idx': idx,
+                        'hands': hands,
+                        'in_zone': in_zone
+                    })
+            
+            # Draw distance lines between hands of different people
+            for i, p1 in enumerate(people_hands):
+                for j, p2 in enumerate(people_hands):
+                    if i >= j:
+                        continue
+                    
+                    for hand1_name, hand1_pos in p1.get('hands', {}).items():
+                        for hand2_name, hand2_pos in p2.get('hands', {}).items():
+                            # Calculate distance
+                            dx = hand1_pos[0] - hand2_pos[0]
+                            dy = hand1_pos[1] - hand2_pos[1]
+                            distance = int(np.sqrt(dx*dx + dy*dy))
+                            
+                            # Color based on distance threshold
+                            is_close = distance < self.hand_touch_distance
+                            line_color = (0, 255, 0) if is_close else (0, 0, 255)
+                            
+                            # Draw line between hands
+                            cv2.line(frame, (hand1_pos[0], hand1_pos[1]), 
+                                    (hand2_pos[0], hand2_pos[1]), line_color, 2)
+                            
+                            # Draw distance label at midpoint
+                            mid_x = (hand1_pos[0] + hand2_pos[0]) // 2
+                            mid_y = (hand1_pos[1] + hand2_pos[1]) // 2
+                            
+                            dist_text = f"{distance}px"
+                            (text_w, text_h), _ = cv2.getTextSize(dist_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                            cv2.rectangle(frame, (mid_x - 3, mid_y - text_h - 5), 
+                                         (mid_x + text_w + 6, mid_y + 3), (0, 0, 0), -1)
+                            cv2.putText(frame, dist_text, (mid_x, mid_y - 3), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, line_color, 2)
+        
+        except Exception as e:
+            print(f"⚠️ Pose overlay error: {e}")
         
         return frame
