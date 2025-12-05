@@ -404,18 +404,61 @@ class CashTransactionDetector(BaseDetector):
                 # Use distance score as confidence (closer hands = higher confidence)
                 reported_confidence = best_event.get('distance_score', best_event['confidence'])
                 
+                # Get person info for cashier and customer
+                p1_idx = best_event['person1_idx']
+                p2_idx = best_event['person2_idx']
+                p1_info = people_hands[p1_idx] if p1_idx < len(people_hands) else None
+                p2_info = people_hands[p2_idx] if p2_idx < len(people_hands) else None
+                
+                # Determine which is cashier and which is customer
+                cashier_info = None
+                customer_info = None
+                if p1_info and p2_info:
+                    if p1_info.get('in_cashier_zone'):
+                        cashier_info = p1_info
+                        customer_info = p2_info
+                    else:
+                        cashier_info = p2_info
+                        customer_info = p1_info
+                
+                # Build detailed metadata
+                detection_metadata = {
+                    'type': 'hand_exchange',
+                    'distance': round(best_event['distance'], 1),
+                    'distance_threshold': self.hand_touch_distance,
+                    'hand_confidence': round(best_event['confidence'], 3),
+                    'people_count': len(people_hands),
+                    'cashier_zone': self.cashier_zone,
+                }
+                
+                # Add cashier details
+                if cashier_info:
+                    detection_metadata['cashier'] = {
+                        'center': list(cashier_info['center']),
+                        'bbox': list(cashier_info['bbox']),
+                        'hands': {k: [v[0], v[1], round(v[2], 3)] for k, v in cashier_info.get('hands', {}).items()},
+                        'in_zone': True,
+                        'hand_used': best_event['hand1'] if best_event['person1_role'] == 'cashier' else best_event['hand2']
+                    }
+                
+                # Add customer details
+                if customer_info:
+                    detection_metadata['customer'] = {
+                        'center': list(customer_info['center']),
+                        'bbox': list(customer_info['bbox']),
+                        'hands': {k: [v[0], v[1], round(v[2], 3)] for k, v in customer_info.get('hands', {}).items()},
+                        'in_zone': False,
+                        'hand_used': best_event['hand2'] if best_event['person1_role'] == 'cashier' else best_event['hand1']
+                    }
+                
+                # Add interaction point
+                detection_metadata['interaction_point'] = list(mp)
+                
                 detection = Detection(
                     label="CASH",
                     confidence=reported_confidence,
                     bbox=tx_bbox,
-                    metadata={
-                        'type': 'hand_exchange',
-                        'distance': best_event['distance'],
-                        'hand_confidence': best_event['confidence'],
-                        'distance_threshold': self.hand_touch_distance,
-                        'people_count': len(people_hands),
-                        'cashier_zone': self.cashier_zone
-                    }
+                    metadata=detection_metadata
                 )
                 detections.append(detection)
                 print(f"[CashDetect] ✅ DETECTION TRIGGERED! dist={best_event['distance']:.0f}, conf={reported_confidence:.2f}")

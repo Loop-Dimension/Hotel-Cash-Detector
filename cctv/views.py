@@ -1279,16 +1279,21 @@ def generate_frames(camera):
     if worker is not None:
         print(f"[{camera.camera_id}] Using shared connection from background worker (no delay!)")
         
-        # Pre-allocate encode params
-        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 80]  # Slightly lower quality for speed
+        # Pre-allocate encode params - quality 75 for faster encoding
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 75]
+        last_frame_id = None
         
         while worker.running:
             frame = worker.get_current_frame(with_overlay=True)
             if frame is not None:
-                _, buffer = cv2.imencode('.jpg', frame, encode_params)
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            time.sleep(0.04)  # 25fps is smoother than choppy 30fps
+                # Check if this is a new frame by checking frame count
+                current_frame_id = worker.frame_count
+                if current_frame_id != last_frame_id:
+                    _, buffer = cv2.imencode('.jpg', frame, encode_params)
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                    last_frame_id = current_frame_id
+            time.sleep(0.015)  # ~66fps check rate for smoother streaming
         return
     
     # No background worker - make new connection (legacy behavior)
@@ -2177,19 +2182,20 @@ class BackgroundCameraWorker:
         
         # Set FFmpeg options via environment for better RTSP handling
         # - rtsp_transport=tcp: Use TCP instead of UDP to avoid packet loss
-        # - stimeout=10000000: 10 second socket timeout (in microseconds) - faster reconnect
-        # - max_delay=500000: Max delay 0.5 seconds
+        # - stimeout=60000000: 60 second socket timeout (in microseconds) - prevents premature timeout
+        # - max_delay=1000000: Max delay 1 second
         # - fflags=nobuffer+discardcorrupt: Reduce buffering, discard corrupt frames
-        # - analyzeduration=1000000: Analyze for 1 second max
-        # - probesize=1000000: Probe size 1MB
-        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|stimeout;10000000|max_delay;500000|fflags;nobuffer+discardcorrupt|analyzeduration;1000000|probesize;1000000'
+        # - analyzeduration=2000000: Analyze for 2 seconds max
+        # - probesize=2000000: Probe size 2MB
+        # - buffer_size=4096000: 4MB buffer for network stability
+        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|stimeout;60000000|max_delay;1000000|fflags;nobuffer+discardcorrupt|analyzeduration;2000000|probesize;2000000|buffer_size;4096000'
         
         cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
         
-        # Set additional capture properties - shorter timeouts for faster recovery
-        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)  # 10s connection timeout
-        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)   # 5s read timeout - fail fast, reconnect fast
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)  # Small buffer for stability
+        # Set additional capture properties - balanced timeouts
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 30000)  # 30s connection timeout
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 15000)  # 15s read timeout 
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 5)  # Slightly larger buffer for stability
         
         return cap
     
@@ -2239,11 +2245,16 @@ class BackgroundCameraWorker:
         return UnifiedDetector(config)
     
     def save_event(self, camera, event_type, confidence, frame_number, bbox=None, clip_path=None, thumbnail_path=None, metadata=None):
-        """Save event to database with detection metadata as JSON."""
+        """Save event to database with detection metadata as JSON file."""
         import json
+        from datetime import datetime
         try:
             # Build metadata JSON with detection parameters
             event_metadata = metadata or {}
+            
+            # Add timestamp
+            timestamp = datetime.now()
+            event_metadata['timestamp'] = timestamp.isoformat()
             
             # Add standard detection info
             event_metadata.update({
@@ -2252,6 +2263,9 @@ class BackgroundCameraWorker:
                 'bbox': bbox,
                 'camera_id': camera.camera_id,
                 'camera_name': camera.name,
+                'event_type': event_type,
+                'clip_path': clip_path,
+                'thumbnail_path': thumbnail_path,
             })
             
             # Add detector-specific info if available
@@ -2263,6 +2277,20 @@ class BackgroundCameraWorker:
                         'cashier_zone': getattr(cd, 'cashier_zone', []),
                         'pose_confidence': getattr(cd, 'pose_confidence', 0.5),
                     }
+                    # Include detection-specific metadata if available in main metadata
+                    if metadata:
+                        # Cashier info
+                        if 'cashier' in metadata:
+                            event_metadata['cashier'] = metadata['cashier']
+                        # Customer info
+                        if 'customer' in metadata:
+                            event_metadata['customer'] = metadata['customer']
+                        # Actual distance measured
+                        if 'distance' in metadata:
+                            event_metadata['measured_hand_distance'] = metadata['distance']
+                        # Interaction point
+                        if 'interaction_point' in metadata:
+                            event_metadata['interaction_point'] = metadata['interaction_point']
                 elif event_type == 'violence' and hasattr(self.detector, 'violence_detector'):
                     vd = self.detector.violence_detector
                     event_metadata['violence_detection'] = {
@@ -2276,6 +2304,22 @@ class BackgroundCameraWorker:
                         'fire_confidence': getattr(fd, 'fire_confidence', 0.5),
                     }
             
+            # Save JSON file to media/json folder
+            json_dir = os.path.join(settings.MEDIA_ROOT, 'json')
+            os.makedirs(json_dir, exist_ok=True)
+            
+            # Generate JSON filename matching clip pattern
+            json_filename = f"{event_type}_{camera.camera_id}_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
+            json_path = os.path.join(json_dir, json_filename)
+            
+            # Write JSON file with pretty formatting
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(event_metadata, f, indent=2, ensure_ascii=False)
+            
+            # Store relative path for database
+            json_relative_path = f"json/{json_filename}"
+            print(f"[JSON] Saved metadata: {json_relative_path}")
+            
             event = Event.objects.create(
                 branch=camera.branch,
                 camera=camera,
@@ -2288,9 +2332,9 @@ class BackgroundCameraWorker:
                 bbox_y2=bbox[3] if bbox else 0,
                 clip_path=clip_path,
                 thumbnail_path=thumbnail_path,
-                metadata=json.dumps(event_metadata),
+                metadata=json_relative_path,  # Store path to JSON file
             )
-            print(f"[DB] Saved event: {event_type} (id={event.id}) with metadata")
+            print(f"[DB] Saved event: {event_type} (id={event.id}) with JSON: {json_relative_path}")
             return event
         except Exception as e:
             print(f"[DB] Error saving event: {e}")
@@ -2478,10 +2522,29 @@ class BackgroundCameraWorker:
         self.clip_save_thread.start()
         print(f"[Worker] Started clip saver thread for camera {camera.camera_id}")
         
-        cap = self._create_rtsp_capture(camera.rtsp_url)
-        if not cap.isOpened():
+        # Try to connect with retries
+        cap = None
+        max_connect_retries = 5
+        for attempt in range(max_connect_retries):
+            print(f"[Worker] Attempting to connect to stream (attempt {attempt + 1}/{max_connect_retries})...")
+            cap = self._create_rtsp_capture(camera.rtsp_url)
+            if cap.isOpened():
+                # Try to read a test frame to confirm stream is working
+                ret, test_frame = cap.read()
+                if ret and test_frame is not None:
+                    print(f"[Worker] Successfully connected to stream: {camera.rtsp_url}")
+                    break
+                else:
+                    print(f"[Worker] Stream opened but no frames available, retrying...")
+                    cap.release()
+                    cap = None
+            else:
+                print(f"[Worker] Failed to open stream, retrying in 5s...")
+            time.sleep(5)
+        
+        if cap is None or not cap.isOpened():
             self.status = 'error'
-            self.last_error = f'Cannot open stream: {camera.rtsp_url}'
+            self.last_error = f'Cannot open stream after {max_connect_retries} attempts: {camera.rtsp_url}'
             camera.status = 'offline'
             camera.save()
             return
@@ -2494,27 +2557,40 @@ class BackgroundCameraWorker:
         camera.save()
         
         consecutive_failures = 0
-        max_failures = 10  # Max consecutive read failures before reconnect
+        max_failures = 20  # Max consecutive read failures before reconnect (increased)
         frame_count = 0
         last_buffer_frame = 0  # Track when we last buffered a frame
+        last_success_time = time.time()  # Track last successful frame read
         
         while self.running:
             ret, frame = cap.read()
-            if not ret:
+            if not ret or frame is None:
                 consecutive_failures += 1
-                if consecutive_failures >= max_failures:
+                
+                # Check if we've been failing for too long (30 seconds)
+                time_since_success = time.time() - last_success_time
+                
+                if consecutive_failures >= max_failures or time_since_success > 30:
                     self.status = 'reconnecting'
-                    self.last_error = 'Stream lost, reconnecting...'
+                    self.last_error = f'Stream lost ({consecutive_failures} failures, {time_since_success:.0f}s), reconnecting...'
+                    print(f"[Worker] {self.last_error}")
                     cap.release()
                     time.sleep(3)
                     cap = self._create_rtsp_capture(camera.rtsp_url)
                     if cap.isOpened():
-                        self.status = 'running'
-                        self.last_error = None
-                        consecutive_failures = 0
+                        # Test frame
+                        ret, test_frame = cap.read()
+                        if ret and test_frame is not None:
+                            self.status = 'running'
+                            self.last_error = None
+                            consecutive_failures = 0
+                            last_success_time = time.time()
+                            print(f"[Worker] Reconnected successfully")
                 continue
             
+            # Successful frame read
             consecutive_failures = 0
+            last_success_time = time.time()
             frame_count += 1
             self.frame_count = frame_count
             
@@ -2634,6 +2710,9 @@ class BackgroundCameraWorker:
                         # Still in cooldown, skip this detection (will merge with existing clip)
                         continue
                     
+                    # Get full detection metadata for JSON output
+                    det_metadata = det.get('metadata', {})
+                    
                     # Schedule delayed clip save (wait for buffer to fill with 30s of frames)
                     with self.pending_clip_lock:
                         if self.pending_clip_event is None:
@@ -2643,6 +2722,12 @@ class BackgroundCameraWorker:
                                 'bbox': bbox,
                                 'trigger_time': now,
                                 'fps': fps,
+                                'distance': det_metadata.get('distance'),
+                                'distance_threshold': det_metadata.get('distance_threshold'),
+                                'cashier': det_metadata.get('cashier'),
+                                'customer': det_metadata.get('customer'),
+                                'interaction_point': det_metadata.get('interaction_point'),
+                                'people_count': det_metadata.get('people_count'),
                             }
                             print(f"[Clip] Detection triggered - will save 30s clip after buffer fills")
                     
@@ -2707,28 +2792,65 @@ class BackgroundCameraWorker:
             
             print(f"[ClipSaver] Saving {len(frames_to_save)} frames ({len(frames_to_save)/buffer_fps:.1f}s) for {pending['event_type']}")
             
+            # Verify frames are valid (not empty)
+            valid_frames = [f for f in frames_to_save if f is not None and f.size > 0]
+            if len(valid_frames) < min_frames:
+                print(f"[ClipSaver] Not enough valid frames ({len(valid_frames)}/{min_frames}), skipping")
+                with self.pending_clip_lock:
+                    self.pending_clip_event = None
+                continue
+            
             # Save clip with correct fps (half of stream fps since we buffer every 2nd frame)
             try:
-                paths = self.save_clip(frames_to_save, camera, pending['event_type'], buffer_fps)
-                clip_path = paths[0] if paths else None
-                thumb_path = paths[1] if paths else None
+                paths = self.save_clip(valid_frames, camera, pending['event_type'], buffer_fps)
                 
-                # Save event to database
-                self.save_event(
-                    camera,
-                    pending['event_type'],
-                    pending['confidence'],
-                    self.frame_count,
-                    pending['bbox'],
-                    clip_path,
-                    thumb_path
-                )
-                self.events_detected += 1
-                
-                print(f"[ClipSaver] Saved clip: {clip_path}")
+                # Only save event if clip was successfully created
+                if paths and paths[0]:
+                    clip_path = paths[0]
+                    thumb_path = paths[1] if len(paths) > 1 else None
+                    
+                    # Build comprehensive metadata including cashier/customer positions
+                    event_metadata = {
+                        'distance': pending.get('distance'),
+                        'distance_threshold': pending.get('distance_threshold'),
+                        'trigger_time': pending['trigger_time'].isoformat(),
+                        'frames_saved': len(valid_frames),
+                        'duration_sec': round(len(valid_frames) / buffer_fps, 1),
+                        'people_count': pending.get('people_count'),
+                    }
+                    
+                    # Add cashier position if available
+                    if pending.get('cashier'):
+                        event_metadata['cashier'] = pending['cashier']
+                    
+                    # Add customer position if available  
+                    if pending.get('customer'):
+                        event_metadata['customer'] = pending['customer']
+                    
+                    # Add interaction point if available
+                    if pending.get('interaction_point'):
+                        event_metadata['interaction_point'] = pending['interaction_point']
+                    
+                    # Save event to database with metadata
+                    self.save_event(
+                        camera,
+                        pending['event_type'],
+                        pending['confidence'],
+                        self.frame_count,
+                        pending['bbox'],
+                        clip_path,
+                        thumb_path,
+                        metadata=event_metadata
+                    )
+                    self.events_detected += 1
+                    print(f"[ClipSaver] Saved clip: {clip_path}")
+                else:
+                    print(f"[ClipSaver] Clip save failed, not creating event")
                 
             except Exception as e:
                 print(f"[ClipSaver] Error saving clip: {e}")
+                import traceback
+                traceback.print_exc()
             
             # Clear pending clip
             with self.pending_clip_lock:
