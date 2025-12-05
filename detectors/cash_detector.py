@@ -54,7 +54,7 @@ class CashTransactionDetector(BaseDetector):
         self.potential_transactions = deque(maxlen=30)  # Last 30 frames
         self.consecutive_detections = 0
         self.last_transaction_frame = -100  # Cooldown tracking
-        self.transaction_cooldown = 45  # frames between transactions
+        self.transaction_cooldown = 15  # frames between transactions (reduced from 45)
         
         # Hand keypoint indices for COCO format (used by YOLOv8-pose)
         # 9: left_wrist, 10: right_wrist
@@ -369,13 +369,19 @@ class CashTransactionDetector(BaseDetector):
             # Track potential transactions
             self.potential_transactions.append(len(transaction_events) > 0)
             
-            # Check for consistent detection
+            # Check for consistent detection - increment BEFORE checking threshold
             if transaction_events:
                 self.consecutive_detections += 1
+                
+                # Debug: Log detection attempt
+                best = min(transaction_events, key=lambda x: x.get('distance', 999))
+                cooldown_active = self.frame_count - self.last_transaction_frame <= self.transaction_cooldown
+                print(f"[CashDetect] Hand touch: dist={best['distance']:.0f} ({best['person1_role']}-{best['person2_role']}), consec={self.consecutive_detections}, cooldown={cooldown_active}")
             else:
                 self.consecutive_detections = max(0, self.consecutive_detections - 1)
             
             # Confirm transaction after minimum frames
+            # FIXED: Check consecutive_detections >= 1 (we just incremented it above)
             if (self.consecutive_detections >= self.min_transaction_frames and 
                 self.frame_count - self.last_transaction_frame > self.transaction_cooldown and
                 len(transaction_events) > 0):
@@ -412,6 +418,7 @@ class CashTransactionDetector(BaseDetector):
                     }
                 )
                 detections.append(detection)
+                print(f"[CashDetect] ✅ DETECTION TRIGGERED! dist={best_event['distance']:.0f}, conf={reported_confidence:.2f}")
                 
                 self.last_transaction_frame = self.frame_count
                 self.consecutive_detections = 0

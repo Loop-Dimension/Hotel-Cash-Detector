@@ -2,10 +2,15 @@
 Violence Detector
 
 Detects violent actions using:
-1. Pose-based action recognition (fighting poses, rapid movements)
-2. Person proximity and interaction patterns
-3. Sudden movement detection
-4. Body posture analysis
+1. Physical contact between TWO or more people
+2. Rapid aggressive movements while in close proximity
+3. Fall detection after contact
+
+STRICT RULES:
+- Single person actions are NEVER violence
+- Requires TWO people very close together
+- Requires sustained aggressive motion between them
+- Normal walking, waving, reaching = NOT violence
 """
 import cv2
 import numpy as np
@@ -18,37 +23,40 @@ class ViolenceDetector(BaseDetector):
     """
     Detects violence using pose estimation and motion analysis.
     
-    Detection methods:
-    1. Two or more people in close physical contact with rapid motion
-    2. Fall detection (person suddenly on ground)
-    3. Sudden chaotic motion patterns
+    STRICT DETECTION CRITERIA:
+    1. Minimum 2 people required
+    2. People must be in VERY close contact (overlapping bboxes)
+    3. HIGH motion from BOTH people simultaneously  
+    4. Sustained over many frames (min_violence_frames)
     
-    IMPROVED: Requires MULTIPLE indicators to confirm violence
-    - Single raised arm = NOT violence (could be waving, reaching)
-    - Single person moving fast = NOT violence (could be running)
-    - Two people close + aggressive poses + rapid motion = VIOLENCE
+    WHAT IS NOT VIOLENCE:
+    - One person raising arms (waving, stretching)
+    - One person moving fast (running, exercising)
+    - People standing close but not moving aggressively
+    - Normal customer-cashier interactions
     """
     
     def __init__(self, config: Dict = None):
         super().__init__(config)
         self.pose_model = None
         
-        # Detection parameters - VERY strict to reduce false positives
-        self.violence_confidence = config.get('violence_confidence', 0.80)
-        self.min_violence_frames = config.get('min_violence_frames', 15)  # Need sustained detection
-        self.motion_threshold = config.get('motion_threshold', 100)  # High motion threshold
+        # Detection parameters - EXTREMELY strict to reduce false positives
+        self.violence_confidence = config.get('violence_confidence', 0.85)
+        self.min_violence_frames = config.get('min_violence_frames', 20)  # Need 20+ frames
+        self.motion_threshold = config.get('motion_threshold', 150)  # Very high motion
         
         # Cashier zone exclusion (normal transactions shouldn't trigger violence)
         self.cashier_zone = config.get('cashier_zone', None)
         
         # Tracking state
-        self.previous_keypoints = {}  # Track keypoints per person
+        self.previous_keypoints = {}
+        self.previous_positions = {}  # Track bbox positions for motion
         self.consecutive_violence = 0
         self.last_violence_frame = -100
-        self.violence_cooldown = 90  # frames between alerts
+        self.violence_cooldown = 150  # Long cooldown between alerts
         
-        # Motion history
-        self.motion_history = deque(maxlen=15)
+        # Motion history per person
+        self.person_motion_history = {}  # person_id -> deque of motion values
         
         # Keypoint indices (COCO format)
         self.NOSE = 0
@@ -127,86 +135,39 @@ class ViolenceDetector(BaseDetector):
         
         return total_motion / valid_points if valid_points > 0 else 0.0
     
-    def detect_aggressive_pose(self, keypoints: np.ndarray) -> Tuple[bool, float, str]:
-        """
-        Detect aggressive body poses
+    def check_bbox_overlap(self, box1: Tuple, box2: Tuple) -> float:
+        """Check how much two bounding boxes overlap (0-1 ratio)"""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
         
-        Returns: (is_aggressive, confidence, pose_type)
-        """
-        if keypoints is None or len(keypoints) < 13:
-            return False, 0.0, ""
+        if x2 <= x1 or y2 <= y1:
+            return 0.0
         
-        try:
-            # Get key body parts
-            nose = keypoints[self.NOSE] if len(keypoints) > self.NOSE else None
-            l_shoulder = keypoints[self.LEFT_SHOULDER] if len(keypoints) > self.LEFT_SHOULDER else None
-            r_shoulder = keypoints[self.RIGHT_SHOULDER] if len(keypoints) > self.RIGHT_SHOULDER else None
-            l_elbow = keypoints[self.LEFT_ELBOW] if len(keypoints) > self.LEFT_ELBOW else None
-            r_elbow = keypoints[self.RIGHT_ELBOW] if len(keypoints) > self.RIGHT_ELBOW else None
-            l_wrist = keypoints[self.LEFT_WRIST] if len(keypoints) > self.LEFT_WRIST else None
-            r_wrist = keypoints[self.RIGHT_WRIST] if len(keypoints) > self.RIGHT_WRIST else None
-            l_hip = keypoints[self.LEFT_HIP] if len(keypoints) > self.LEFT_HIP else None
-            r_hip = keypoints[self.RIGHT_HIP] if len(keypoints) > self.RIGHT_HIP else None
-            
-            poses_detected = []
-            
-            # Check for raised arms (fighting pose) - stricter thresholds
-            # Require wrist to be significantly above shoulder (not just reaching for something)
-            if l_wrist is not None and l_shoulder is not None:
-                if l_wrist[2] > 0.5 and l_shoulder[2] > 0.5:  # Higher confidence required
-                    if l_wrist[1] < l_shoulder[1] - 80:  # Wrist well above shoulder
-                        poses_detected.append(("raised_arm_left", 0.6))
-            
-            if r_wrist is not None and r_shoulder is not None:
-                if r_wrist[2] > 0.5 and r_shoulder[2] > 0.5:  # Higher confidence required
-                    if r_wrist[1] < r_shoulder[1] - 80:  # Wrist well above shoulder
-                        poses_detected.append(("raised_arm_right", 0.6))
-            
-            # Check for both arms raised (very aggressive)
-            if len([p for p in poses_detected if "raised_arm" in p[0]]) >= 2:
-                poses_detected.append(("both_arms_raised", 0.9))
-            
-            # Check for punching motion (elbow bent, wrist extended forward)
-            if l_elbow is not None and l_wrist is not None and l_shoulder is not None:
-                if all(p[2] > 0.3 for p in [l_elbow, l_wrist, l_shoulder]):
-                    # Arm extended forward (elbow somewhat straight)
-                    arm_length = np.sqrt((l_wrist[0] - l_shoulder[0])**2 + (l_wrist[1] - l_shoulder[1])**2)
-                    if arm_length > 150:  # Extended arm
-                        poses_detected.append(("punch_left", 0.8))
-            
-            if r_elbow is not None and r_wrist is not None and r_shoulder is not None:
-                if all(p[2] > 0.3 for p in [r_elbow, r_wrist, r_shoulder]):
-                    arm_length = np.sqrt((r_wrist[0] - r_shoulder[0])**2 + (r_wrist[1] - r_shoulder[1])**2)
-                    if arm_length > 150:
-                        poses_detected.append(("punch_right", 0.8))
-            
-            # Check for person on ground (fall detection)
-            if nose is not None and l_hip is not None and r_hip is not None:
-                if nose[2] > 0.3 and (l_hip[2] > 0.3 or r_hip[2] > 0.3):
-                    hip_y = (l_hip[1] + r_hip[1]) / 2 if l_hip[2] > 0.3 and r_hip[2] > 0.3 else max(l_hip[1], r_hip[1])
-                    # If head is close to hip level (person is horizontal/falling)
-                    if abs(nose[1] - hip_y) < 50:
-                        poses_detected.append(("person_down", 0.85))
-            
-            if poses_detected:
-                best_pose = max(poses_detected, key=lambda x: x[1])
-                return True, best_pose[1], best_pose[0]
-            
-        except Exception as e:
-            pass
+        intersection = (x2 - x1) * (y2 - y1)
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
         
-        return False, 0.0, ""
+        min_area = min(area1, area2)
+        if min_area <= 0:
+            return 0.0
+        
+        return intersection / min_area
     
-    def detect_close_combat(self, people: List[Dict]) -> List[Dict]:
+    def detect_physical_altercation(self, people: List[Dict]) -> List[Dict]:
         """
-        Detect when two people are in physical altercation
+        Detect physical fighting between two people
         
-        STRICT REQUIREMENTS for violence:
-        - Two people VERY close (overlapping or nearly)
-        - BOTH have high motion OR aggressive poses
-        - Not in cashier zone
+        STRICT REQUIREMENTS:
+        1. Two people with OVERLAPPING bounding boxes (physically close)
+        2. BOTH people have high motion (not just one person moving)
+        3. Not in cashier zone (avoid false positives from transactions)
         """
-        combat_events = []
+        altercations = []
+        
+        if len(people) < 2:
+            return altercations
         
         for i, person1 in enumerate(people):
             for j, person2 in enumerate(people):
@@ -217,56 +178,59 @@ class ViolenceDetector(BaseDetector):
                 if person1.get('in_cashier_zone') or person2.get('in_cashier_zone'):
                     continue
                 
-                # Calculate distance between people
                 box1 = person1['bbox']
                 box2 = person2['bbox']
                 
-                center1 = ((box1[0] + box1[2]) // 2, (box1[1] + box1[3]) // 2)
-                center2 = ((box2[0] + box2[2]) // 2, (box2[1] + box2[3]) // 2)
+                # Check for significant overlap (people physically touching)
+                overlap = self.check_bbox_overlap(box1, box2)
                 
-                distance = np.sqrt((center1[0] - center2[0])**2 + (center1[1] - center2[1])**2)
+                # Require at least 20% overlap (people very close/touching)
+                if overlap < 0.20:
+                    continue
                 
-                # People must be VERY close (practically touching)
-                if distance < 100:
-                    motion1 = person1.get('motion', 0)
-                    motion2 = person2.get('motion', 0)
-                    aggr1 = person1.get('aggressive', False)
-                    aggr2 = person2.get('aggressive', False)
+                # Get motion for both people
+                motion1 = person1.get('avg_motion', 0)
+                motion2 = person2.get('avg_motion', 0)
+                
+                # BOTH must be moving aggressively (not just one attacking)
+                if motion1 < self.motion_threshold or motion2 < self.motion_threshold:
+                    continue
+                
+                # Calculate violence confidence based on overlap and motion
+                motion_score = min(1.0, (motion1 + motion2) / (self.motion_threshold * 4))
+                overlap_score = min(1.0, overlap * 2)  # Scale overlap
+                
+                confidence = (motion_score * 0.6) + (overlap_score * 0.4)
+                
+                if confidence >= 0.7:  # High threshold
+                    combined_bbox = (
+                        min(box1[0], box2[0]),
+                        min(box1[1], box2[1]),
+                        max(box1[2], box2[2]),
+                        max(box1[3], box2[3])
+                    )
                     
-                    # REQUIRE: Both people moving fast OR both aggressive
-                    both_moving = motion1 > self.motion_threshold and motion2 > self.motion_threshold
-                    both_aggressive = aggr1 and aggr2
-                    mixed_indicators = (aggr1 or aggr2) and (motion1 > self.motion_threshold or motion2 > self.motion_threshold)
-                    
-                    if both_moving or both_aggressive or mixed_indicators:
-                        confidence = 0.0
-                        if both_aggressive:
-                            confidence = 0.9
-                        elif both_moving:
-                            confidence = 0.85
-                        elif mixed_indicators:
-                            confidence = 0.75
-                        
-                        combat_events.append({
-                            'person1': i,
-                            'person2': j,
-                            'distance': distance,
-                            'center': ((center1[0] + center2[0]) // 2, 
-                                      (center1[1] + center2[1]) // 2),
-                            'confidence': confidence,
-                            'type': 'close_combat'
-                        })
+                    altercations.append({
+                        'person1': i,
+                        'person2': j,
+                        'overlap': overlap,
+                        'motion1': motion1,
+                        'motion2': motion2,
+                        'confidence': confidence,
+                        'bbox': combined_bbox
+                    })
         
-        return combat_events
+        return altercations
     
     def detect(self, frame: np.ndarray) -> List[Detection]:
         """
         Detect violence in the frame
         
-        IMPROVED LOGIC:
-        - Only trigger on CLOSE COMBAT between two people
-        - Single person actions (raised arms, running) are NOT violence
-        - Fall detection only when combined with other indicators
+        STRICT LOGIC - Only triggers on actual physical fighting:
+        1. Must have 2+ people with overlapping bounding boxes
+        2. BOTH people must have high motion (fighting involves both parties)
+        3. Must be sustained over many consecutive frames
+        4. Excludes cashier zone interactions
         """
         detections = []
         
@@ -278,13 +242,11 @@ class ViolenceDetector(BaseDetector):
             results = self.pose_model(frame, verbose=False)
             
             if not results or len(results) == 0:
-                self.consecutive_violence = max(0, self.consecutive_violence - 1)
+                self.consecutive_violence = max(0, self.consecutive_violence - 2)
                 return detections
             
             result = results[0]
-            
             people = []
-            violence_indicators = []
             
             if result.keypoints is not None and result.boxes is not None:
                 keypoints_data = result.keypoints.data.cpu().numpy()
@@ -292,16 +254,20 @@ class ViolenceDetector(BaseDetector):
                 
                 for idx, (kpts, box) in enumerate(zip(keypoints_data, boxes)):
                     bbox = tuple(map(int, box))
+                    person_id = f"person_{idx}"
                     
                     # Calculate motion from previous frame
-                    motion = 0.0
-                    person_id = f"person_{idx}"
+                    current_motion = 0.0
                     if person_id in self.previous_keypoints:
-                        motion = self.calculate_motion(kpts, self.previous_keypoints[person_id])
+                        current_motion = self.calculate_motion(kpts, self.previous_keypoints[person_id])
                     self.previous_keypoints[person_id] = kpts.copy()
                     
-                    # Check for aggressive poses
-                    is_aggressive, aggr_conf, pose_type = self.detect_aggressive_pose(kpts)
+                    # Track motion history for this person (average over last 5 frames)
+                    if person_id not in self.person_motion_history:
+                        self.person_motion_history[person_id] = deque(maxlen=5)
+                    self.person_motion_history[person_id].append(current_motion)
+                    
+                    avg_motion = np.mean(self.person_motion_history[person_id]) if self.person_motion_history[person_id] else 0
                     
                     # Check if in cashier zone
                     in_cashier = self.is_in_cashier_zone(bbox)
@@ -310,65 +276,51 @@ class ViolenceDetector(BaseDetector):
                         'idx': idx,
                         'bbox': bbox,
                         'keypoints': kpts,
-                        'motion': motion,
-                        'aggressive': is_aggressive,
-                        'aggression_conf': aggr_conf,
-                        'pose_type': pose_type,
+                        'current_motion': current_motion,
+                        'avg_motion': avg_motion,
                         'in_cashier_zone': in_cashier
                     }
                     people.append(person_info)
             
-            # ONLY detect close combat (two people fighting)
-            # Single person indicators are NOT enough for violence
-            combat_events = self.detect_close_combat(people)
+            # Clean up old person tracking (remove people not seen for a while)
+            current_ids = {f"person_{p['idx']}" for p in people}
+            old_ids = set(self.person_motion_history.keys()) - current_ids
+            for old_id in old_ids:
+                del self.person_motion_history[old_id]
+                if old_id in self.previous_keypoints:
+                    del self.previous_keypoints[old_id]
             
-            for event in combat_events:
-                p1 = people[event['person1']]
-                p2 = people[event['person2']]
-                
-                # Create bounding box around both people
-                combined_bbox = (
-                    min(p1['bbox'][0], p2['bbox'][0]),
-                    min(p1['bbox'][1], p2['bbox'][1]),
-                    max(p1['bbox'][2], p2['bbox'][2]),
-                    max(p1['bbox'][3], p2['bbox'][3])
-                )
-                
-                violence_indicators.append({
-                    'type': 'close_combat',
-                    'confidence': event['confidence'],
-                    'bbox': combined_bbox,
-                    'center': event['center']
-                })
+            # Detect physical altercations (two people fighting)
+            altercations = self.detect_physical_altercation(people)
             
-            # Track violence indicators
-            self.motion_history.append(len(violence_indicators) > 0)
-            
-            # Check for sustained violence indicators
-            if violence_indicators:
+            # Update consecutive violence counter
+            if altercations:
                 self.consecutive_violence += 1
             else:
-                self.consecutive_violence = max(0, self.consecutive_violence - 1)
+                # Decay faster when no violence detected
+                self.consecutive_violence = max(0, self.consecutive_violence - 2)
             
-            # Generate detection after sustained indicators
-            # IMPORTANT: Also check that current detection meets confidence threshold
+            # Generate detection only after sustained violence over many frames
             if (self.consecutive_violence >= self.min_violence_frames and
                 self.frame_count - self.last_violence_frame > self.violence_cooldown and
-                len(violence_indicators) > 0):
+                len(altercations) > 0):
                 
-                # Find the highest confidence indicator
-                best_indicator = max(violence_indicators, key=lambda x: x['confidence'])
+                # Find the highest confidence altercation
+                best = max(altercations, key=lambda x: x['confidence'])
                 
-                # Only generate detection if confidence meets threshold
-                if best_indicator['confidence'] >= self.violence_confidence:
+                # Only report if confidence meets threshold
+                if best['confidence'] >= self.violence_confidence:
                     detection = Detection(
                         label="VIOLENCE",
-                        confidence=best_indicator['confidence'],
-                        bbox=best_indicator['bbox'],
+                        confidence=best['confidence'],
+                        bbox=best['bbox'],
                         metadata={
-                            'type': best_indicator['type'],
+                            'type': 'physical_altercation',
+                            'overlap': best['overlap'],
+                            'motion1': best['motion1'],
+                            'motion2': best['motion2'],
                             'people_count': len(people),
-                            'indicators_count': len(violence_indicators)
+                            'consecutive_frames': self.consecutive_violence
                         }
                     )
                     detections.append(detection)
@@ -377,6 +329,6 @@ class ViolenceDetector(BaseDetector):
                     self.consecutive_violence = 0
         
         except Exception as e:
-            print(f"⚠️ Violence detection error: {e}")
+            print(f"[Violence] Detection error: {e}")
         
         return detections

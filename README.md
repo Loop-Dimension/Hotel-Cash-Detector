@@ -182,18 +182,16 @@ Hotel-Cash-Detector/
 │   │   ├── clips/                 # Event video clips
 │   │   └── thumbnails/            # Event thumbnails
 │   └── models/                    # AI model weights
-│       ├── yolov8n.pt             # YOLOv8 Nano
-│       ├── yolov8n-pose.pt        # YOLOv8 Pose
-│       └── fire_smoke_yolov8.pt   # Fire/smoke model
+│       ├── yolov8s.pt             # YOLOv8 Small (person detection)
+│       ├── yolov8s-pose.pt        # YOLOv8 Pose (hand tracking)
+│       └── fire_smoke_yolov8.pt   # Fire/smoke detection
 │
-└── flask/                         # Detection modules (shared)
-    ├── detectors/                 # Detection algorithms
-    │   ├── base_detector.py       # Base class
-    │   ├── unified_detector.py    # Main detector
-    │   ├── cash_detector.py       # Cash detection
-    │   ├── violence_detector.py   # Violence detection
-    │   └── fire_detector.py       # Fire detection
-    └── models/                    # Model weights (duplicate)
+└── detectors/                     # Detection modules (root level)
+    ├── base_detector.py           # Base class
+    ├── unified_detector.py        # Main detector
+    ├── cash_detector.py           # Cash detection
+    ├── violence_detector.py       # Violence detection
+    └── fire_detector.py           # Fire detection
 ```
 
 ---
@@ -975,12 +973,11 @@ python3 -m venv venv
 source venv/bin/activate
 
 # Install Python dependencies
-cd django_app
 pip install -r requirements.txt
 pip install gunicorn
 
 # Download YOLO models
-python -c "from ultralytics import YOLO; YOLO('yolov8n-pose.pt')"
+python -c "from ultralytics import YOLO; YOLO('yolov8s.pt'); YOLO('yolov8s-pose.pt')"
 ```
 
 **4. Configure Environment**
@@ -990,6 +987,9 @@ cat > .env << EOF
 SECRET_KEY=$(python -c "import secrets; print(secrets.token_hex(32))")
 DEBUG=False
 ALLOWED_HOSTS=your-domain.com,your-ec2-ip
+YOLO_MODEL=yolov8s.pt
+POSE_MODEL=yolov8s-pose.pt
+FIRE_MODEL=fire_smoke_yolov8.pt
 EOF
 ```
 
@@ -1374,8 +1374,8 @@ events = Event.objects.annotate(
 
 #### High CPU/GPU Usage
 **Solutions:**
-- Use smaller YOLO models (yolov8n instead of yolov8s)
-- Reduce frame processing rate
+- For low-resource systems, use yolov8n models (set in .env)
+- Reduce frame processing rate (FRAME_SKIP in settings)
 - Lower video resolution
 - Limit number of simultaneous cameras
 
@@ -1402,8 +1402,9 @@ Access developer mode in Camera Settings:
 
 | Model | Inference Time (GPU) | Inference Time (CPU) | Accuracy |
 |-------|---------------------|---------------------|----------|
-| YOLOv8n-Pose | ~15ms | ~100ms | Good |
-| YOLOv8s-Pose | ~25ms | ~200ms | Better |
+| YOLOv8s | ~20ms | ~150ms | Better (default) |
+| YOLOv8s-Pose | ~25ms | ~200ms | Better (default) |
+| YOLOv8n-Pose | ~15ms | ~100ms | Good (low resources) |
 | Fire/Smoke YOLO | ~10ms | ~80ms | Trained |
 
 ## Appendix B: Supported Languages

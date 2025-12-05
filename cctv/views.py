@@ -1279,13 +1279,16 @@ def generate_frames(camera):
     if worker is not None:
         print(f"[{camera.camera_id}] Using shared connection from background worker (no delay!)")
         
+        # Pre-allocate encode params
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 80]  # Slightly lower quality for speed
+        
         while worker.running:
             frame = worker.get_current_frame(with_overlay=True)
             if frame is not None:
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                _, buffer = cv2.imencode('.jpg', frame, encode_params)
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            time.sleep(0.033)  # ~30fps
+            time.sleep(0.04)  # 25fps is smoother than choppy 30fps
         return
     
     # No background worker - make new connection (legacy behavior)
@@ -2105,12 +2108,17 @@ class BackgroundCameraWorker:
         self.running = False
         self.thread = None
         self.detection_thread = None  # Separate detection thread
+        self.clip_save_thread = None  # Separate clip saving thread
         self.detector = None
         self.last_event_time = {}
-        self.event_cooldown = 30  # seconds between events
-        self.clip_buffer = []  # Stores frames WITH detection overlays
-        self.clip_buffer_size = 900  # 30 seconds at 30fps
+        self.event_cooldown = 15  # seconds between events (reduced from 30)
+        
+        # RAW frame buffer (every 2nd frame) for smooth clips
+        self.raw_frame_buffer = []
+        self.raw_buffer_lock = threading.Lock()
+        self.clip_buffer_size = 450  # 30 seconds at 15fps (every 2nd frame of 30fps)
         self.clip_duration_sec = 30  # clip duration in seconds
+        
         self.frame_count = 0
         self.status = 'stopped'
         self.last_error = None
@@ -2119,8 +2127,9 @@ class BackgroundCameraWorker:
         self.last_clip_time = {}  # event_type -> timestamp
         self.last_clip_path = {}  # event_type -> clip_path
         
-        # Track detection frame index for clip extraction
-        self.detection_frame_index = None  # Index in buffer when detection occurred
+        # Pending clip save info (detection triggers this, clip thread saves later)
+        self.pending_clip_event = None  # (event_type, confidence, bbox, trigger_frame, trigger_time)
+        self.pending_clip_lock = threading.Lock()
         
         # Shared frame for live viewing (no need to reconnect!)
         self.current_frame = None
@@ -2136,10 +2145,8 @@ class BackgroundCameraWorker:
         self.events_detected = 0
         self.frames_processed = 0
         
-        # Pending clip saves (for async saving)
-        self.pending_clips = []  # List of (timestamp, frames, camera_id, event_type, confidence, bbox)
-        self.clip_save_lock = threading.Lock()
-        self.clip_save_delay = 30  # Wait 30 seconds before saving clip
+        # Stream fps (detected from camera)
+        self.stream_fps = 30  # Default, will be updated from camera
     
     def get_uptime(self):
         """Get worker uptime as formatted string"""
@@ -2185,12 +2192,15 @@ class BackgroundCameraWorker:
         return cap
     
     def get_current_frame(self, with_overlay=True):
-        """Get the current frame for live viewing (shared from background worker)"""
+        """Get the current frame for live viewing (shared from background worker)
+        
+        Returns reference to frame - caller should not modify!
+        """
         with self.frame_lock:
             if with_overlay and self.current_frame_with_overlay is not None:
-                return self.current_frame_with_overlay.copy()
+                return self.current_frame_with_overlay
             elif self.current_frame is not None:
-                return self.current_frame.copy()
+                return self.current_frame
             return None
     
     def get_camera(self):
@@ -2227,27 +2237,26 @@ class BackgroundCameraWorker:
         return UnifiedDetector(config)
     
     def save_event(self, camera, event_type, confidence, frame_number, bbox=None, clip_path=None, thumbnail_path=None):
-        now = datetime.now()
-        last_time = self.last_event_time.get(event_type)
-        if last_time and (now - last_time).total_seconds() < self.event_cooldown:
+        """Save event to database. Always saves - cooldown is handled by detection thread."""
+        try:
+            event = Event.objects.create(
+                branch=camera.branch,
+                camera=camera,
+                event_type=event_type,
+                confidence=confidence,
+                frame_number=frame_number,
+                bbox_x1=bbox[0] if bbox else 0,
+                bbox_y1=bbox[1] if bbox else 0,
+                bbox_x2=bbox[2] if bbox else 0,
+                bbox_y2=bbox[3] if bbox else 0,
+                clip_path=clip_path,
+                thumbnail_path=thumbnail_path,
+            )
+            print(f"[DB] Saved event: {event_type} (id={event.id})")
+            return event
+        except Exception as e:
+            print(f"[DB] Error saving event: {e}")
             return None
-        
-        self.last_event_time[event_type] = now
-        
-        event = Event.objects.create(
-            branch=camera.branch,
-            camera=camera,
-            event_type=event_type,
-            confidence=confidence,
-            frame_number=frame_number,
-            bbox_x1=bbox[0] if bbox else 0,
-            bbox_y1=bbox[1] if bbox else 0,
-            bbox_x2=bbox[2] if bbox else 0,
-            bbox_y2=bbox[3] if bbox else 0,
-            clip_path=clip_path,
-            thumbnail_path=thumbnail_path,
-        )
-        return event
     
     def save_clip(self, frames, camera, detection_type, fps=30):
         """Save video clip directly to media folder for web access.
@@ -2424,6 +2433,11 @@ class BackgroundCameraWorker:
         self.detection_thread.start()
         print(f"[Worker] Started detection thread for camera {camera.camera_id}")
         
+        # Start clip saving thread (separate from detection)
+        self.clip_save_thread = threading.Thread(target=self.run_clip_saver, daemon=True)
+        self.clip_save_thread.start()
+        print(f"[Worker] Started clip saver thread for camera {camera.camera_id}")
+        
         cap = self._create_rtsp_capture(camera.rtsp_url)
         if not cap.isOpened():
             self.status = 'error'
@@ -2433,6 +2447,7 @@ class BackgroundCameraWorker:
             return
         
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        self.stream_fps = fps  # Store for clip saver
         self.status = 'running'
         camera.status = 'online'
         camera.last_connected = timezone.now()
@@ -2441,6 +2456,7 @@ class BackgroundCameraWorker:
         consecutive_failures = 0
         max_failures = 10  # Max consecutive read failures before reconnect
         frame_count = 0
+        last_buffer_frame = 0  # Track when we last buffered a frame
         
         while self.running:
             ret, frame = cap.read()
@@ -2458,28 +2474,29 @@ class BackgroundCameraWorker:
                         consecutive_failures = 0
                 continue
             
-            consecutive_failures = 0  # Reset on successful read
+            consecutive_failures = 0
             frame_count += 1
             self.frame_count = frame_count
             
-            # ALWAYS update current frame immediately (never blocks)
+            # Update current frame for live viewing (minimal lock time)
             with self.frame_lock:
-                self.current_frame = frame.copy()
-                # If no overlay yet, use raw frame
+                self.current_frame = frame
                 if self.current_frame_with_overlay is None:
-                    self.current_frame_with_overlay = frame.copy()
+                    self.current_frame_with_overlay = frame
             
-            # Send every 3rd frame to detection queue (non-blocking)
-            if frame_count % 3 == 0:
+            # Buffer every 2nd frame for clips (reduces memory, still smooth)
+            if frame_count % 2 == 0:
+                with self.raw_buffer_lock:
+                    self.raw_frame_buffer.append(frame.copy())
+                    if len(self.raw_frame_buffer) > self.clip_buffer_size:
+                        self.raw_frame_buffer.pop(0)
+            
+            # Send every 4th frame to detection (reduces CPU load)
+            if frame_count % 4 == 0:
                 try:
-                    # Put frame in queue for detection (don't wait if full)
-                    self.detection_queue.put_nowait((frame.copy(), frame_count, fps))
-                except queue.Full:
-                    # Queue full - detection is slow, skip this frame
-                    pass
-            
-            # Small sleep to prevent CPU spin
-            time.sleep(0.001)
+                    self.detection_queue.put_nowait((frame, frame_count, fps))
+                except:
+                    pass  # Queue full, skip
         
         cap.release()
         
@@ -2543,11 +2560,6 @@ class BackgroundCameraWorker:
                 result = self.detector.process_frame(frame.copy(), draw_overlay=True)
                 frame_with_overlay = result.get('frame', frame)
                 
-                # Buffer frames for clip saving
-                self.clip_buffer.append(frame_with_overlay.copy())
-                if len(self.clip_buffer) > self.clip_buffer_size:
-                    self.clip_buffer.pop(0)
-                
                 # Update overlay frame for live viewing
                 with self.frame_lock:
                     self.current_frame_with_overlay = frame_with_overlay
@@ -2559,7 +2571,7 @@ class BackgroundCameraWorker:
                 self.last_error = f"Detection error: {str(e)}"
                 continue
             
-            # Handle detections
+            # Handle detections - trigger delayed clip save
             if result.get('detections'):
                 for det in result['detections']:
                     det_label = det.get('label', '').lower()
@@ -2575,26 +2587,114 @@ class BackgroundCameraWorker:
                     else:
                         continue
                     
-                    # Save clip (runs in detection thread, doesn't block streaming)
-                    clip_path = None
-                    thumb_path = None
+                    # Check cooldown - skip if we saved same event type recently
+                    now = datetime.now()
+                    last_time = self.last_event_time.get(event_type)
+                    if last_time and (now - last_time).total_seconds() < self.event_cooldown:
+                        # Still in cooldown, skip this detection (will merge with existing clip)
+                        continue
                     
-                    if self.clip_buffer and len(self.clip_buffer) > 0:
-                        try:
-                            paths = self.save_clip(self.clip_buffer.copy(), camera, event_type, fps)
-                            if paths:
-                                clip_path, thumb_path = paths
-                        except Exception as e:
-                            print(f"[Clip] Save error: {e}")
+                    # Schedule delayed clip save (wait for buffer to fill with 30s of frames)
+                    with self.pending_clip_lock:
+                        if self.pending_clip_event is None:
+                            self.pending_clip_event = {
+                                'event_type': event_type,
+                                'confidence': confidence,
+                                'bbox': bbox,
+                                'trigger_time': now,
+                                'fps': fps,
+                            }
+                            print(f"[Clip] Detection triggered - will save 30s clip after buffer fills")
                     
-                    # Save event
-                    try:
-                        self.save_event(camera, event_type, confidence, frame_count, bbox, clip_path, thumb_path)
-                        self.events_detected += 1
-                    except Exception as e:
-                        self.last_error = f"Event save error: {str(e)}"
+                    # Update last event time immediately
+                    self.last_event_time[event_type] = now
         
         print(f"[Detection] Stopped detection loop for camera {camera.camera_id}")
+    
+    def run_clip_saver(self):
+        """Clip saving loop - runs in separate thread.
+        
+        Waits for pending clip events and saves them after buffer has 30 seconds of frames.
+        This ensures smooth video clips without blocking stream or detection.
+        """
+        from django.db import connection
+        connection.close()
+        
+        camera = self.get_camera()
+        if not camera:
+            return
+        
+        print(f"[ClipSaver] Started for camera {camera.camera_id}")
+        
+        while self.running:
+            # Check if there's a pending clip to save
+            pending = None
+            with self.pending_clip_lock:
+                if self.pending_clip_event is not None:
+                    pending = self.pending_clip_event.copy()
+            
+            if pending is None:
+                # No pending clip, sleep and check again
+                time.sleep(0.5)
+                continue
+            
+            # Wait for buffer to have enough frames (30 seconds worth)
+            # Check buffer size
+            buffer_size = 0
+            with self.raw_buffer_lock:
+                buffer_size = len(self.raw_frame_buffer)
+            
+            # We buffer every 2nd frame, so effective fps is half of stream fps
+            stream_fps = self.stream_fps if self.stream_fps > 0 else 30
+            buffer_fps = stream_fps / 2  # Every 2nd frame
+            target_frames = int(self.clip_duration_sec * buffer_fps)
+            
+            # If buffer has at least 10 seconds, save what we have
+            min_frames = int(10 * buffer_fps)  # At least 10 seconds
+            
+            if buffer_size < min_frames:
+                # Buffer too small, wait more
+                time.sleep(1)
+                continue
+            
+            # Use whatever frames we have (up to 30 seconds)
+            frames_to_use = min(buffer_size, target_frames)
+            
+            # Copy frames to save
+            frames_to_save = []
+            with self.raw_buffer_lock:
+                frames_to_save = self.raw_frame_buffer[-frames_to_use:].copy()
+            
+            print(f"[ClipSaver] Saving {len(frames_to_save)} frames ({len(frames_to_save)/buffer_fps:.1f}s) for {pending['event_type']}")
+            
+            # Save clip with correct fps (half of stream fps since we buffer every 2nd frame)
+            try:
+                paths = self.save_clip(frames_to_save, camera, pending['event_type'], buffer_fps)
+                clip_path = paths[0] if paths else None
+                thumb_path = paths[1] if paths else None
+                
+                # Save event to database
+                self.save_event(
+                    camera,
+                    pending['event_type'],
+                    pending['confidence'],
+                    self.frame_count,
+                    pending['bbox'],
+                    clip_path,
+                    thumb_path
+                )
+                self.events_detected += 1
+                
+                print(f"[ClipSaver] Saved clip: {clip_path}")
+                
+            except Exception as e:
+                print(f"[ClipSaver] Error saving clip: {e}")
+            
+            # Clear pending clip
+            with self.pending_clip_lock:
+                self.pending_clip_event = None
+        
+        print(f"[ClipSaver] Stopped for camera {camera.camera_id}")
     
     def start(self):
         if self.running:
@@ -2617,6 +2717,10 @@ class BackgroundCameraWorker:
         # Wait for detection thread
         if self.detection_thread:
             self.detection_thread.join(timeout=5)
+        
+        # Wait for clip saver thread
+        if self.clip_save_thread:
+            self.clip_save_thread.join(timeout=5)
         
         # Wait for main thread
         if self.thread:
