@@ -2177,17 +2177,19 @@ class BackgroundCameraWorker:
         
         # Set FFmpeg options via environment for better RTSP handling
         # - rtsp_transport=tcp: Use TCP instead of UDP to avoid packet loss
-        # - stimeout=60000000: 60 second socket timeout (in microseconds)
+        # - stimeout=10000000: 10 second socket timeout (in microseconds) - faster reconnect
         # - max_delay=500000: Max delay 0.5 seconds
-        # - fflags=nobuffer: Reduce buffering for lower latency
-        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|stimeout;60000000|max_delay;500000|fflags;nobuffer'
+        # - fflags=nobuffer+discardcorrupt: Reduce buffering, discard corrupt frames
+        # - analyzeduration=1000000: Analyze for 1 second max
+        # - probesize=1000000: Probe size 1MB
+        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|stimeout;10000000|max_delay;500000|fflags;nobuffer+discardcorrupt|analyzeduration;1000000|probesize;1000000'
         
         cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
         
-        # Set additional capture properties
-        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 15000)  # 15s connection timeout
-        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 15000)  # 15s read timeout
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffer for lowest latency
+        # Set additional capture properties - shorter timeouts for faster recovery
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)  # 10s connection timeout
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)   # 5s read timeout - fail fast, reconnect fast
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)  # Small buffer for stability
         
         return cap
     
@@ -2236,9 +2238,44 @@ class BackgroundCameraWorker:
         }
         return UnifiedDetector(config)
     
-    def save_event(self, camera, event_type, confidence, frame_number, bbox=None, clip_path=None, thumbnail_path=None):
-        """Save event to database. Always saves - cooldown is handled by detection thread."""
+    def save_event(self, camera, event_type, confidence, frame_number, bbox=None, clip_path=None, thumbnail_path=None, metadata=None):
+        """Save event to database with detection metadata as JSON."""
+        import json
         try:
+            # Build metadata JSON with detection parameters
+            event_metadata = metadata or {}
+            
+            # Add standard detection info
+            event_metadata.update({
+                'frame_number': frame_number,
+                'confidence': round(confidence, 3),
+                'bbox': bbox,
+                'camera_id': camera.camera_id,
+                'camera_name': camera.name,
+            })
+            
+            # Add detector-specific info if available
+            if self.detector:
+                if event_type == 'cash' and hasattr(self.detector, 'cash_detector'):
+                    cd = self.detector.cash_detector
+                    event_metadata['cash_detection'] = {
+                        'hand_touch_distance_threshold': getattr(cd, 'hand_touch_distance', 100),
+                        'cashier_zone': getattr(cd, 'cashier_zone', []),
+                        'pose_confidence': getattr(cd, 'pose_confidence', 0.5),
+                    }
+                elif event_type == 'violence' and hasattr(self.detector, 'violence_detector'):
+                    vd = self.detector.violence_detector
+                    event_metadata['violence_detection'] = {
+                        'min_violence_frames': getattr(vd, 'min_violence_frames', 20),
+                        'violence_confidence': getattr(vd, 'violence_confidence', 0.5),
+                    }
+                elif event_type == 'fire' and hasattr(self.detector, 'fire_detector'):
+                    fd = self.detector.fire_detector
+                    event_metadata['fire_detection'] = {
+                        'min_fire_frames': getattr(fd, 'min_fire_frames', 15),
+                        'fire_confidence': getattr(fd, 'fire_confidence', 0.5),
+                    }
+            
             event = Event.objects.create(
                 branch=camera.branch,
                 camera=camera,
@@ -2251,11 +2288,14 @@ class BackgroundCameraWorker:
                 bbox_y2=bbox[3] if bbox else 0,
                 clip_path=clip_path,
                 thumbnail_path=thumbnail_path,
+                metadata=json.dumps(event_metadata),
             )
-            print(f"[DB] Saved event: {event_type} (id={event.id})")
+            print(f"[DB] Saved event: {event_type} (id={event.id}) with metadata")
             return event
         except Exception as e:
             print(f"[DB] Error saving event: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def save_clip(self, frames, camera, detection_type, fps=30):

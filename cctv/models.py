@@ -207,6 +207,9 @@ class Event(models.Model):
     clip_path = models.CharField(max_length=500, blank=True, null=True)
     thumbnail_path = models.CharField(max_length=500, blank=True, null=True)
     
+    # JSON metadata with detection parameters
+    metadata = models.TextField(blank=True, null=True, help_text='JSON with detection parameters')
+    
     notes = models.TextField(blank=True, null=True)
     reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_events')
     reviewed_at = models.DateTimeField(blank=True, null=True)
