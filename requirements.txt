@@ -1,0 +1,29 @@
+# Django Framework
+Django
+django-cors-headers
+
+# Database & ORM
+psycopg2-binary
+
+# Computer Vision & AI
+opencv-python
+opencv-contrib-python
+ultralytics
+torch
+torchvision
+numpy
+Pillow
+
+# Video Processing
+ffmpeg-python
+
+# Web Server
+gunicorn
+whitenoise
+
+# Utilities
+python-dotenv
+requests
+
+# Development Tools
+pylint
