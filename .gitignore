@@ -76,3 +76,4 @@ node_modules/
 # Build outputs
 /flask/cctv-dashboard-main/dist/
 *.json
+DEPLOYMENT_AWS.md
