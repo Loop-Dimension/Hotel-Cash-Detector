@@ -24,6 +24,9 @@ whitenoise
 # Utilities
 python-dotenv
 requests
+psutil
 
 # Development Tools
 pylint
+gevent
+gunicorn

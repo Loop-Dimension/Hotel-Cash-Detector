@@ -78,6 +78,13 @@ class FireDetector(BaseDetector):
         try:
             from ultralytics import YOLO
             from pathlib import Path
+            import torch
+            
+            # Check GPU availability
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            print(f"[GPU] Fire detector using: {device}")
+            if torch.cuda.is_available():
+                print(f"      GPU: {torch.cuda.get_device_name(0)}")
             
             models_dir = Path(self.config.get('models_dir', 'models'))
             
@@ -88,8 +95,9 @@ class FireDetector(BaseDetector):
             fire_model_path = models_dir / fire_model_name
             if fire_model_path.exists():
                 self.yolo_model = YOLO(str(fire_model_path))
+                self.yolo_model.to(device)  # Move to GPU
                 self.use_yolo = True
-                print(f"[OK] Fire detector loaded: {fire_model_path}")
+                print(f"[OK] Fire detector loaded: {fire_model_path} on {device}")
                 
                 # Get class names from the model
                 self.fire_classes = self.yolo_model.names

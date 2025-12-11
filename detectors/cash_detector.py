@@ -74,22 +74,33 @@ class CashTransactionDetector(BaseDetector):
             pose_model_name = self.config.get('pose_model', 'yolov8s-pose.pt')
             yolo_model_name = self.config.get('yolo_model', 'yolov8s.pt')
             
+            # Check GPU availability
+            import torch
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            print(f"🎮 Using device: {device}")
+            if torch.cuda.is_available():
+                print(f"   GPU: {torch.cuda.get_device_name(0)}")
+            
             # Load pose model for hand detection
             pose_model_path = models_dir / pose_model_name
             if pose_model_path.exists():
                 self.pose_model = YOLO(str(pose_model_path))
-                print(f"✅ Loaded pose model: {pose_model_path}")
+                self.pose_model.to(device)  # Move to GPU
+                print(f"✅ Loaded pose model: {pose_model_path} on {device}")
             else:
                 # Download if not exists
                 self.pose_model = YOLO(pose_model_name)
-                print(f"✅ Downloaded and loaded pose model: {pose_model_name}")
+                self.pose_model.to(device)  # Move to GPU
+                print(f"✅ Downloaded and loaded pose model: {pose_model_name} on {device}")
             
             # Load person detection model as backup
             person_model_path = models_dir / yolo_model_name
             if person_model_path.exists():
                 self.person_model = YOLO(str(person_model_path))
+                self.person_model.to(device)  # Move to GPU
             else:
                 self.person_model = YOLO(yolo_model_name)
+                self.person_model.to(device)  # Move to GPU
             
             self.is_initialized = True
             return True

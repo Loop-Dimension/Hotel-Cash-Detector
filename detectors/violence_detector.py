@@ -74,6 +74,13 @@ class ViolenceDetector(BaseDetector):
         try:
             from ultralytics import YOLO
             from pathlib import Path
+            import torch
+            
+            # Check GPU availability
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            print(f"[GPU] Violence detector using: {device}")
+            if torch.cuda.is_available():
+                print(f"      GPU: {torch.cuda.get_device_name(0)}")
             
             models_dir = Path(self.config.get('models_dir', 'models'))
             
@@ -83,10 +90,12 @@ class ViolenceDetector(BaseDetector):
             pose_model_path = models_dir / pose_model_name
             if pose_model_path.exists():
                 self.pose_model = YOLO(str(pose_model_path))
-                print(f"[OK] Violence detector loaded pose model: {pose_model_path}")
+                self.pose_model.to(device)  # Move to GPU
+                print(f"[OK] Violence detector loaded pose model: {pose_model_path} on {device}")
             else:
                 self.pose_model = YOLO(pose_model_name)
-                print(f"[OK] Violence detector downloaded pose model: {pose_model_name}")
+                self.pose_model.to(device)  # Move to GPU
+                print(f"[OK] Violence detector downloaded pose model: {pose_model_name} on {device}")
             
             print("[OK] Violence detector initialized")
             self.is_initialized = True

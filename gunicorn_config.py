@@ -1,7 +1,7 @@
 import multiprocessing
 
 bind = "127.0.0.1:8000"
-workers = 1
+workers = 4
 worker_class = "gevent"
 worker_connections = 1000
 timeout = 120

@@ -39,8 +39,9 @@ import time
 # Global detector instances per camera
 camera_detectors = {}
 
-# Global background worker state
-background_workers = {}
+# Global background worker state - now using multiprocessing
+from .worker_process import CameraWorkerProcess
+background_workers = {}  # camera_id -> CameraWorkerProcess
 background_worker_lock = threading.Lock()
 
 
@@ -1263,7 +1264,7 @@ def get_detector_for_camera(camera):
 
 
 def generate_frames(camera):
-    """Generator for video frames with detection
+    """Generator for video frames with detection overlay.
     
     Optimization: If a background worker is already connected to this camera,
     use its frames instead of making a new connection (no delay!)
@@ -1272,27 +1273,31 @@ def generate_frames(camera):
     # Check if background worker is running for this camera - get reference quickly, release lock
     worker = None
     with background_worker_lock:
-        if camera.id in background_workers and background_workers[camera.id].running:
+        if camera.id in background_workers:
             worker = background_workers[camera.id]
+            if not worker.is_alive():
+                # Dead worker, remove it
+                del background_workers[camera.id]
+                worker = None
     
     # If worker exists, use its frames (lock is released now)
     if worker is not None:
-        print(f"[{camera.camera_id}] Using shared connection from background worker (no delay!)")
+        print(f"[{camera.camera_id}] Using shared connection from multiprocessing worker")
         
         # Pre-allocate encode params - quality 75 for faster encoding
         encode_params = [cv2.IMWRITE_JPEG_QUALITY, 75]
-        last_frame_id = None
+        last_frame_time = 0
         
-        while worker.running:
-            frame = worker.get_current_frame(with_overlay=True)
+        while worker.is_alive():
+            frame = worker.get_current_frame()
             if frame is not None:
-                # Check if this is a new frame by checking frame count
-                current_frame_id = worker.frame_count
-                if current_frame_id != last_frame_id:
+                # Throttle to ~30fps
+                current_time = time.time()
+                if current_time - last_frame_time >= 0.033:
                     _, buffer = cv2.imencode('.jpg', frame, encode_params)
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                    last_frame_id = current_frame_id
+                    last_frame_time = current_time
             time.sleep(0.015)  # ~66fps check rate for smoother streaming
         return
     
@@ -1434,17 +1439,21 @@ def generate_debug_frames(camera):
     # Check if background worker is running - get reference quickly, release lock
     worker = None
     with background_worker_lock:
-        if camera.id in background_workers and background_workers[camera.id].running:
+        if camera.id in background_workers:
             worker = background_workers[camera.id]
+            if not worker.is_alive():
+                # Dead worker, remove it
+                del background_workers[camera.id]
+                worker = None
     
     # If background worker is running, use its frames
     if worker is not None:
         # Pre-load pose model for this debug session
         pose_model = get_debug_pose_model()
         
-        while worker.running:
-            # Get raw frame (no overlay from UnifiedDetector)
-            frame = worker.get_current_frame(with_overlay=False)
+        while worker.is_alive():
+            # Get raw frame from worker
+            frame = worker.get_current_frame()
             if frame is not None:
                 # Draw our own debug overlay with poses, distances, labels
                 debug_frame = draw_debug_frame(frame.copy(), camera, pose_model)
@@ -2893,20 +2902,24 @@ class BackgroundCameraWorker:
 @login_required
 @require_http_methods(['POST'])
 def start_background_worker(request, camera_id):
-    """Start background worker for a camera"""
+    """Start background worker for a camera (multiprocessing)"""
     if not request.user.is_admin():
         return JsonResponse({'error': 'Admin only'}, status=403)
     
     camera = get_object_or_404(Camera, id=camera_id)
     
     with background_worker_lock:
-        if camera_id in background_workers and background_workers[camera_id].running:
-            return JsonResponse({'error': 'Worker already running', 'status': 'running'})
+        # Check if worker already exists and is alive
+        if camera_id in background_workers:
+            worker = background_workers[camera_id]
+            if worker.is_alive():
+                return JsonResponse({'error': 'Worker already running', 'status': 'running'})
+            else:
+                # Dead worker, remove it
+                del background_workers[camera_id]
         
-        models_dir = settings.BASE_DIR / 'models'
-        output_dir = settings.MEDIA_ROOT
-        
-        worker = BackgroundCameraWorker(camera, models_dir, output_dir)
+        # Create new worker process
+        worker = CameraWorkerProcess(camera_id)
         worker.start()
         background_workers[camera_id] = worker
     
@@ -2916,7 +2929,7 @@ def start_background_worker(request, camera_id):
 @login_required
 @require_http_methods(['POST'])
 def stop_background_worker(request, camera_id):
-    """Stop background worker for a camera"""
+    """Stop background worker for a camera (multiprocessing)"""
     if not request.user.is_admin():
         return JsonResponse({'error': 'Admin only'}, status=403)
     
@@ -2925,7 +2938,7 @@ def stop_background_worker(request, camera_id):
             return JsonResponse({'error': 'Worker not found', 'status': 'stopped'})
         
         worker = background_workers[camera_id]
-        worker.stop()
+        worker.stop(timeout=10)
         del background_workers[camera_id]
     
     return JsonResponse({'success': True, 'message': 'Worker stopped'})
@@ -2933,25 +2946,34 @@ def stop_background_worker(request, camera_id):
 
 @login_required
 def get_background_worker_status(request):
-    """Get status of all background workers"""
+    """Get status of all background workers (multiprocessing)"""
     if not request.user.is_admin():
         return JsonResponse({'error': 'Admin only'}, status=403)
     
     statuses = {}
     with background_worker_lock:
-        for camera_id, worker in background_workers.items():
+        for camera_id, worker in list(background_workers.items()):
             camera = Camera.objects.filter(id=camera_id).first()
+            worker_status = worker.get_status()
+            
+            # Clean up dead workers
+            if not worker.is_alive() and worker_status['running']:
+                print(f"[Manager] Cleaning up dead worker for camera {camera_id}")
+                del background_workers[camera_id]
+                worker_status['status'] = 'crashed'
+                worker_status['running'] = False
+            
             statuses[camera_id] = {
-                'camera_id': worker.camera_code,
+                'camera_id': camera.camera_id if camera else f'cam-{camera_id}',
                 'camera_name': camera.name if camera else 'Unknown',
-                'status': worker.status,
-                'running': worker.running,
-                'frame_count': worker.frame_count,
-                'last_error': worker.last_error,
-                'uptime': worker.get_uptime(),
-                'events_detected': worker.events_detected,
-                'frames_processed': worker.frames_processed,
-                'start_time': worker.start_time.isoformat() if worker.start_time else None,
+                'status': worker_status['status'],
+                'running': worker_status['running'],
+                'frame_count': worker_status['frames_processed'],
+                'last_error': worker_status['error'],
+                'uptime': worker_status['uptime'],
+                'events_detected': worker_status['events_detected'],
+                'frames_processed': worker_status['frames_processed'],
+                'start_time': None,  # Not needed for display
             }
     
     # Also include cameras without workers
@@ -2975,29 +2997,34 @@ def get_background_worker_status(request):
 
 
 def start_all_background_workers_internal():
-    """Start background workers for all cameras (internal function - no request needed)
+    """Start background workers for all cameras (multiprocessing)
     
     This is called automatically when Django starts.
     """
     cameras = Camera.objects.filter(status__in=['online', 'offline'])
     started = []
     
-    models_dir = settings.BASE_DIR / 'models'
-    output_dir = settings.MEDIA_ROOT
-    
     with background_worker_lock:
         for camera in cameras:
-            if camera.id not in background_workers or not background_workers[camera.id].running:
-                try:
-                    worker = BackgroundCameraWorker(camera, models_dir, output_dir)
-                    worker.start()
-                    background_workers[camera.id] = worker
-                    started.append(camera.camera_id)
-                    print(f"  ▶ Started worker: {camera.camera_id} ({camera.name})")
-                except Exception as e:
-                    print(f"  ✗ Failed to start {camera.camera_id}: {e}")
+            # Check if worker already exists and is alive
+            if camera.id in background_workers:
+                worker = background_workers[camera.id]
+                if worker.is_alive():
+                    continue  # Already running
+                else:
+                    # Dead worker, remove it
+                    del background_workers[camera.id]
+            
+            try:
+                worker = CameraWorkerProcess(camera.id)
+                worker.start()
+                background_workers[camera.id] = worker
+                started.append(camera.camera_id)
+                print(f"  ▶ Started worker process: {camera.camera_id} ({camera.name})")
+            except Exception as e:
+                print(f"  ✗ Failed to start {camera.camera_id}: {e}")
     
-    print(f"  Total: {len(started)} workers started")
+    print(f"  Total: {len(started)} worker processes started")
     return started
 
 
@@ -3015,15 +3042,17 @@ def start_all_background_workers(request):
 @login_required
 @require_http_methods(['POST'])
 def stop_all_background_workers(request):
-    """Stop all background workers"""
+    """Stop all background workers (multiprocessing)"""
     if not request.user.is_admin():
         return JsonResponse({'error': 'Admin only'}, status=403)
     
     stopped = []
     with background_worker_lock:
         for camera_id, worker in list(background_workers.items()):
-            worker.stop()
-            stopped.append(worker.camera_code)
+            camera = Camera.objects.filter(id=camera_id).first()
+            camera_code = camera.camera_id if camera else f'cam-{camera_id}'
+            worker.stop(timeout=10)
+            stopped.append(camera_code)
         background_workers.clear()
     
     return JsonResponse({'success': True, 'stopped': stopped, 'count': len(stopped)})
