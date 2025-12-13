@@ -2405,9 +2405,10 @@ class BackgroundCameraWorker:
         print(f"[Clip] Wrote {frame_count} frames to temp file")
         
         # Convert to H.264 MP4 using ffmpeg
+        ffmpeg_path = settings.DETECTION_CONFIG.get('FFMPEG_PATH', 'ffmpeg')
         try:
             result = subprocess.run([
-                'ffmpeg', '-y', '-i', str(temp_path),
+                ffmpeg_path, '-y', '-i', str(temp_path),
                 '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
                 '-pix_fmt', 'yuv420p',
                 '-movflags', '+faststart',

@@ -165,6 +165,9 @@ DETECTION_CONFIG = {
     # RTSP settings
     'RTSP_TIMEOUT': int(os.getenv('RTSP_TIMEOUT', '10')),
     'RTSP_BUFFER_SIZE': int(os.getenv('RTSP_BUFFER_SIZE', '10')),
+    
+    # FFmpeg path
+    'FFMPEG_PATH': os.getenv('FFMPEG_PATH', 'ffmpeg'),
 }
 
 # Admin credentials from environment (for seed command)
