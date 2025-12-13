@@ -77,3 +77,4 @@ node_modules/
 /flask/cctv-dashboard-main/dist/
 *.json
 DEPLOYMENT_AWS.md
+db.sqlite3

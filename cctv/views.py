@@ -351,6 +351,20 @@ def reports(request):
     return render(request, 'cctv/reports.html', context)
 
 
+@login_required
+def test_detection(request):
+    """Test detection page (Admin only)"""
+    user = request.user
+    if not user.is_admin():
+        return redirect('cctv:home')
+    
+    context = {
+        'user': user,
+        'active_page': 'test',
+    }
+    return render(request, 'cctv/test_detection.html', context)
+
+
 # ==================== API ENDPOINTS ====================
 
 @login_required
@@ -3058,3 +3072,183 @@ def stop_all_background_workers(request):
         background_workers.clear()
     
     return JsonResponse({'success': True, 'stopped': stopped, 'count': len(stopped)})
+
+
+# ==================== TEST DETECTION API ====================
+
+@login_required
+@require_http_methods(['POST'])
+def api_test_upload(request):
+    """Upload video for testing"""
+    if not request.user.is_admin():
+        return JsonResponse({'error': 'Admin only'}, status=403)
+    
+    if 'video' not in request.FILES:
+        return JsonResponse({'error': 'No video file provided'}, status=400)
+    
+    video_file = request.FILES['video']
+    
+    # Save to uploads directory
+    upload_dir = settings.BASE_DIR / 'uploads' / 'test'
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique filename
+    import uuid
+    ext = video_file.name.split('.')[-1]
+    filename = f"test_{uuid.uuid4().hex[:8]}.{ext}"
+    file_path = upload_dir / filename
+    
+    # Save file
+    with open(file_path, 'wb+') as destination:
+        for chunk in video_file.chunks():
+            destination.write(chunk)
+    
+    return JsonResponse({
+        'success': True,
+        'path': str(file_path),
+        'filename': filename
+    })
+
+
+@login_required
+@require_http_methods(['POST'])
+def api_test_process(request):
+    """Process uploaded video with detection"""
+    if not request.user.is_admin():
+        return JsonResponse({'error': 'Admin only'}, status=403)
+    
+    import json
+    import cv2
+    import time
+    from pathlib import Path
+    from detectors.unified_detector import UnifiedDetector
+    
+    try:
+        data = json.loads(request.body)
+        video_path = data.get('video_path')
+        detection_types = data.get('detection_types', ['cash'])
+        
+        # Parameters
+        params = {
+            'confidence_threshold': data.get('confidence_threshold', 0.7),
+            'hand_touch_distance': data.get('hand_distance', 80),
+            'pose_confidence': data.get('pose_confidence', 0.5),
+            'min_cash_confidence': data.get('confidence_threshold', 0.7),
+        }
+        frame_skip = data.get('frame_skip', 2)
+        
+        if not video_path or not Path(video_path).exists():
+            return JsonResponse({'error': 'Video file not found'}, status=400)
+        
+        # Initialize detector
+        models_dir = settings.BASE_DIR / 'models'
+        config = {
+            'models_dir': str(models_dir),
+            **params
+        }
+        detector = UnifiedDetector(config)
+        detector.initialize()
+        
+        # Open video
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return JsonResponse({'error': 'Could not open video'}, status=400)
+        
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = total_frames / fps if fps > 0 else 0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Prepare output video
+        output_dir = settings.MEDIA_ROOT / 'test_results'
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        import uuid
+        output_filename = f"result_{uuid.uuid4().hex[:8]}.mp4"
+        output_path = output_dir / output_filename
+        
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+        
+        # Process video
+        detections = []
+        frame_count = 0
+        processed_count = 0
+        start_time = time.time()
+        
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            frame_count += 1
+            
+            # Skip frames
+            if frame_count % frame_skip != 0:
+                out.write(frame)
+                continue
+            
+            processed_count += 1
+            
+            # Run detection based on selected types
+            frame_detections = []
+            if 'cash' in detection_types:
+                cash_dets = detector.cash_detector.detect(frame)
+                frame_detections.extend(cash_dets)
+            if 'violence' in detection_types:
+                violence_dets = detector.violence_detector.detect(frame)
+                frame_detections.extend(violence_dets)
+            if 'fire' in detection_types:
+                fire_dets = detector.fire_detector.detect(frame)
+                frame_detections.extend(fire_dets)
+            
+            # Draw detections on frame
+            for det in frame_detections:
+                # Draw bounding box
+                x1, y1, x2, y2 = det.bbox
+                color = {
+                    'CASH': (0, 255, 0),
+                    'VIOLENCE': (0, 0, 255),
+                    'FIRE': (0, 165, 255)
+                }.get(det.label, (255, 255, 255))
+                
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                
+                # Draw label
+                label_text = f"{det.label}: {det.confidence:.2f}"
+                cv2.putText(frame, label_text, (x1, y1 - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                
+                # Save detection
+                timestamp = frame_count / fps if fps > 0 else 0
+                detections.append({
+                    'type': det.label.lower(),
+                    'confidence': det.confidence,
+                    'frame': frame_count,
+                    'timestamp': round(timestamp, 2),
+                    'bbox': det.bbox
+                })
+            
+            out.write(frame)
+        
+        cap.release()
+        out.release()
+        
+        processing_time = round(time.time() - start_time, 2)
+        
+        return JsonResponse({
+            'success': True,
+            'results': {
+                'output_video': f'/media/test_results/{output_filename}',
+                'duration': round(duration, 2),
+                'frames_processed': processed_count,
+                'processing_time': processing_time,
+                'detections': detections
+            }
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({'error': str(e)}, status=500)

@@ -95,6 +95,11 @@
                         <span class="nav-label">{{ t.nav_reports }}</span>
                     </a>
                     
+                    <a href="{% url 'cctv:test_detection' %}" class="nav-item {% if active_page == 'test' %}active{% endif %}">
+                        <span class="nav-icon">🧪</span>
+                        <span class="nav-label">Test Detection</span>
+                    </a>
+                    
                     {% else %}
                     <!-- Project Manager Navigation -->
                     <a href="{% url 'cctv:home' %}" class="nav-item {% if active_page == 'home' %}active{% endif %}">

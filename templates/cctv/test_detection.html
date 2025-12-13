@@ -1,0 +1,583 @@
+{% extends "cctv/base.html" %}
+{% load static %}
+
+{% block title %}Test Detection - {{ t.app_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.test-container {
+    padding: 20px;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.test-header {
+    margin-bottom: 30px;
+}
+
+.test-header h1 {
+    font-size: 24px;
+    font-weight: 600;
+    color: #1f2937;
+    margin-bottom: 8px;
+}
+
+.test-grid {
+    display: grid;
+    grid-template-columns: 400px 1fr;
+    gap: 20px;
+}
+
+.control-panel {
+    background: white;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    height: fit-content;
+}
+
+.result-panel {
+    background: white;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.control-section {
+    margin-bottom: 24px;
+}
+
+.control-section h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 12px;
+}
+
+.upload-zone {
+    border: 2px dashed #d1d5db;
+    border-radius: 8px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.upload-zone:hover {
+    border-color: #3b82f6;
+    background: #eff6ff;
+}
+
+.upload-zone.dragover {
+    border-color: #2563eb;
+    background: #dbeafe;
+}
+
+.upload-icon {
+    font-size: 48px;
+    margin-bottom: 12px;
+}
+
+.upload-text {
+    color: #6b7280;
+    font-size: 14px;
+}
+
+.file-input {
+    display: none;
+}
+
+.param-group {
+    margin-bottom: 16px;
+}
+
+.param-label {
+    display: block;
+    font-size: 14px;
+    font-weight: 500;
+    color: #374151;
+    margin-bottom: 6px;
+}
+
+.param-input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.param-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.param-help {
+    font-size: 12px;
+    color: #6b7280;
+    margin-top: 4px;
+}
+
+.detection-types {
+    display: flex;
+    gap: 12px;
+}
+
+.detection-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.detection-checkbox input {
+    width: 18px;
+    height: 18px;
+}
+
+.test-btn {
+    width: 100%;
+    padding: 12px;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.test-btn:hover:not(:disabled) {
+    background: #2563eb;
+}
+
+.test-btn:disabled {
+    background: #9ca3af;
+    cursor: not-allowed;
+}
+
+.video-preview {
+    width: 100%;
+    max-height: 600px;
+    border-radius: 8px;
+    background: #000;
+}
+
+.result-info {
+    margin-top: 20px;
+    padding: 16px;
+    background: #f9fafb;
+    border-radius: 8px;
+}
+
+.result-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.result-row:last-child {
+    border-bottom: none;
+}
+
+.result-label {
+    font-weight: 500;
+    color: #6b7280;
+}
+
+.result-value {
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.detection-list {
+    margin-top: 20px;
+}
+
+.detection-item {
+    padding: 12px;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    margin-bottom: 8px;
+}
+
+.detection-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.detection-type {
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.detection-confidence {
+    background: #10b981;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.detection-meta {
+    font-size: 13px;
+    color: #6b7280;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 4px;
+    background: #e5e7eb;
+    border-radius: 2px;
+    margin: 20px 0;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: #3b82f6;
+    width: 0%;
+    transition: width 0.3s;
+}
+
+.status-message {
+    text-align: center;
+    padding: 12px;
+    border-radius: 6px;
+    margin: 12px 0;
+    font-weight: 500;
+}
+
+.status-success {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.status-error {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.status-processing {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+.file-name {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: #f3f4f6;
+    border-radius: 6px;
+    font-size: 14px;
+    color: #374151;
+    display: none;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="test-container">
+    <div class="test-header">
+        <h1>🧪 Test Detection</h1>
+        <p style="color: #6b7280;">Upload a video and test detection parameters</p>
+    </div>
+
+    <div class="test-grid">
+        <!-- Control Panel -->
+        <div class="control-panel">
+            <div class="control-section">
+                <h3>Upload Video</h3>
+                <div class="upload-zone" id="uploadZone">
+                    <div class="upload-icon">📹</div>
+                    <div class="upload-text">
+                        <strong>Click to upload</strong> or drag and drop<br>
+                        MP4, AVI, MOV files
+                    </div>
+                    <input type="file" id="fileInput" class="file-input" accept="video/*">
+                </div>
+                <div class="file-name" id="fileName"></div>
+            </div>
+
+            <div class="control-section">
+                <h3>Detection Types</h3>
+                <div class="detection-types">
+                    <label class="detection-checkbox">
+                        <input type="checkbox" name="detection" value="cash" checked>
+                        <span>Cash</span>
+                    </label>
+                    <label class="detection-checkbox">
+                        <input type="checkbox" name="detection" value="violence">
+                        <span>Violence</span>
+                    </label>
+                    <label class="detection-checkbox">
+                        <input type="checkbox" name="detection" value="fire">
+                        <span>Fire</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h3>Parameters</h3>
+                
+                <div class="param-group">
+                    <label class="param-label">Confidence Threshold</label>
+                    <input type="number" class="param-input" id="confidenceThreshold" value="0.7" min="0" max="1" step="0.05">
+                    <div class="param-help">Minimum confidence for detection (0.0 - 1.0)</div>
+                </div>
+
+                <div class="param-group">
+                    <label class="param-label">Hand Touch Distance (px)</label>
+                    <input type="number" class="param-input" id="handDistance" value="80" min="10" max="500">
+                    <div class="param-help">Maximum distance for hand touch detection</div>
+                </div>
+
+                <div class="param-group">
+                    <label class="param-label">Pose Confidence</label>
+                    <input type="number" class="param-input" id="poseConfidence" value="0.5" min="0" max="1" step="0.05">
+                    <div class="param-help">Minimum confidence for pose keypoints</div>
+                </div>
+
+                <div class="param-group">
+                    <label class="param-label">Frame Skip</label>
+                    <input type="number" class="param-input" id="frameSkip" value="2" min="1" max="10">
+                    <div class="param-help">Process every Nth frame (higher = faster)</div>
+                </div>
+            </div>
+
+            <button class="test-btn" id="processBtn" disabled>
+                Process Video
+            </button>
+
+            <div class="progress-bar" style="display: none;" id="progressBar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+
+            <div id="statusMessage"></div>
+        </div>
+
+        <!-- Result Panel -->
+        <div class="result-panel">
+            <h3 style="margin-bottom: 16px;">Results</h3>
+            
+            <div id="noResults" style="text-align: center; padding: 60px 20px; color: #9ca3af;">
+                <div style="font-size: 64px; margin-bottom: 16px;">📊</div>
+                <p>Upload and process a video to see results</p>
+            </div>
+
+            <div id="resultsContent" style="display: none;">
+                <video id="videoPreview" class="video-preview" controls></video>
+
+                <div class="result-info">
+                    <div class="result-row">
+                        <span class="result-label">Duration</span>
+                        <span class="result-value" id="resultDuration">-</span>
+                    </div>
+                    <div class="result-row">
+                        <span class="result-label">Frames Processed</span>
+                        <span class="result-value" id="resultFrames">-</span>
+                    </div>
+                    <div class="result-row">
+                        <span class="result-label">Processing Time</span>
+                        <span class="result-value" id="resultTime">-</span>
+                    </div>
+                    <div class="result-row">
+                        <span class="result-label">Detections Found</span>
+                        <span class="result-value" id="resultCount">-</span>
+                    </div>
+                </div>
+
+                <div class="detection-list" id="detectionList">
+                    <h4 style="margin-bottom: 12px; font-size: 16px;">Detections</h4>
+                    <div id="detectionItems"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInput');
+const fileName = document.getElementById('fileName');
+const processBtn = document.getElementById('processBtn');
+const progressBar = document.getElementById('progressBar');
+const progressFill = document.getElementById('progressFill');
+const statusMessage = document.getElementById('statusMessage');
+const noResults = document.getElementById('noResults');
+const resultsContent = document.getElementById('resultsContent');
+
+let uploadedFile = null;
+let uploadedVideoPath = null;
+
+// Drag and drop
+uploadZone.addEventListener('click', () => fileInput.click());
+
+uploadZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadZone.classList.add('dragover');
+});
+
+uploadZone.addEventListener('dragleave', () => {
+    uploadZone.classList.remove('dragover');
+});
+
+uploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadZone.classList.remove('dragover');
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+        handleFile(files[0]);
+    }
+});
+
+fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) {
+        handleFile(e.target.files[0]);
+    }
+});
+
+function handleFile(file) {
+    if (!file.type.startsWith('video/')) {
+        showStatus('Please upload a video file', 'error');
+        return;
+    }
+
+    uploadedFile = file;
+    fileName.textContent = `📹 ${file.name}`;
+    fileName.style.display = 'block';
+    processBtn.disabled = false;
+    showStatus('Video ready. Click "Process Video" to start.', 'success');
+
+    // Upload file
+    uploadFile(file);
+}
+
+async function uploadFile(file) {
+    const formData = new FormData();
+    formData.append('video', file);
+
+    try {
+        const response = await fetch('{% url "cctv:api_test_upload" %}', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            uploadedVideoPath = data.path;
+        } else {
+            showStatus('Upload failed: ' + data.error, 'error');
+        }
+    } catch (error) {
+        showStatus('Upload error: ' + error.message, 'error');
+    }
+}
+
+processBtn.addEventListener('click', async () => {
+    if (!uploadedVideoPath) {
+        showStatus('Please wait for upload to complete', 'error');
+        return;
+    }
+
+    const detectionTypes = Array.from(document.querySelectorAll('input[name="detection"]:checked'))
+        .map(el => el.value);
+
+    if (detectionTypes.length === 0) {
+        showStatus('Please select at least one detection type', 'error');
+        return;
+    }
+
+    const params = {
+        video_path: uploadedVideoPath,
+        detection_types: detectionTypes,
+        confidence_threshold: parseFloat(document.getElementById('confidenceThreshold').value),
+        hand_distance: parseInt(document.getElementById('handDistance').value),
+        pose_confidence: parseFloat(document.getElementById('poseConfidence').value),
+        frame_skip: parseInt(document.getElementById('frameSkip').value)
+    };
+
+    processBtn.disabled = true;
+    progressBar.style.display = 'block';
+    progressFill.style.width = '0%';
+    showStatus('Processing video...', 'processing');
+
+    try {
+        const response = await fetch('{% url "cctv:api_test_process" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            body: JSON.stringify(params)
+        });
+
+        const data = await response.json();
+        
+        if (data.success) {
+            progressFill.style.width = '100%';
+            showStatus('Processing complete!', 'success');
+            displayResults(data.results);
+        } else {
+            showStatus('Processing failed: ' + data.error, 'error');
+        }
+    } catch (error) {
+        showStatus('Error: ' + error.message, 'error');
+    } finally {
+        processBtn.disabled = false;
+        setTimeout(() => {
+            progressBar.style.display = 'none';
+        }, 2000);
+    }
+});
+
+function showStatus(message, type) {
+    statusMessage.textContent = message;
+    statusMessage.className = 'status-message status-' + type;
+}
+
+function displayResults(results) {
+    noResults.style.display = 'none';
+    resultsContent.style.display = 'block';
+
+    // Set video preview
+    document.getElementById('videoPreview').src = results.output_video;
+
+    // Set stats
+    document.getElementById('resultDuration').textContent = results.duration + 's';
+    document.getElementById('resultFrames').textContent = results.frames_processed;
+    document.getElementById('resultTime').textContent = results.processing_time + 's';
+    document.getElementById('resultCount').textContent = results.detections.length;
+
+    // Display detections
+    const detectionItems = document.getElementById('detectionItems');
+    detectionItems.innerHTML = '';
+
+    if (results.detections.length === 0) {
+        detectionItems.innerHTML = '<p style="text-align:center;color:#9ca3af;padding:20px;">No detections found</p>';
+    } else {
+        results.detections.forEach(det => {
+            const item = document.createElement('div');
+            item.className = 'detection-item';
+            item.innerHTML = `
+                <div class="detection-header">
+                    <span class="detection-type">${det.type.toUpperCase()}</span>
+                    <span class="detection-confidence">${(det.confidence * 100).toFixed(1)}%</span>
+                </div>
+                <div class="detection-meta">
+                    Frame ${det.frame} at ${det.timestamp}s
+                </div>
+            `;
+            detectionItems.appendChild(item);
+        });
+    }
+}
+</script>
+{% endblock %}

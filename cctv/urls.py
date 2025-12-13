@@ -21,6 +21,11 @@ urlpatterns = [
     path('video/logs/', views.video_logs, name='video_logs'),
     path('video/full/', views.video_full, name='video_full'),
     
+    # Test Detection
+    path('test/', views.test_detection, name='test_detection'),
+    path('api/test/upload/', views.api_test_upload, name='api_test_upload'),
+    path('api/test/process/', views.api_test_process, name='api_test_process'),
+    
     # Branch management
     path('manage/branches/', views.manage_branches, name='manage_branches'),
     path('manage/branches/<int:branch_id>/', views.manage_branch_detail, name='manage_branch_detail'),
