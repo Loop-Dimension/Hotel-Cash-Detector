@@ -31,23 +31,31 @@ venv/
 .venv/
 ENV/
 
-# YOLO Models (large files)
-
+# YOLO Models (large files - download separately)
+models/*.pt
+!models/.gitkeep
 
 # Media files (generated)
-*.mp4
-*.avi
-*.jpg
-*.jpeg
-*.png
-*.gif
+media/clips/*.mp4
+media/clips/*.avi
+media/thumbnails/*.jpg
+media/thumbnails/*.jpeg
+media/thumbnails/*.png
+media/json/*.json
+media/test_results/*.mp4
+media/test_results/*.avi
 /django_app/media/
 /flask/output/
 /flask/uploads/
 
+# Uploads
+uploads/
+uploads/test/*.mp4
+uploads/test/*.avi
+
 # Database
 *.db
-
+db.sqlite3
 
 # IDE
 .idea/
@@ -75,6 +83,6 @@ node_modules/
 
 # Build outputs
 /flask/cctv-dashboard-main/dist/
-*.json
-DEPLOYMENT_AWS.md
-db.sqlite3
+
+# Testing directory
+/testing
