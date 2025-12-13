@@ -30,13 +30,17 @@ CREATE USER orange WITH PASSWORD '00oo00oo';
 # Grant privileges
 GRANT ALL PRIVILEGES ON DATABASE cctv TO orange;
 
-# For PostgreSQL 15+ (Ubuntu 24.04), also grant schema privileges
+# For PostgreSQL 15+ (Ubuntu 24.04), grant schema and CREATE privileges
 \c cctv
 GRANT ALL ON SCHEMA public TO orange;
+GRANT CREATE ON SCHEMA public TO orange;
+GRANT USAGE ON SCHEMA public TO orange;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO orange;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO orange;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO orange;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO orange;
+ALTER DATABASE cctv OWNER TO orange;
+ALTER SCHEMA public OWNER TO orange;
 
 # Exit psql
 \q
@@ -195,12 +199,17 @@ sudo netstat -plnt | grep 5432
 sudo tail -f /var/log/postgresql/postgresql-16-main.log
 ```
 
-**Permission Denied:**
+**Permission Denied (schema public):**
 ```bash
-# Re-grant privileges
-sudo -u postgres psql
+# Fix PostgreSQL 15+ permissions
+sudo -u postgres psql << EOF
 \c cctv
 GRANT ALL ON SCHEMA public TO orange;
+GRANT CREATE ON SCHEMA public TO orange;
+GRANT USAGE ON SCHEMA public TO orange;
+ALTER DATABASE cctv OWNER TO orange;
+ALTER SCHEMA public OWNER TO orange;
+EOF
 ```
 
 **Django Migration Errors:**
