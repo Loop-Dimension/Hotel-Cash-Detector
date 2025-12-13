@@ -2107,6 +2107,9 @@ def get_translations_api(request):
 
 # ==================== BACKGROUND WORKERS ====================
 
+# Global lock for FFmpeg operations to prevent concurrent encoding issues
+_ffmpeg_lock = threading.Lock()
+
 class BackgroundCameraWorker:
     """Background worker for continuous camera detection"""
     
@@ -2405,8 +2408,10 @@ class BackgroundCameraWorker:
         print(f"[Clip] Wrote {frame_count} frames to temp file")
         
         # Convert to H.264 MP4 using ffmpeg
+        # Use global lock to prevent concurrent FFmpeg operations causing corruption
         ffmpeg_path = settings.DETECTION_CONFIG.get('FFMPEG_PATH', 'ffmpeg')
-        try:
+        with _ffmpeg_lock:
+          try:
             result = subprocess.run([
                 ffmpeg_path, '-y', '-i', str(temp_path),
                 '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
@@ -2425,15 +2430,15 @@ class BackgroundCameraWorker:
                 print(f"[Clip] FFmpeg error: {result.stderr.decode()[:300]}")
                 return None
                 
-        except subprocess.TimeoutExpired:
+          except subprocess.TimeoutExpired:
             print(f"[Clip] FFmpeg timeout")
             self._safe_delete(temp_path)
             return None
-        except FileNotFoundError:
+          except FileNotFoundError:
             print(f"[Clip] FFmpeg not found")
             self._safe_delete(temp_path)
             return None
-        except Exception as e:
+          except Exception as e:
             print(f"[Clip] Error: {e}")
             self._safe_delete(temp_path)
             return None

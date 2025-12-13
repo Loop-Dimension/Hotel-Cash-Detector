@@ -198,11 +198,36 @@ class CashTransactionDetector(BaseDetector):
     
     def is_person_in_cashier_zone(self, keypoints: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
         """
-        Check if a person is in the cashier zone using their CENTER POINT.
-        This ensures one person = one classification (not split between zones).
+        Check if a person is in the cashier zone using MAJORITY BODY AREA.
+        
+        Uses the bounding box area overlap - if more than 50% of the body
+        is inside the cashier zone, they are classified as cashier.
+        This prevents one person being detected as both cashier and client
+        when they're straddling the zone boundary.
         """
-        center = self.get_person_center(keypoints, bbox)
-        return self.is_in_cashier_zone(center)
+        x1, y1, x2, y2 = bbox
+        zx, zy, zw, zh = self.cashier_zone
+        
+        # Calculate intersection area
+        ix1 = max(x1, zx)
+        iy1 = max(y1, zy)
+        ix2 = min(x2, zx + zw)
+        iy2 = min(y2, zy + zh)
+        
+        if ix2 <= ix1 or iy2 <= iy1:
+            # No overlap - person is outside zone
+            return False
+        
+        intersection = (ix2 - ix1) * (iy2 - iy1)
+        box_area = (x2 - x1) * (y2 - y1)
+        
+        if box_area <= 0:
+            return False
+        
+        overlap_ratio = intersection / box_area
+        
+        # If more than 50% of body is in zone, classify as inside
+        return overlap_ratio > 0.5
     
     def is_box_in_cashier_zone(self, bbox: Tuple[int, int, int, int], threshold: float = 0.3) -> bool:
         """Check if a bounding box overlaps with cashier zone (legacy, kept for compatibility)"""
@@ -352,10 +377,10 @@ class CashTransactionDetector(BaseDetector):
                     bbox = tuple(map(int, box))
                     hands = self.get_hand_positions(kpts)
                     
-                    # Use CENTER POINT to determine if person is in cashier zone
-                    # This ensures one person = one classification (not split)
+                    # Use BODY AREA RATIO to determine if person is in cashier zone
+                    # This ensures one person = one classification based on where most of their body is
                     center = self.get_person_center(kpts, bbox)
-                    in_zone = self.is_in_cashier_zone(center)
+                    in_zone = self.is_person_in_cashier_zone(kpts, bbox)
                     
                     person_info = {
                         'idx': idx,
@@ -400,6 +425,13 @@ class CashTransactionDetector(BaseDetector):
                 # Find the best transaction event using distance score
                 best_event = max(transaction_events, key=lambda x: x.get('distance_score', 0))
                 
+                # FILTER: Skip if confidence is too low (prevents false positives)
+                reported_confidence = best_event.get('distance_score', best_event['confidence'])
+                if reported_confidence < self.min_cash_confidence:
+                    # Low confidence detection - skip but don't reset consecutive count
+                    print(f"[CashDetect] Low confidence ({reported_confidence:.2f} < {self.min_cash_confidence}), skipping")
+                    return detections
+                
                 # STRICT: Only accept if distance is within threshold (already filtered above)
                 # No OR logic - distance must be satisfied
                 
@@ -411,9 +443,6 @@ class CashTransactionDetector(BaseDetector):
                     min(frame.shape[1], mp[0] + 60),
                     min(frame.shape[0], mp[1] + 60)
                 )
-                
-                # Use distance score as confidence (closer hands = higher confidence)
-                reported_confidence = best_event.get('distance_score', best_event['confidence'])
                 
                 # Get person info for cashier and customer
                 p1_idx = best_event['person1_idx']
