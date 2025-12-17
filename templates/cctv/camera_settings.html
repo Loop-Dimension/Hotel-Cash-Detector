@@ -305,6 +305,20 @@
                     <button class="btn btn-sm btn-ghost" style="color: #ef4444;" onclick="lockDevMode()">🔒 {{ t.lock_dev_mode }}</button>
                 </div>
                 
+                <!-- ==================== DRAWING MODE (ZONE SELECTION) ==================== -->
+                <div style="margin-bottom: 24px; padding: 20px; background: var(--gray-800); border-radius: 12px; border: 1px solid var(--blue-700);">
+                    <h4 style="color: #3b82f6; margin-bottom: 16px;">✏️ Drawing Mode</h4>
+                    <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+                        <button id="selectCashierZone" class="btn" style="flex: 1; background: #ffcc00; border-color: #ffcc00; color: #000; font-weight: bold;" onclick="setDrawingZone('cashier')">
+                            📍 Draw Cashier Zone
+                        </button>
+                        <button id="selectCashDrawerZone" class="btn" style="flex: 1; background: var(--gray-700); border-color: var(--gray-600); color: #fff;" onclick="setDrawingZone('cashDrawer')">
+                            💰 Draw Cash Drawer Zone
+                        </button>
+                    </div>
+                    <p style="color: var(--gray-400); font-size: 13px; margin: 0;">Select which zone to draw, then click and drag on the video above</p>
+                </div>
+                
                 <!-- ==================== CASHIER ZONE SETUP ==================== -->
                 <div style="margin-bottom: 24px; padding: 20px; background: var(--gray-800); border-radius: 12px;">
                     <h4 style="color: #fff; margin-bottom: 16px;">📍 {{ t.setup_cashier_zone }}</h4>
@@ -359,6 +373,81 @@
                     <div class="btn-group" style="display: flex; gap: 12px;">
                         <button class="btn btn-secondary" onclick="resetZone()">{{ t.reset_zone }}</button>
                         <button class="btn btn-primary" onclick="saveZone()">{{ t.save_zone }}</button>
+                    </div>
+                </div>
+                
+                <!-- ==================== CASH DRAWER ZONE SETUP ==================== -->
+                <div style="margin-bottom: 24px; padding: 20px; background: var(--gray-800); border-radius: 12px; border: 1px solid var(--green-700);">
+                    <h4 style="color: #22c55e; margin-bottom: 16px;">💰 Cash Drawer Zone (Two-Step Detection)</h4>
+                    <p style="color: var(--gray-400); font-size: 13px; margin-bottom: 16px;">
+                        Enhanced cash detection: <strong>Customer touches Cashier</strong> → <strong>Cashier's hand goes to Cash Drawer</strong> → <strong>CASH detected</strong>
+                    </p>
+                    
+                    <div class="toggle-group" style="background: var(--gray-700); margin-bottom: 16px;">
+                        <div class="toggle-info">
+                            <span class="toggle-label" style="color: #fff;">Enable Cash Drawer Zone</span>
+                            <span class="toggle-desc" style="color: var(--gray-400);">Required for two-step cash detection</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="cashDrawerZoneEnabled" {% if camera.cash_drawer_zone_enabled %}checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="toggle-group" style="background: var(--green-900); border: 1px solid var(--green-600); margin-bottom: 16px;">
+                        <div class="toggle-info">
+                            <span class="toggle-label" style="color: #22c55e;">Show Cash Drawer Overlay</span>
+                            <span class="toggle-desc" style="color: var(--green-200);">Show green box on video</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="showCashDrawerOverlay" onchange="toggleCashDrawerOverlay()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="zone-controls" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px;">
+                        <div class="form-group">
+                            <label style="color: var(--gray-300);">Cash Drawer X</label>
+                            <input type="number" id="cashDrawerX" value="{{ camera.cash_drawer_zone_x|default:50 }}" min="0" max="1920" 
+                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
+                        </div>
+                        <div class="form-group">
+                            <label style="color: var(--gray-300);">Cash Drawer Y</label>
+                            <input type="number" id="cashDrawerY" value="{{ camera.cash_drawer_zone_y|default:200 }}" min="0" max="1080"
+                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
+                        </div>
+                        <div class="form-group">
+                            <label style="color: var(--gray-300);">Cash Drawer Width</label>
+                            <input type="number" id="cashDrawerWidth" value="{{ camera.cash_drawer_zone_width|default:150 }}" min="50" max="1920"
+                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
+                        </div>
+                        <div class="form-group">
+                            <label style="color: var(--gray-300);">Cash Drawer Height</label>
+                            <input type="number" id="cashDrawerHeight" value="{{ camera.cash_drawer_zone_height|default:100 }}" min="50" max="1080"
+                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
+                        </div>
+                    </div>
+                    
+                    <!-- Hand Tracking Duration Slider -->
+                    <div class="slider-group" style="margin-bottom: 16px; padding: 16px; background: var(--gray-700); border-radius: 8px;">
+                        <div class="slider-header" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span class="slider-label" style="color: var(--gray-300);">⏱️ Hand Tracking Duration</span>
+                            <span class="slider-value" id="trackingDurationValue" style="color: #22c55e; background: var(--gray-800); padding: 4px 12px; border-radius: 6px;">{{ camera.hand_tracking_duration|default:90 }} frames</span>
+                        </div>
+                        <input type="range" class="slider-input" id="handTrackingDuration" 
+                               min="30" max="300" step="10" value="{{ camera.hand_tracking_duration|default:90 }}"
+                               oninput="updateSliderValue('trackingDuration')"
+                               style="accent-color: #22c55e;">
+                        <p style="color: var(--gray-500); font-size: 12px; margin-top: 8px;">
+                            How long to track cashier's hand after customer touch (~{{ camera.hand_tracking_duration|default:90 }} frames = ~{{ camera.hand_tracking_duration|default:90|divisibleby:30 }} seconds at 30fps)
+                        </p>
+                    </div>
+                    
+                    <p style="color: var(--gray-400); font-size: 12px; margin-bottom: 12px;">💡 Tip: Select drawing mode above, then click and drag on video to draw zone</p>
+                    
+                    <div class="btn-group" style="display: flex; gap: 12px;">
+                        <button class="btn btn-secondary" onclick="resetCashDrawerZone()">Reset Cash Drawer</button>
+                        <button class="btn btn-primary" style="background: #22c55e; border-color: #22c55e;" onclick="saveCashDrawerZone()">Save Cash Drawer</button>
                     </div>
                 </div>
                 
@@ -456,7 +545,7 @@
                     <div class="toggle-group" style="background: var(--gray-700); border: 1px solid var(--green-600);">
                         <div class="toggle-info">
                             <span class="toggle-label" style="color: #fff;">Enable Debug Overlay</span>
-                            <span class="toggle-desc" style="color: var(--gray-400);">{{ t.debug_overlay_desc }}</span>
+                            <span class="toggle-desc" style="color: var(--gray-400);">Show all zones and detection features on live video</span>
                         </div>
                         <label class="toggle-switch">
                             <input type="checkbox" id="debugOverlayEnabled" onchange="toggleDebugMode()">
@@ -481,7 +570,9 @@
                     <div id="debugFeaturesPanel" style="display: none; margin-top: 16px; padding: 16px; background: #0a0a0a; border-radius: 8px; border: 1px solid var(--green-600);">
                         <h5 style="color: #22c55e; margin-bottom: 12px;">Debug Features Active:</h5>
                         <ul style="color: #e5e5e5; list-style: none; padding: 0; margin: 0; font-size: 13px;">
-                            <li style="margin-bottom: 8px;">👤 <strong>{{ t.label_persons }}</strong> - <span style="color: #22c55e;">CASHIER</span> (in zone) / <span style="color: #f97316;">CLIENT</span> (outside)</li>
+                            <li style="margin-bottom: 8px;">� <strong>Cashier Zone</strong> - <span style="color: #ffcc00;">Yellow zone</span> where cashier stands</li>
+                            <li style="margin-bottom: 8px;">💰 <strong>Cash Drawer Zone</strong> - <span style="color: #22c55e;">Green zone</span> where cash is deposited</li>
+                            <li style="margin-bottom: 8px;">👤 <strong>{{ t.label_persons }}</strong> - <span style="color: #ffcc00;">CASHIER</span> (in zone) / <span style="color: #3b82f6;">CLIENT</span> (outside)</li>
                             <li style="margin-bottom: 8px;">✋ <strong>{{ t.show_poses }}</strong> - Skeleton overlay showing body keypoints</li>
                             <li style="margin-bottom: 8px;">📏 <strong>{{ t.show_hand_distance }}</strong> - Lines between hands with distance in pixels</li>
                             <li>📊 <strong>{{ t.event_processing_debug }}</strong> - Detection frame counters and thresholds</li>
@@ -554,16 +645,111 @@
     let canvasWidth = 1024;
     let canvasHeight = 576;
     let showZoneOverlay = false;  // Yellow box hidden by default
+    let showCashDrawerOverlay = false;  // Green box hidden by default
+    let activeDrawZone = 'cashier';  // 'cashier' or 'cashDrawer'
+    
+    // Function to set which zone to draw
+    function setDrawingZone(zoneType) {
+        activeDrawZone = zoneType;
+        
+        // Update button styles
+        const cashierBtn = document.getElementById('selectCashierZone');
+        const drawerBtn = document.getElementById('selectCashDrawerZone');
+        
+        if (zoneType === 'cashier') {
+            cashierBtn.style.background = '#ffcc00';
+            cashierBtn.style.borderColor = '#ffcc00';
+            cashierBtn.style.color = '#000';
+            cashierBtn.style.fontWeight = 'bold';
+            
+            drawerBtn.style.background = 'var(--gray-700)';
+            drawerBtn.style.borderColor = 'var(--gray-600)';
+            drawerBtn.style.color = '#fff';
+            drawerBtn.style.fontWeight = 'normal';
+        } else {
+            cashierBtn.style.background = 'var(--gray-700)';
+            cashierBtn.style.borderColor = 'var(--gray-600)';
+            cashierBtn.style.color = '#fff';
+            cashierBtn.style.fontWeight = 'normal';
+            
+            drawerBtn.style.background = '#22c55e';
+            drawerBtn.style.borderColor = '#22c55e';
+            drawerBtn.style.color = '#000';
+            drawerBtn.style.fontWeight = 'bold';
+        }
+    }
     let currentZone = {
         x: {{ camera.cashier_zone_x }},
         y: {{ camera.cashier_zone_y }},
         width: {{ camera.cashier_zone_width }},
         height: {{ camera.cashier_zone_height }}
     };
+    let cashDrawerZone = {
+        x: {{ camera.cash_drawer_zone_x|default:50 }},
+        y: {{ camera.cash_drawer_zone_y|default:200 }},
+        width: {{ camera.cash_drawer_zone_width|default:150 }},
+        height: {{ camera.cash_drawer_zone_height|default:100 }}
+    };
     
     // Toggle zone overlay visibility (yellow box on video)
     function toggleZoneOverlay() {
         showZoneOverlay = document.getElementById('showZoneOverlay').checked;
+        drawZone();
+    }
+    
+    // Toggle cash drawer overlay visibility (green box on video)
+    function toggleCashDrawerOverlay() {
+        showCashDrawerOverlay = document.getElementById('showCashDrawerOverlay').checked;
+        drawZone();
+    }
+    
+    // Function to set which zone to draw (called by zone selection buttons)
+    function setDrawingZone(zoneType) {
+        activeDrawZone = zoneType;
+        
+        // Update button styles
+        const cashierBtn = document.getElementById('selectCashierZone');
+        const drawerBtn = document.getElementById('selectCashDrawerZone');
+        
+        if (zoneType === 'cashier') {
+            cashierBtn.style.background = '#ffcc00';
+            cashierBtn.style.borderColor = '#ffcc00';
+            cashierBtn.style.color = '#000';
+            cashierBtn.style.fontWeight = 'bold';
+            
+            drawerBtn.style.background = 'var(--gray-700)';
+            drawerBtn.style.borderColor = 'var(--gray-600)';
+            drawerBtn.style.color = '#fff';
+            drawerBtn.style.fontWeight = 'normal';
+        } else {
+            cashierBtn.style.background = 'var(--gray-700)';
+            cashierBtn.style.borderColor = 'var(--gray-600)';
+            cashierBtn.style.color = '#fff';
+            cashierBtn.style.fontWeight = 'normal';
+            
+            drawerBtn.style.background = '#22c55e';
+            drawerBtn.style.borderColor = '#22c55e';
+            drawerBtn.style.color = '#000';
+            drawerBtn.style.fontWeight = 'bold';
+        }
+    }
+    
+    // Toggle debug mode - shows both zones when enabled
+    function toggleDebugMode() {
+        const debugEnabled = document.getElementById('debugOverlayEnabled').checked;
+        const debugPanel = document.getElementById('debugFeaturesPanel');
+        
+        if (debugEnabled) {
+            // Auto-enable both zone overlays when debug mode is on
+            showZoneOverlay = true;
+            showCashDrawerOverlay = true;
+            document.getElementById('showZoneOverlay').checked = true;
+            document.getElementById('showCashDrawerOverlay').checked = true;
+            if (debugPanel) debugPanel.style.display = 'block';
+        } else {
+            if (debugPanel) debugPanel.style.display = 'none';
+        }
+        
         drawZone();
     }
     
@@ -596,36 +782,62 @@
             ctx.fillText('Click "Live Preview" to start video', canvas.width / 2, canvas.height / 2);
         }
         
-        // Only draw zone rectangle when overlay toggle is ON
-        if (!showZoneOverlay) return;
+        // Draw Cashier Zone (yellow) when overlay toggle is ON
+        if (showZoneOverlay) {
+            ctx.strokeStyle = '#ffcc00';
+            ctx.lineWidth = 3;
+            ctx.setLineDash([10, 5]);
+            ctx.strokeRect(currentZone.x, currentZone.y, currentZone.width, currentZone.height);
+            
+            // Fill with transparent yellow
+            ctx.fillStyle = 'rgba(255, 204, 0, 0.2)';
+            ctx.fillRect(currentZone.x, currentZone.y, currentZone.width, currentZone.height);
+            
+            // Label with background for visibility
+            ctx.setLineDash([]);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(currentZone.x, currentZone.y, 120, 28);
+            ctx.fillStyle = '#ffcc00';
+            ctx.font = 'bold 14px Pretendard Variable';
+            ctx.textAlign = 'left';
+            ctx.fillText('CASHIER ZONE', currentZone.x + 8, currentZone.y + 19);
+            
+            // Update input fields
+            document.getElementById('zoneX').value = Math.round(currentZone.x);
+            document.getElementById('zoneY').value = Math.round(currentZone.y);
+            document.getElementById('zoneWidth').value = Math.round(currentZone.width);
+            document.getElementById('zoneHeight').value = Math.round(currentZone.height);
+        }
         
-        // Draw zone rectangle with yellow color for visibility
-        ctx.strokeStyle = '#ffcc00';
-        ctx.lineWidth = 3;
-        ctx.setLineDash([10, 5]);
-        ctx.strokeRect(currentZone.x, currentZone.y, currentZone.width, currentZone.height);
-        
-        // Fill with transparent yellow
-        ctx.fillStyle = 'rgba(255, 204, 0, 0.2)';
-        ctx.fillRect(currentZone.x, currentZone.y, currentZone.width, currentZone.height);
-        
-        // Label with background for visibility
-        ctx.setLineDash([]);
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.fillRect(currentZone.x, currentZone.y, 120, 28);
-        ctx.fillStyle = '#ffcc00';
-        ctx.font = 'bold 14px Pretendard Variable';
-        ctx.textAlign = 'left';
-        ctx.fillText('CASHIER ZONE', currentZone.x + 8, currentZone.y + 19);
-        
-        // Update input fields
-        document.getElementById('zoneX').value = Math.round(currentZone.x);
-        document.getElementById('zoneY').value = Math.round(currentZone.y);
-        document.getElementById('zoneWidth').value = Math.round(currentZone.width);
-        document.getElementById('zoneHeight').value = Math.round(currentZone.height);
+        // Draw Cash Drawer Zone (green) when overlay toggle is ON
+        if (showCashDrawerOverlay) {
+            ctx.strokeStyle = '#22c55e';
+            ctx.lineWidth = 3;
+            ctx.setLineDash([10, 5]);
+            ctx.strokeRect(cashDrawerZone.x, cashDrawerZone.y, cashDrawerZone.width, cashDrawerZone.height);
+            
+            // Fill with transparent green
+            ctx.fillStyle = 'rgba(34, 197, 94, 0.2)';
+            ctx.fillRect(cashDrawerZone.x, cashDrawerZone.y, cashDrawerZone.width, cashDrawerZone.height);
+            
+            // Label with background for visibility
+            ctx.setLineDash([]);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(cashDrawerZone.x, cashDrawerZone.y, 130, 28);
+            ctx.fillStyle = '#22c55e';
+            ctx.font = 'bold 14px Pretendard Variable';
+            ctx.textAlign = 'left';
+            ctx.fillText('💰 CASH DRAWER', cashDrawerZone.x + 8, cashDrawerZone.y + 19);
+            
+            // Update Cash Drawer input fields
+            document.getElementById('cashDrawerX').value = Math.round(cashDrawerZone.x);
+            document.getElementById('cashDrawerY').value = Math.round(cashDrawerZone.y);
+            document.getElementById('cashDrawerWidth').value = Math.round(cashDrawerZone.width);
+            document.getElementById('cashDrawerHeight').value = Math.round(cashDrawerZone.height);
+        }
     }
     
-    // Mouse events for drawing zone
+    // Mouse events for drawing zone (use selected zone from buttons)
     canvas.addEventListener('mousedown', (e) => {
         const rect = canvas.getBoundingClientRect();
         const scaleX = canvas.width / rect.width;
@@ -634,6 +846,8 @@
         startX = (e.clientX - rect.left) * scaleX;
         startY = (e.clientY - rect.top) * scaleY;
         isDrawing = true;
+        
+        // Use the activeDrawZone set by button selection (no need for SHIFT key)
     });
     
     canvas.addEventListener('mousemove', (e) => {
@@ -646,12 +860,28 @@
         const currentX = (e.clientX - rect.left) * scaleX;
         const currentY = (e.clientY - rect.top) * scaleY;
         
-        currentZone = {
+        const newZone = {
             x: Math.min(startX, currentX),
             y: Math.min(startY, currentY),
             width: Math.abs(currentX - startX),
             height: Math.abs(currentY - startY)
         };
+        
+        if (activeDrawZone === 'cashDrawer') {
+            cashDrawerZone = newZone;
+            // Auto-enable overlay when drawing
+            if (!showCashDrawerOverlay) {
+                showCashDrawerOverlay = true;
+                document.getElementById('showCashDrawerOverlay').checked = true;
+            }
+        } else {
+            currentZone = newZone;
+            // Auto-enable overlay when drawing
+            if (!showZoneOverlay) {
+                showZoneOverlay = true;
+                document.getElementById('showZoneOverlay').checked = true;
+            }
+        }
         
         drawZone();
     });
@@ -677,8 +907,26 @@
         });
     });
     
+    // Update Cash Drawer zone from input fields
+    ['cashDrawerX', 'cashDrawerY', 'cashDrawerWidth', 'cashDrawerHeight'].forEach(id => {
+        document.getElementById(id).addEventListener('change', () => {
+            cashDrawerZone = {
+                x: parseInt(document.getElementById('cashDrawerX').value) || 50,
+                y: parseInt(document.getElementById('cashDrawerY').value) || 200,
+                width: parseInt(document.getElementById('cashDrawerWidth').value) || 150,
+                height: parseInt(document.getElementById('cashDrawerHeight').value) || 100
+            };
+            drawZone();
+        });
+    });
+    
     function resetZone() {
         currentZone = { x: 0, y: 0, width: 640, height: 480 };
+        drawZone();
+    }
+    
+    function resetCashDrawerZone() {
+        cashDrawerZone = { x: 50, y: 200, width: 150, height: 100 };
         drawZone();
     }
     
@@ -691,6 +939,12 @@
             const slider = document.getElementById('poseConfidence');
             const display = document.getElementById('poseConfValue');
             display.textContent = parseFloat(slider.value).toFixed(2);
+        } else if (type === 'trackingDuration') {
+            const slider = document.getElementById('handTrackingDuration');
+            const display = document.getElementById('trackingDurationValue');
+            const frames = parseInt(slider.value);
+            const seconds = (frames / 30).toFixed(1);
+            display.textContent = frames + ' frames (~' + seconds + 's)';
         } else {
             const slider = document.getElementById(type + 'Confidence');
             const display = document.getElementById(type + 'ConfValue');
@@ -727,8 +981,38 @@
         }
     }
     
+    async function saveCashDrawerZone() {
+        const data = {
+            x: cashDrawerZone.x,
+            y: cashDrawerZone.y,
+            width: cashDrawerZone.width,
+            height: cashDrawerZone.height,
+            enabled: document.getElementById('cashDrawerZoneEnabled').checked
+        };
+        
+        try {
+            const response = await fetch(`/api/cameras/${cameraId}/set-cash-drawer-zone/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (response.ok) {
+                showToast('Cash Drawer Zone saved!', 'success');
+            } else {
+                showToast('{{ t.error }}', 'error');
+            }
+        } catch (error) {
+            showToast('{{ t.error }}', 'error');
+        }
+    }
+    
     async function saveAllSettings() {
         const poseConfEl = document.getElementById('poseConfidence');
+        const trackingDurEl = document.getElementById('handTrackingDuration');
         const data = {
             detect_cash: document.getElementById('detectCash').checked,
             detect_violence: document.getElementById('detectViolence').checked,
@@ -738,12 +1022,20 @@
             violence_confidence: parseFloat(document.getElementById('violenceConfidence').value),
             fire_confidence: parseFloat(document.getElementById('fireConfidence').value),
             pose_confidence: poseConfEl ? parseFloat(poseConfEl.value) : 0.3,
+            hand_tracking_duration: trackingDurEl ? parseInt(trackingDurEl.value) : 90,
             cashier_zone: {
                 x: currentZone.x,
                 y: currentZone.y,
                 width: currentZone.width,
                 height: currentZone.height,
                 enabled: document.getElementById('zoneEnabled').checked
+            },
+            cash_drawer_zone: {
+                x: cashDrawerZone.x,
+                y: cashDrawerZone.y,
+                width: cashDrawerZone.width,
+                height: cashDrawerZone.height,
+                enabled: document.getElementById('cashDrawerZoneEnabled').checked
             }
         };
         

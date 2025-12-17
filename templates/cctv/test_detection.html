@@ -24,6 +24,12 @@
 
 .test-grid {
     display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px;
+}
+
+.settings-grid {
+    display: grid;
     grid-template-columns: 400px 1fr;
     gap: 20px;
 }
@@ -159,9 +165,11 @@
 
 .video-preview {
     width: 100%;
-    max-height: 600px;
+    max-height: none;
+    height: auto;
     border-radius: 8px;
     background: #000;
+    display: block;
 }
 
 .result-info {
@@ -277,6 +285,126 @@
     color: #374151;
     display: none;
 }
+
+.video-container {
+    position: relative;
+    width: 100%;
+    background: #000;
+    min-height: 400px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.video-loading {
+    opacity: 0;
+    pointer-events: none;
+    position: absolute;
+}
+
+.video-ready {
+    opacity: 1;
+    position: relative;
+    transition: opacity 0.5s ease;
+}
+
+.video-spinner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    color: white;
+    z-index: 10;
+}
+
+.spinner {
+    border: 4px solid rgba(255, 255, 255, 0.3);
+    border-top: 4px solid white;
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 15px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Toggle Switch Styles */
+.toggle-switch {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    inset: 0;
+    background: #4b5563;
+    border-radius: 12px;
+    transition: 0.3s;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background: white;
+    border-radius: 50%;
+    transition: 0.3s;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+input:checked + .toggle-slider {
+    background: #22c55e;
+}
+
+input:checked + .toggle-slider:before {
+    transform: translateX(20px);
+}
+
+/* Slider Styles */
+.slider-input {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: #374151;
+    outline: none;
+}
+
+.slider-input::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: currentColor;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.slider-input::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: currentColor;
+    cursor: pointer;
+    border: none;
+}
 </style>
 {% endblock %}
 
@@ -304,48 +432,150 @@
             </div>
 
             <div class="control-section">
+                <h3>Cashier Zone</h3>
+                <button type="button" class="param-input" id="setCashierZoneBtn" style="background: #f3f4f6; cursor: pointer; text-align: left;">
+                    📐 Click to set cashier zone
+                </button>
+                <div class="param-help">Draw rectangle on video to define cashier area</div>
+                <div id="zoneInfo" style="font-size: 12px; color: #059669; margin-top: 6px; display: none;"></div>
+            </div>
+
+            <div class="control-section">
                 <h3>Detection Types</h3>
                 <div class="detection-types">
                     <label class="detection-checkbox">
-                        <input type="checkbox" name="detection" value="cash" checked>
-                        <span>Cash</span>
+                        <input type="checkbox" name="detection" value="cash" checked id="detectCash">
+                        <span>💵 Cash</span>
                     </label>
                     <label class="detection-checkbox">
-                        <input type="checkbox" name="detection" value="violence">
-                        <span>Violence</span>
+                        <input type="checkbox" name="detection" value="violence" id="detectViolence">
+                        <span>👊 Violence</span>
                     </label>
                     <label class="detection-checkbox">
-                        <input type="checkbox" name="detection" value="fire">
-                        <span>Fire</span>
+                        <input type="checkbox" name="detection" value="fire" id="detectFire">
+                        <span>🔥 Fire</span>
                     </label>
                 </div>
             </div>
 
-            <div class="control-section">
-                <h3>Parameters</h3>
+            <!-- ==================== DEVELOPER MODE SECTION ==================== -->
+            <div class="control-section" style="background: #1a1a2e; border: 2px solid #374151; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <h3 style="color: #fff; margin: 0; font-size: 14px;">🔧 Developer Mode</h3>
+                    <button class="btn btn-sm" id="devModeToggleBtn" onclick="toggleDevModeSection()" style="background: #374151; color: #fff; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        <span id="devModeBtnText">▼ Show</span>
+                    </button>
+                </div>
                 
-                <div class="param-group">
-                    <label class="param-label">Confidence Threshold</label>
-                    <input type="number" class="param-input" id="confidenceThreshold" value="0.7" min="0" max="1" step="0.05">
-                    <div class="param-help">Minimum confidence for detection (0.0 - 1.0)</div>
-                </div>
-
-                <div class="param-group">
-                    <label class="param-label">Hand Touch Distance (px)</label>
-                    <input type="number" class="param-input" id="handDistance" value="80" min="10" max="500">
-                    <div class="param-help">Maximum distance for hand touch detection</div>
-                </div>
-
-                <div class="param-group">
-                    <label class="param-label">Pose Confidence</label>
-                    <input type="number" class="param-input" id="poseConfidence" value="0.5" min="0" max="1" step="0.05">
-                    <div class="param-help">Minimum confidence for pose keypoints</div>
-                </div>
-
-                <div class="param-group">
-                    <label class="param-label">Frame Skip</label>
-                    <input type="number" class="param-input" id="frameSkip" value="2" min="1" max="10">
-                    <div class="param-help">Process every Nth frame (higher = faster)</div>
+                <!-- Developer Mode Settings (Hidden by default) -->
+                <div id="devModeSettings" style="display: none;">
+                    
+                    <!-- Debug Overlay Toggle -->
+                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: #0d3320; border: 1px solid #22c55e; border-radius: 8px; margin-bottom: 16px;">
+                        <div>
+                            <span style="color: #22c55e; font-weight: 600; font-size: 13px;">🐛 Debug Overlay</span>
+                            <p style="color: #86efac; font-size: 11px; margin: 4px 0 0;">Show poses, hands & distances on video</p>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="debugOverlayEnabled" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    
+                    <!-- Debug Features Panel -->
+                    <div id="debugFeaturesPanel" style="padding: 12px; background: #0a0a0a; border-radius: 8px; border: 1px solid #22c55e; margin-bottom: 16px;">
+                        <h5 style="color: #22c55e; margin: 0 0 10px; font-size: 12px;">Debug Features Active:</h5>
+                        <ul style="color: #e5e5e5; list-style: none; padding: 0; margin: 0; font-size: 11px;">
+                            <li style="margin-bottom: 6px;">� <strong>Cashier Zone</strong> - <span style="color: #ffcc00;">Yellow zone</span> where cashier stands</li>
+                            <li style="margin-bottom: 6px;">💰 <strong>Cash Drawer Zone</strong> - <span style="color: #22c55e;">Green zone</span> where cash is deposited</li>
+                            <li style="margin-bottom: 6px;">👤 <strong>Persons</strong> - <span style="color: #ffcc00;">CASHIER</span> (in zone) / <span style="color: #3b82f6;">CLIENT</span> (outside)</li>
+                            <li style="margin-bottom: 6px;">✋ <strong>Hands</strong> - Magenta circles with L/R labels</li>
+                            <li style="margin-bottom: 6px;">📏 <strong>Distances</strong> - Lines between hands with pixel distance</li>
+                            <li>📊 <strong>Frame Info</strong> - Detection status panel on video</li>
+                        </ul>
+                    </div>
+                    
+                    <!-- ==================== DRAWING MODE (ZONE SELECTION) ==================== -->
+                    <div style="padding: 16px; background: #1f2937; border-radius: 8px; border: 1px solid #3b82f6; margin-bottom: 16px;">
+                        <h4 style="color: #3b82f6; margin: 0 0 12px; font-size: 13px;">✏️ Drawing Mode</h4>
+                        <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                            <button id="selectCashierZone" class="btn" style="flex: 1; background: #ffcc00; border-color: #ffcc00; color: #000; font-weight: bold; font-size: 11px; padding: 8px; border-radius: 6px; border: none; cursor: pointer;" onclick="setDrawingZone('cashier')">
+                                📍 Cashier Zone
+                            </button>
+                            <button id="selectCashDrawerZone" class="btn" style="flex: 1; background: #374151; border-color: #4b5563; color: #fff; font-size: 11px; padding: 8px; border-radius: 6px; border: 1px solid #4b5563; cursor: pointer;" onclick="setDrawingZone('cashDrawer')">
+                                💰 Cash Drawer
+                            </button>
+                        </div>
+                        <p style="color: #9ca3af; font-size: 10px; margin: 0;">Select zone type, then draw on video in modal</p>
+                    </div>
+                    
+                    <!-- ==================== CONFIDENCE SLIDERS ==================== -->
+                    <div style="padding: 12px; background: #1f2937; border-radius: 8px; margin-bottom: 12px;">
+                        <h4 style="color: #fff; margin: 0 0 12px; font-size: 13px;">📊 Confidence Thresholds</h4>
+                        
+                        <!-- Cash Confidence Slider -->
+                        <div class="slider-group" style="margin-bottom: 14px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                                <span style="color: #9ca3af; font-size: 12px;">💵 Cash Confidence</span>
+                                <span id="cashConfValue" style="color: #22c55e; font-size: 12px; font-weight: 600;">0.70</span>
+                            </div>
+                            <input type="range" class="slider-input" id="confidenceThreshold" 
+                                   min="0" max="1" step="0.05" value="0.7"
+                                   oninput="updateSliderValue('cash')"
+                                   style="width: 100%; accent-color: #22c55e;">
+                        </div>
+                        
+                        <!-- Hand Touch Distance Slider -->
+                        <div class="slider-group" style="margin-bottom: 14px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                                <span style="color: #9ca3af; font-size: 12px;">✋ Hand Touch Distance</span>
+                                <span id="handDistanceValue" style="color: #3b82f6; font-size: 12px; font-weight: 600;">80px</span>
+                            </div>
+                            <input type="range" class="slider-input" id="handDistance" 
+                                   min="30" max="300" step="10" value="80"
+                                   oninput="updateSliderValue('handDistance')"
+                                   style="width: 100%; accent-color: #3b82f6;">
+                        </div>
+                        
+                        <!-- Hand Tracking Duration Slider -->
+                        <div class="slider-group" style="margin-bottom: 14px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                                <span style="color: #9ca3af; font-size: 12px;">⏱️ Hand Tracking Duration</span>
+                                <span id="trackingDurationValue" style="color: #22c55e; font-size: 12px; font-weight: 600;">90 frames</span>
+                            </div>
+                            <input type="range" class="slider-input" id="handTrackingDuration" 
+                                   min="30" max="300" step="10" value="90"
+                                   oninput="updateSliderValue('trackingDuration')"
+                                   style="width: 100%; accent-color: #22c55e;">
+                            <p style="color: #6b7280; font-size: 10px; margin-top: 4px;">Track cashier hand after customer touch (~3s at 30fps)</p>
+                        </div>
+                        
+                        <!-- Pose Confidence Slider -->
+                        <div class="slider-group" style="margin-bottom: 14px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                                <span style="color: #9ca3af; font-size: 12px;">🦴 Pose Confidence</span>
+                                <span id="poseConfValue" style="color: #a855f7; font-size: 12px; font-weight: 600;">0.50</span>
+                            </div>
+                            <input type="range" class="slider-input" id="poseConfidence" 
+                                   min="0.1" max="0.9" step="0.05" value="0.5"
+                                   oninput="updateSliderValue('pose')"
+                                   style="width: 100%; accent-color: #a855f7;">
+                            <p style="color: #6b7280; font-size: 10px; margin-top: 4px;">Lower = more person detections</p>
+                        </div>
+                        
+                        <!-- Frame Skip Slider -->
+                        <div class="slider-group">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                                <span style="color: #9ca3af; font-size: 12px;">⏭️ Frame Skip</span>
+                                <span id="frameSkipValue" style="color: #f59e0b; font-size: 12px; font-weight: 600;">2</span>
+                            </div>
+                            <input type="range" class="slider-input" id="frameSkip" 
+                                   min="1" max="10" step="1" value="2"
+                                   oninput="updateSliderValue('frameSkip')"
+                                   style="width: 100%; accent-color: #f59e0b;">
+                            <p style="color: #6b7280; font-size: 10px; margin-top: 4px;">Process every Nth frame (higher = faster)</p>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -370,7 +600,14 @@
             </div>
 
             <div id="resultsContent" style="display: none;">
-                <video id="videoPreview" class="video-preview" controls></video>
+                <div class="video-container">
+                    <div id="videoSpinner" class="video-spinner" style="display:none;">
+                        <div class="spinner"></div>
+                        <div style="font-size: 14px;">Loading video...</div>
+                        <div style="font-size: 12px; margin-top: 8px; opacity: 0.8;">Please wait for buffering</div>
+                    </div>
+                    <video id="videoPreview" class="video-preview" controls preload="metadata" class="video-loading"></video>
+                </div>
 
                 <div class="result-info">
                     <div class="result-row">
@@ -391,11 +628,71 @@
                     </div>
                 </div>
 
+                <!-- Debug Info Panel (like camera settings) -->
+                <div id="debugInfoPanel" style="margin-top: 16px; padding: 16px; background: #0a0a0a; border-radius: 8px; border: 1px solid #374151; display: none;">
+                    <h4 style="color: #22c55e; margin: 0 0 12px; font-size: 14px;">🐛 Debug Information</h4>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; font-family: 'Consolas', monospace;">
+                        <div>
+                            <span style="color: #6b7280;">Total Frames:</span>
+                            <span id="debugTotalFrames" style="color: #fff; margin-left: 8px;">-</span>
+                        </div>
+                        <div>
+                            <span style="color: #6b7280;">Frames Analyzed:</span>
+                            <span id="debugFramesAnalyzed" style="color: #22c55e; margin-left: 8px;">-</span>
+                        </div>
+                        <div>
+                            <span style="color: #6b7280;">Cash Detections:</span>
+                            <span id="debugCashCount" style="color: #10b981; margin-left: 8px;">-</span>
+                        </div>
+                        <div>
+                            <span style="color: #6b7280;">Violence Detections:</span>
+                            <span id="debugViolenceCount" style="color: #ef4444; margin-left: 8px;">-</span>
+                        </div>
+                        <div>
+                            <span style="color: #6b7280;">Fire Detections:</span>
+                            <span id="debugFireCount" style="color: #f97316; margin-left: 8px;">-</span>
+                        </div>
+                        <div>
+                            <span style="color: #6b7280;">Frame Skip:</span>
+                            <span id="debugFrameSkip" style="color: #a855f7; margin-left: 8px;">-</span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #374151;">
+                        <span style="color: #6b7280;">Settings Used:</span>
+                        <span id="debugSettings" style="color: #3b82f6; margin-left: 8px; font-size: 12px;">-</span>
+                    </div>
+                </div>
+
                 <div class="detection-list" id="detectionList">
                     <h4 style="margin-bottom: 12px; font-size: 16px;">Detections</h4>
                     <div id="detectionItems"></div>
                 </div>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Zone Drawing Modal -->
+<div id="zoneModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.8); z-index: 10000; align-items: center; justify-content: center;">
+    <div style="background: white; border-radius: 8px; padding: 20px; max-width: 90%; max-height: 90%; display: flex; flex-direction: column;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 id="zoneModalTitle" style="margin: 0;">Draw Cashier Zone</h3>
+            <button id="closeZoneModal" style="background: #ef4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">Close</button>
+        </div>
+        <div style="position: relative; display: inline-block; margin-bottom: 15px;">
+            <img id="zoneImage" style="max-width: 100%; max-height: 60vh; display: block;" />
+            <canvas id="zoneCanvas" style="position: absolute; top: 0; left: 0; cursor: crosshair;"></canvas>
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button id="saveZoneBtn" style="flex: 1; background: #10b981; color: white; border: none; padding: 12px; border-radius: 6px; cursor: pointer; font-weight: 500;">
+                ✓ Save Zone
+            </button>
+            <button id="clearZoneBtn" style="flex: 1; background: #f59e0b; color: white; border: none; padding: 12px; border-radius: 6px; cursor: pointer; font-weight: 500;">
+                ↺ Clear
+            </button>
+        </div>
+        <div id="zoneModalInstructions" style="margin-top: 15px; padding: 12px; background: #f3f4f6; border-radius: 6px; font-size: 13px; color: #6b7280;">
+            <strong>Instructions:</strong> Click and drag on the video to draw a rectangle defining the zone.
         </div>
     </div>
 </div>
@@ -413,6 +710,356 @@ const resultsContent = document.getElementById('resultsContent');
 
 let uploadedFile = null;
 let uploadedVideoPath = null;
+let uploadedVideoUrl = null;
+let uploadedThumbnailUrl = null;
+let videoWidth = null;
+let videoHeight = null;
+let cashierZone = null;
+let cashDrawerZone = null;
+let activeDrawZone = 'cashier';  // 'cashier' or 'cashDrawer'
+let devModeVisible = false;
+
+// ==================== DRAWING MODE FUNCTIONS ====================
+
+// Set which zone to draw
+function setDrawingZone(zoneType) {
+    activeDrawZone = zoneType;
+    
+    // Update button styles
+    const cashierBtn = document.getElementById('selectCashierZone');
+    const drawerBtn = document.getElementById('selectCashDrawerZone');
+    
+    if (zoneType === 'cashier') {
+        cashierBtn.style.background = '#ffcc00';
+        cashierBtn.style.borderColor = '#ffcc00';
+        cashierBtn.style.color = '#000';
+        cashierBtn.style.fontWeight = 'bold';
+        
+        drawerBtn.style.background = '#374151';
+        drawerBtn.style.borderColor = '#4b5563';
+        drawerBtn.style.color = '#fff';
+        drawerBtn.style.fontWeight = 'normal';
+    } else {
+        cashierBtn.style.background = '#374151';
+        cashierBtn.style.borderColor = '#4b5563';
+        cashierBtn.style.color = '#fff';
+        cashierBtn.style.fontWeight = 'normal';
+        
+        drawerBtn.style.background = '#22c55e';
+        drawerBtn.style.borderColor = '#22c55e';
+        drawerBtn.style.color = '#000';
+        drawerBtn.style.fontWeight = 'bold';
+    }
+}
+
+// ==================== DEVELOPER MODE FUNCTIONS ====================
+
+// Toggle developer mode section visibility
+function toggleDevModeSection() {
+    const settings = document.getElementById('devModeSettings');
+    const btnText = document.getElementById('devModeBtnText');
+    devModeVisible = !devModeVisible;
+    
+    if (devModeVisible) {
+        settings.style.display = 'block';
+        btnText.textContent = '▲ Hide';
+    } else {
+        settings.style.display = 'none';
+        btnText.textContent = '▼ Show';
+    }
+}
+
+// Update slider value display
+function updateSliderValue(type) {
+    if (type === 'cash') {
+        const slider = document.getElementById('confidenceThreshold');
+        const display = document.getElementById('cashConfValue');
+        display.textContent = parseFloat(slider.value).toFixed(2);
+    } else if (type === 'handDistance') {
+        const slider = document.getElementById('handDistance');
+        const display = document.getElementById('handDistanceValue');
+        display.textContent = slider.value + 'px';
+    } else if (type === 'trackingDuration') {
+        const slider = document.getElementById('handTrackingDuration');
+        const display = document.getElementById('trackingDurationValue');
+        const frames = parseInt(slider.value);
+        const seconds = (frames / 30).toFixed(1);
+        display.textContent = frames + ' frames (~' + seconds + 's)';
+    } else if (type === 'pose') {
+        const slider = document.getElementById('poseConfidence');
+        const display = document.getElementById('poseConfValue');
+        display.textContent = parseFloat(slider.value).toFixed(2);
+    } else if (type === 'frameSkip') {
+        const slider = document.getElementById('frameSkip');
+        const display = document.getElementById('frameSkipValue');
+        display.textContent = slider.value;
+    }
+}
+
+// Initialize slider values on page load
+document.addEventListener('DOMContentLoaded', function() {
+    updateSliderValue('cash');
+    updateSliderValue('handDistance');
+    updateSliderValue('trackingDuration');
+    updateSliderValue('pose');
+    updateSliderValue('frameSkip');
+});
+
+// Load saved zones from localStorage
+try {
+    const savedCashierZone = localStorage.getItem('test_cashier_zone');
+    if (savedCashierZone) {
+        cashierZone = JSON.parse(savedCashierZone);
+    }
+    
+    const savedCashDrawerZone = localStorage.getItem('test_cash_drawer_zone');
+    if (savedCashDrawerZone) {
+        cashDrawerZone = JSON.parse(savedCashDrawerZone);
+    }
+    
+    if (cashierZone || cashDrawerZone) {
+        updateZoneInfo();
+    }
+} catch (e) {
+    console.error('Failed to load saved zones:', e);
+}
+
+// Zone drawing functionality
+const setCashierZoneBtn = document.getElementById('setCashierZoneBtn');
+const zoneModal = document.getElementById('zoneModal');
+const zoneImage = document.getElementById('zoneImage');
+const zoneCanvas = document.getElementById('zoneCanvas');
+const closeZoneModal = document.getElementById('closeZoneModal');
+const saveZoneBtn = document.getElementById('saveZoneBtn');
+const clearZoneBtn = document.getElementById('clearZoneBtn');
+const zoneInfo = document.getElementById('zoneInfo');
+
+let drawing = false;
+let startX = 0;
+let startY = 0;
+let tempZone = null;
+
+function updateZoneInfo() {
+    let infoTexts = [];
+    
+    if (cashierZone) {
+        const width = cashierZone[2] - cashierZone[0];
+        const height = cashierZone[3] - cashierZone[1];
+        infoTexts.push(`Cashier: (${cashierZone[0]}, ${cashierZone[1]}) ${width}×${height}px`);
+        setCashierZoneBtn.textContent = '📐 Zone configured (click to change)';
+        setCashierZoneBtn.style.background = '#d1fae5';
+    } else {
+        setCashierZoneBtn.textContent = '📐 Click to set cashier zone';
+        setCashierZoneBtn.style.background = '#f3f4f6';
+    }
+    
+    if (cashDrawerZone) {
+        const width = cashDrawerZone[2] - cashDrawerZone[0];
+        const height = cashDrawerZone[3] - cashDrawerZone[1];
+        infoTexts.push(`Drawer: (${cashDrawerZone[0]}, ${cashDrawerZone[1]}) ${width}×${height}px`);
+    }
+    
+    if (infoTexts.length > 0) {
+        zoneInfo.textContent = infoTexts.join(' | ');
+        zoneInfo.style.display = 'block';
+    } else {
+        zoneInfo.style.display = 'none';
+    }
+}
+
+setCashierZoneBtn.addEventListener('click', () => {
+    if (!uploadedThumbnailUrl) {
+        showStatus('Please upload a video first', 'error');
+        return;
+    }
+    
+    // Update modal title based on active drawing zone
+    const zoneModalTitle = document.getElementById('zoneModalTitle');
+    if (activeDrawZone === 'cashDrawer') {
+        zoneModalTitle.textContent = 'Draw Cash Drawer Zone';
+    } else {
+        zoneModalTitle.textContent = 'Draw Cashier Zone';
+    }
+    
+    // Show modal
+    zoneModal.style.display = 'flex';
+    
+    // Clear previous handlers
+    zoneImage.onload = null;
+    zoneImage.onerror = null;
+    
+    // Load thumbnail image
+    console.log('Loading thumbnail from URL:', uploadedThumbnailUrl);
+    
+    zoneImage.onload = function() {
+        console.log('Image loaded successfully:', videoWidth, 'x', videoHeight);
+        
+        // Set canvas size to match video dimensions (use natural size if video dimensions not available)
+        zoneCanvas.width = videoWidth || this.naturalWidth;
+        zoneCanvas.height = videoHeight || this.naturalHeight;
+        
+        console.log('Canvas size set to:', zoneCanvas.width, 'x', zoneCanvas.height);
+        
+        // Wait for next frame to get accurate dimensions
+        setTimeout(() => {
+            const rect = zoneImage.getBoundingClientRect();
+            zoneCanvas.style.width = rect.width + 'px';
+            zoneCanvas.style.height = rect.height + 'px';
+            
+            console.log('Display size:', rect.width, 'x', rect.height);
+            
+            // Draw existing zones if any
+            drawZone();
+        }, 100);
+    };
+    
+    zoneImage.onerror = function(e) {
+        console.error('Image load error:', e);
+        console.error('Failed URL:', uploadedThumbnailUrl);
+        showStatus('Failed to load thumbnail image', 'error');
+    };
+    
+    // Set src after handlers are attached
+    zoneImage.src = uploadedThumbnailUrl;
+});
+
+closeZoneModal.addEventListener('click', () => {
+    zoneModal.style.display = 'none';
+    zoneImage.src = '';
+});
+
+function getMousePos(e) {
+    const rect = zoneCanvas.getBoundingClientRect();
+    const scaleX = zoneCanvas.width / rect.width;
+    const scaleY = zoneCanvas.height / rect.height;
+    
+    return {
+        x: (e.clientX - rect.left) * scaleX,
+        y: (e.clientY - rect.top) * scaleY
+    };
+}
+
+zoneCanvas.addEventListener('mousedown', (e) => {
+    const pos = getMousePos(e);
+    drawing = true;
+    startX = pos.x;
+    startY = pos.y;
+});
+
+zoneCanvas.addEventListener('mousemove', (e) => {
+    if (!drawing) return;
+    
+    const pos = getMousePos(e);
+    const x1 = Math.min(startX, pos.x);
+    const y1 = Math.min(startY, pos.y);
+    const x2 = Math.max(startX, pos.x);
+    const y2 = Math.max(startY, pos.y);
+    
+    tempZone = [Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2)];
+    drawZone(tempZone);
+});
+
+zoneCanvas.addEventListener('mouseup', () => {
+    if (drawing && tempZone) {
+        drawing = false;
+    }
+});
+
+function drawZone(zone, isDrawer = false) {
+    const ctx = zoneCanvas.getContext('2d');
+    ctx.clearRect(0, 0, zoneCanvas.width, zoneCanvas.height);
+    
+    // Draw cashier zone if exists
+    if (cashierZone && !isDrawer) {
+        const [x1, y1, x2, y2] = cashierZone;
+        const width = x2 - x1;
+        const height = y2 - y1;
+        
+        // Draw yellow cashier zone
+        ctx.fillStyle = 'rgba(255, 204, 0, 0.2)';
+        ctx.fillRect(x1, y1, width, height);
+        ctx.strokeStyle = '#ffcc00';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x1, y1, width, height);
+        ctx.fillStyle = '#ffcc00';
+        ctx.font = 'bold 16px Arial';
+        ctx.fillText('CASHIER ZONE', x1 + 10, y1 + 25);
+    }
+    
+    // Draw cash drawer zone if exists
+    if (cashDrawerZone && !isDrawer) {
+        const [x1, y1, x2, y2] = cashDrawerZone;
+        const width = x2 - x1;
+        const height = y2 - y1;
+        
+        // Draw green cash drawer zone
+        ctx.fillStyle = 'rgba(34, 197, 94, 0.2)';
+        ctx.fillRect(x1, y1, width, height);
+        ctx.strokeStyle = '#22c55e';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x1, y1, width, height);
+        ctx.fillStyle = '#22c55e';
+        ctx.font = 'bold 16px Arial';
+        ctx.fillText('CASH DRAWER', x1 + 10, y1 + 25);
+    }
+    
+    if (zone) {
+        const [x1, y1, x2, y2] = zone;
+        const width = x2 - x1;
+        const height = y2 - y1;
+        
+        // Determine color based on active zone
+        const color = activeDrawZone === 'cashDrawer' ? '#22c55e' : '#ffcc00';
+        const label = activeDrawZone === 'cashDrawer' ? 'CASH DRAWER' : 'CASHIER ZONE';
+        
+        // Draw semi-transparent rectangle
+        ctx.fillStyle = activeDrawZone === 'cashDrawer' ? 'rgba(34, 197, 94, 0.3)' : 'rgba(255, 204, 0, 0.3)';
+        ctx.fillRect(x1, y1, width, height);
+        
+        // Draw border
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x1, y1, width, height);
+        
+        // Draw label
+        ctx.fillStyle = color;
+        ctx.font = 'bold 16px Arial';
+        ctx.fillText(label, x1 + 10, y1 + 25);
+    }
+}
+
+saveZoneBtn.addEventListener('click', () => {
+    if (tempZone) {
+        if (activeDrawZone === 'cashDrawer') {
+            cashDrawerZone = tempZone;
+            localStorage.setItem('test_cash_drawer_zone', JSON.stringify(cashDrawerZone));
+            showStatus('Cash Drawer zone saved successfully', 'success');
+        } else {
+            cashierZone = tempZone;
+            localStorage.setItem('test_cashier_zone', JSON.stringify(cashierZone));
+            showStatus('Cashier zone saved successfully', 'success');
+        }
+        updateZoneInfo();
+        zoneModal.style.display = 'none';
+        zoneImage.src = '';
+    } else {
+        showStatus('Please draw a zone first', 'error');
+    }
+});
+
+clearZoneBtn.addEventListener('click', () => {
+    tempZone = null;
+    if (activeDrawZone === 'cashDrawer') {
+        cashDrawerZone = null;
+        localStorage.removeItem('test_cash_drawer_zone');
+    } else {
+        cashierZone = null;
+        localStorage.removeItem('test_cashier_zone');
+    }
+    const ctx = zoneCanvas.getContext('2d');
+    ctx.clearRect(0, 0, zoneCanvas.width, zoneCanvas.height);
+    updateZoneInfo();
+});
 
 // Drag and drop
 uploadZone.addEventListener('click', () => fileInput.click());
@@ -473,6 +1120,10 @@ async function uploadFile(file) {
         const data = await response.json();
         if (data.success) {
             uploadedVideoPath = data.path;
+            uploadedThumbnailUrl = data.thumbnail_url;
+            videoWidth = data.video_width;
+            videoHeight = data.video_height;
+            console.log('Video uploaded:', data);
         } else {
             showStatus('Upload failed: ' + data.error, 'error');
         }
@@ -501,13 +1152,27 @@ processBtn.addEventListener('click', async () => {
         confidence_threshold: parseFloat(document.getElementById('confidenceThreshold').value),
         hand_distance: parseInt(document.getElementById('handDistance').value),
         pose_confidence: parseFloat(document.getElementById('poseConfidence').value),
-        frame_skip: parseInt(document.getElementById('frameSkip').value)
+        frame_skip: parseInt(document.getElementById('frameSkip').value),
+        hand_tracking_duration: parseInt(document.getElementById('handTrackingDuration').value),
+        cashier_zone: cashierZone,
+        cash_drawer_zone: cashDrawerZone,
+        debug_overlay: document.getElementById('debugOverlayEnabled').checked
     };
 
     processBtn.disabled = true;
     progressBar.style.display = 'block';
     progressFill.style.width = '0%';
     showStatus('Processing video...', 'processing');
+
+    // Simulate progress animation during processing
+    let simulatedProgress = 0;
+    const progressInterval = setInterval(() => {
+        if (simulatedProgress < 90) {
+            simulatedProgress += Math.random() * 10;
+            if (simulatedProgress > 90) simulatedProgress = 90;
+            progressFill.style.width = simulatedProgress + '%';
+        }
+    }, 500);
 
     try {
         const response = await fetch('{% url "cctv:api_test_process" %}', {
@@ -519,6 +1184,7 @@ processBtn.addEventListener('click', async () => {
             body: JSON.stringify(params)
         });
 
+        clearInterval(progressInterval);
         const data = await response.json();
         
         if (data.success) {
@@ -529,6 +1195,7 @@ processBtn.addEventListener('click', async () => {
             showStatus('Processing failed: ' + data.error, 'error');
         }
     } catch (error) {
+        clearInterval(progressInterval);
         showStatus('Error: ' + error.message, 'error');
     } finally {
         processBtn.disabled = false;
@@ -547,14 +1214,102 @@ function displayResults(results) {
     noResults.style.display = 'none';
     resultsContent.style.display = 'block';
 
-    // Set video preview
-    document.getElementById('videoPreview').src = results.output_video;
+    // Set video preview with proper loading
+    const videoPreview = document.getElementById('videoPreview');
+    const videoSpinner = document.getElementById('videoSpinner');
+    
+    // Clear previous video and hide
+    videoPreview.src = '';
+    videoPreview.className = 'video-preview video-loading';
+    videoPreview.load();
+    
+    // Show loading spinner
+    videoSpinner.style.display = 'block';
+    showStatus('Loading video...', 'processing');
+    
+    // Set new video source with cache buster to force reload
+    videoPreview.src = results.output_video + '?t=' + Date.now();
+    videoPreview.preload = 'auto';
+    
+    // Wait for metadata
+    videoPreview.addEventListener('loadedmetadata', function() {
+        console.log('Video metadata loaded:', this.videoWidth, 'x', this.videoHeight, 'duration:', this.duration);
+    }, { once: true });
+    
+    // Wait for video to be fully buffered and ready to play without stalling
+    videoPreview.addEventListener('canplaythrough', function() {
+        console.log('Video fully buffered - ready to seek and play');
+        
+        // Hide spinner and show video with fade-in
+        videoSpinner.style.display = 'none';
+        videoPreview.className = 'video-preview video-ready';
+        
+        showStatus('Video ready! You can now play and seek freely.', 'success');
+        setTimeout(() => {
+            statusMessage.textContent = '';
+            statusMessage.className = '';
+        }, 3000);
+    }, { once: true });
+    
+    // Handle errors
+    videoPreview.addEventListener('error', function(e) {
+        console.error('Video playback error:', e);
+        console.error('Video URL:', results.output_video);
+        console.error('Error details:', this.error);
+        videoSpinner.style.display = 'none';
+        videoPreview.className = 'video-preview video-loading';
+        showStatus('Error loading video. Please try processing again.', 'error');
+    }, { once: true });
+    
+    // Additional event to track progress
+    videoPreview.addEventListener('progress', function() {
+        if (this.buffered.length > 0) {
+            const bufferedEnd = this.buffered.end(this.buffered.length - 1);
+            const duration = this.duration;
+            if (duration > 0) {
+                const percentBuffered = (bufferedEnd / duration) * 100;
+                console.log('Buffered:', percentBuffered.toFixed(1) + '%');
+            }
+        }
+    });
+    
+    // Start loading the video
+    videoPreview.load();
 
     // Set stats
     document.getElementById('resultDuration').textContent = results.duration + 's';
     document.getElementById('resultFrames').textContent = results.frames_processed;
     document.getElementById('resultTime').textContent = results.processing_time + 's';
     document.getElementById('resultCount').textContent = results.detections.length;
+
+    // Update debug info panel
+    const debugPanel = document.getElementById('debugInfoPanel');
+    const debugEnabled = document.getElementById('debugOverlayEnabled').checked;
+    
+    if (debugEnabled) {
+        debugPanel.style.display = 'block';
+        
+        // Count detections by type
+        const cashCount = results.detections.filter(d => d.type === 'cash').length;
+        const violenceCount = results.detections.filter(d => d.type === 'violence').length;
+        const fireCount = results.detections.filter(d => d.type === 'fire').length;
+        
+        document.getElementById('debugTotalFrames').textContent = results.total_frames || '-';
+        document.getElementById('debugFramesAnalyzed').textContent = results.frames_processed || '-';
+        document.getElementById('debugCashCount').textContent = cashCount;
+        document.getElementById('debugViolenceCount').textContent = violenceCount;
+        document.getElementById('debugFireCount').textContent = fireCount;
+        document.getElementById('debugFrameSkip').textContent = document.getElementById('frameSkip').value;
+        
+        // Show settings used
+        const conf = document.getElementById('confidenceThreshold').value;
+        const handDist = document.getElementById('handDistance').value;
+        const poseConf = document.getElementById('poseConfidence').value;
+        document.getElementById('debugSettings').textContent = 
+            `Conf: ${conf} | Hand: ${handDist}px | Pose: ${poseConf}`;
+    } else {
+        debugPanel.style.display = 'none';
+    }
 
     // Display detections
     const detectionItems = document.getElementById('detectionItems');

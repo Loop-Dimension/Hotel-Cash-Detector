@@ -1044,6 +1044,45 @@ def api_set_cashier_zone(request, camera_id):
 @login_required
 @csrf_exempt
 @require_http_methods(["POST"])
+def api_set_cash_drawer_zone(request, camera_id):
+    """Set cash drawer zone for a camera (for two-step cash detection)"""
+    user = request.user
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    if not user.is_admin() and camera.branch not in get_user_branches(user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    data = json.loads(request.body)
+    
+    # Support both formats: dict or list
+    if 'zone' in data:
+        zone = data['zone']
+        if isinstance(zone, list) and len(zone) == 4:
+            camera.set_cash_drawer_zone(zone[0], zone[1], zone[2], zone[3], True)
+        elif isinstance(zone, dict):
+            camera.set_cash_drawer_zone(
+                zone.get('x', 50),
+                zone.get('y', 200),
+                zone.get('width', 150),
+                zone.get('height', 100),
+                zone.get('enabled', True)
+            )
+    else:
+        # Direct parameters
+        camera.set_cash_drawer_zone(
+            data.get('x', camera.cash_drawer_zone_x),
+            data.get('y', camera.cash_drawer_zone_y),
+            data.get('width', camera.cash_drawer_zone_width),
+            data.get('height', camera.cash_drawer_zone_height),
+            data.get('enabled', True)
+        )
+    
+    return JsonResponse({'success': True, 'cash_drawer_zone': camera.get_cash_drawer_zone()})
+
+
+@login_required
+@csrf_exempt
+@require_http_methods(["POST"])
 def api_camera_settings(request, camera_id):
     """Update all camera detection settings at once"""
     user = request.user
@@ -1076,6 +1115,10 @@ def api_camera_settings(request, camera_id):
     if 'hand_touch_distance' in data:
         camera.hand_touch_distance = max(30, min(300, int(data['hand_touch_distance'])))
     
+    # Hand tracking duration for two-step cash detection
+    if 'hand_tracking_duration' in data:
+        camera.hand_tracking_duration = max(30, min(300, int(data['hand_tracking_duration'])))
+    
     # Cashier zone
     if 'cashier_zone' in data:
         zone = data['cashier_zone']
@@ -1084,6 +1127,15 @@ def api_camera_settings(request, camera_id):
         camera.cashier_zone_width = int(zone.get('width', camera.cashier_zone_width))
         camera.cashier_zone_height = int(zone.get('height', camera.cashier_zone_height))
         camera.cashier_zone_enabled = bool(zone.get('enabled', camera.cashier_zone_enabled))
+    
+    # Cash Drawer zone (for two-step cash detection)
+    if 'cash_drawer_zone' in data:
+        zone = data['cash_drawer_zone']
+        camera.cash_drawer_zone_x = int(zone.get('x', camera.cash_drawer_zone_x))
+        camera.cash_drawer_zone_y = int(zone.get('y', camera.cash_drawer_zone_y))
+        camera.cash_drawer_zone_width = int(zone.get('width', camera.cash_drawer_zone_width))
+        camera.cash_drawer_zone_height = int(zone.get('height', camera.cash_drawer_zone_height))
+        camera.cash_drawer_zone_enabled = bool(zone.get('enabled', camera.cash_drawer_zone_enabled))
     
     camera.save()
     
@@ -1517,6 +1569,18 @@ def draw_debug_frame(frame, camera, pose_model=None):
     cv2.rectangle(frame, (zx, zy), (zx + zw, zy + zh), (0, 255, 255), 3)
     cv2.rectangle(frame, (zx, zy - 30), (zx + 150, zy), (0, 255, 255), -1)
     cv2.putText(frame, "CASHIER ZONE", (zx + 5, zy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+    
+    # Draw cash drawer zone (for two-step detection) if enabled
+    if camera.cash_drawer_zone_enabled:
+        cdx = camera.cash_drawer_zone_x
+        cdy = camera.cash_drawer_zone_y
+        cdw = camera.cash_drawer_zone_width
+        cdh = camera.cash_drawer_zone_height
+        
+        # Draw cash drawer zone with green color
+        cv2.rectangle(frame, (cdx, cdy), (cdx + cdw, cdy + cdh), (0, 255, 0), 3)
+        cv2.rectangle(frame, (cdx, cdy - 30), (cdx + 180, cdy), (0, 255, 0), -1)
+        cv2.putText(frame, "CASH DRAWER", (cdx + 5, cdy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
     
     # Get pose model if not provided
     if pose_model is None:
@@ -2266,6 +2330,23 @@ class BackgroundCameraWorker:
         }
         return UnifiedDetector(config)
     
+    def convert_to_json_serializable(self, obj):
+        """Convert numpy types and other non-serializable objects to JSON-compatible types"""
+        import numpy as np
+        
+        if isinstance(obj, (np.integer, np.int32, np.int64)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: self.convert_to_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self.convert_to_json_serializable(item) for item in obj]
+        else:
+            return obj
+    
     def save_event(self, camera, event_type, confidence, frame_number, bbox=None, clip_path=None, thumbnail_path=None, metadata=None):
         """Save event to database with detection metadata as JSON file."""
         import json
@@ -2333,6 +2414,9 @@ class BackgroundCameraWorker:
             # Generate JSON filename matching clip pattern
             json_filename = f"{event_type}_{camera.camera_id}_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
             json_path = os.path.join(json_dir, json_filename)
+            
+            # Convert numpy types to JSON-serializable types
+            event_metadata = self.convert_to_json_serializable(event_metadata)
             
             # Write JSON file with pretty formatting
             with open(json_path, 'w', encoding='utf-8') as f:
@@ -3088,8 +3172,8 @@ def api_test_upload(request):
     
     video_file = request.FILES['video']
     
-    # Save to uploads directory
-    upload_dir = settings.BASE_DIR / 'uploads' / 'test'
+    # Save to uploads directory in media folder
+    upload_dir = settings.MEDIA_ROOT / 'uploads' / 'test'
     upload_dir.mkdir(parents=True, exist_ok=True)
     
     # Generate unique filename
@@ -3103,10 +3187,35 @@ def api_test_upload(request):
         for chunk in video_file.chunks():
             destination.write(chunk)
     
+    # Generate thumbnail for zone drawing (first frame)
+    import cv2
+    cap = cv2.VideoCapture(str(file_path))
+    ret, frame = cap.read()
+    
+    thumbnail_url = None
+    video_width = None
+    video_height = None
+    
+    if ret:
+        # Get dimensions before releasing
+        video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Save thumbnail
+        thumb_filename = f"thumb_{uuid.uuid4().hex[:8]}.jpg"
+        thumb_path = upload_dir / thumb_filename
+        cv2.imwrite(str(thumb_path), frame)
+        thumbnail_url = f'/media/uploads/test/{thumb_filename}'
+    
+    cap.release()
+    
     return JsonResponse({
         'success': True,
         'path': str(file_path),
-        'filename': filename
+        'filename': filename,
+        'thumbnail_url': thumbnail_url,
+        'video_width': video_width,
+        'video_height': video_height
     })
 
 
@@ -3127,6 +3236,8 @@ def api_test_process(request):
         data = json.loads(request.body)
         video_path = data.get('video_path')
         detection_types = data.get('detection_types', ['cash'])
+        cashier_zone = data.get('cashier_zone')
+        cash_drawer_zone = data.get('cash_drawer_zone')
         
         # Parameters
         params = {
@@ -3134,7 +3245,20 @@ def api_test_process(request):
             'hand_touch_distance': data.get('hand_distance', 80),
             'pose_confidence': data.get('pose_confidence', 0.5),
             'min_cash_confidence': data.get('confidence_threshold', 0.7),
+            'hand_tracking_duration': data.get('hand_tracking_duration', 90),
         }
+        
+        # Debug overlay setting
+        debug_overlay = data.get('debug_overlay', True)
+        
+        # Add cashier zone if provided
+        if cashier_zone:
+            params['cashier_zone'] = cashier_zone
+        
+        # Add cash drawer zone if provided (for two-step detection)
+        if cash_drawer_zone:
+            params['cash_drawer_zone'] = cash_drawer_zone
+        
         frame_skip = data.get('frame_skip', 2)
         
         if not video_path or not Path(video_path).exists():
@@ -3160,22 +3284,31 @@ def api_test_process(request):
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # Prepare output video
+        # Prepare output video - use temp file first, then convert to H.264
         output_dir = settings.MEDIA_ROOT / 'test_results'
         output_dir.mkdir(parents=True, exist_ok=True)
         
         import uuid
+        temp_filename = f"temp_{uuid.uuid4().hex[:8]}.avi"
+        temp_path = output_dir / temp_filename
         output_filename = f"result_{uuid.uuid4().hex[:8]}.mp4"
         output_path = output_dir / output_filename
         
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+        # Use MJPEG for temp file (better compatibility)
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        out = cv2.VideoWriter(str(temp_path), fourcc, fps, (width, height))
         
         # Process video
         detections = []
         frame_count = 0
         processed_count = 0
         start_time = time.time()
+        
+        # Initialize variables for persistent drawing
+        last_debug_people = []
+        last_debug_info = []
+        last_transaction_events = []
+        last_frame_detections = []
         
         while cap.isOpened():
             ret, frame = cap.read()
@@ -3184,26 +3317,208 @@ def api_test_process(request):
             
             frame_count += 1
             
-            # Skip frames
-            if frame_count % frame_skip != 0:
-                out.write(frame)
-                continue
+            # Always draw cashier zone on every frame (if debug_overlay is enabled)
+            if cashier_zone and debug_overlay:
+                zone_x1, zone_y1, zone_x2, zone_y2 = cashier_zone
+                # Draw semi-transparent rectangle
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (zone_x1, zone_y1), (zone_x2, zone_y2), (0, 255, 0), -1)
+                cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
+                # Draw border
+                cv2.rectangle(frame, (zone_x1, zone_y1), (zone_x2, zone_y2), (0, 255, 0), 3)
+                # Draw label
+                cv2.putText(frame, "CASHIER ZONE", (zone_x1 + 10, zone_y1 + 35),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
             
-            processed_count += 1
+            # Draw cash drawer zone (for two-step detection)
+            if cash_drawer_zone and debug_overlay:
+                cdz = cash_drawer_zone
+                # Cash drawer zone format: [x, y, width, height]
+                cdz_x1, cdz_y1 = int(cdz[0]), int(cdz[1])
+                cdz_x2, cdz_y2 = cdz_x1 + int(cdz[2]), cdz_y1 + int(cdz[3])
+                # Draw semi-transparent rectangle (cyan color)
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (cdz_x1, cdz_y1), (cdz_x2, cdz_y2), (255, 255, 0), -1)
+                cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame)
+                # Draw border (cyan)
+                cv2.rectangle(frame, (cdz_x1, cdz_y1), (cdz_x2, cdz_y2), (255, 255, 0), 2)
+                # Draw label
+                cv2.putText(frame, "CASH DRAWER", (cdz_x1 + 5, cdz_y1 + 20),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
             
-            # Run detection based on selected types
-            frame_detections = []
-            if 'cash' in detection_types:
-                cash_dets = detector.cash_detector.detect(frame)
-                frame_detections.extend(cash_dets)
-            if 'violence' in detection_types:
-                violence_dets = detector.violence_detector.detect(frame)
-                frame_detections.extend(violence_dets)
-            if 'fire' in detection_types:
-                fire_dets = detector.fire_detector.detect(frame)
-                frame_detections.extend(fire_dets)
+            # Always show frame info (if debug_overlay is enabled)
+            timestamp = frame_count / fps if fps > 0 else 0
             
-            # Draw detections on frame
+            if debug_overlay:
+                # Draw frame info background on every frame
+                cv2.rectangle(frame, (5, 5), (450, 40), (0, 0, 0), -1)
+                cv2.rectangle(frame, (5, 5), (450, 40), (255, 255, 255), 2)
+                
+                # Frame number and timestamp on every frame
+                frame_info = f"Frame: {frame_count}/{total_frames} | Time: {timestamp:.2f}s"
+                cv2.putText(frame, frame_info, (10, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Run detection only on selected frames, but draw on ALL frames
+            should_detect = frame_count % frame_skip == 0
+            
+            if should_detect:
+                processed_count += 1
+                
+                # Initialize for new detection
+                frame_detections = []
+                debug_info = []
+            
+                # Run cash detection
+                if 'cash' in detection_types:
+                    cash_dets = detector.cash_detector.detect(frame)
+                    frame_detections.extend(cash_dets)
+                    
+                    # Get and store debug info
+                    debug_data = detector.cash_detector.last_detection_debug
+                    
+                    if debug_data.get('people'):
+                        last_debug_people = debug_data.get('people', [])
+                        
+                        # Add people count to debug info
+                        debug_info.append(f"People: {debug_data.get('num_people', 0)} "
+                                        f"(Cashier: {debug_data.get('num_cashier', 0)}, "
+                                        f"Client: {debug_data.get('num_client', 0)})")
+                    else:
+                        last_debug_people = []
+                    
+                    # Store transaction events
+                    if debug_data.get('transaction_events'):
+                        last_transaction_events = debug_data.get('transaction_events', [])
+                        for event in last_transaction_events:
+                            distance = event.get('distance', 0)
+                            debug_info.append(f"Hand Distance: {distance:.0f}px")
+                    else:
+                        last_transaction_events = []
+                    
+                    # Store debug info for next frames
+                    last_debug_info = debug_info.copy()
+                
+                # Run other detections
+                if 'violence' in detection_types:
+                    violence_dets = detector.violence_detector.detect(frame)
+                    frame_detections.extend(violence_dets)
+                    
+                if 'fire' in detection_types:
+                    fire_dets = detector.fire_detector.detect(frame)
+                    frame_detections.extend(fire_dets)
+                
+                # Store detection boxes for next frames
+                last_frame_detections = frame_detections.copy()
+            else:
+                # Use previous frame's detections and debug info
+                frame_detections = last_frame_detections.copy()
+                debug_info = last_debug_info.copy()
+            
+            # Draw people on ALL frames (detected or skipped) - only if debug_overlay is enabled
+            if debug_overlay and last_debug_people:
+                for person in last_debug_people:
+                    px1, py1, px2, py2 = person['bbox']
+                    # Orange for CASHIER (in_zone=True), Blue for CLIENT (in_zone=False)
+                    person_color = (0, 165, 255) if person.get('in_zone') else (255, 100, 100)
+                    cv2.rectangle(frame, (px1, py1), (px2, py2), person_color, 3)
+                    
+                    # Person label with background
+                    person_label = person.get('role', 'PERSON')
+                    (text_width, text_height), _ = cv2.getTextSize(
+                        person_label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                    cv2.rectangle(frame, (px1, py1 - text_height - 10),
+                                 (px1 + text_width + 10, py1), person_color, -1)
+                    cv2.putText(frame, person_label, (px1 + 5, py1 - 5),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    
+                    # Draw pose keypoints
+                    if person.get('keypoints'):
+                        for kp in person['keypoints']:
+                            if len(kp) >= 3 and kp[2] > 0.5:  # confidence check
+                                x, y = int(kp[0]), int(kp[1])
+                                if 0 <= x < frame.shape[1] and 0 <= y < frame.shape[0]:
+                                    cv2.circle(frame, (x, y), 4, (0, 255, 255), -1)
+                                    cv2.circle(frame, (x, y), 6, (0, 0, 0), 1)
+                    
+                    # Draw hands with labels
+                    if person.get('hands'):
+                        hand_labels = ['L', 'R']
+                        for i, hand in enumerate(person['hands']):
+                            if len(hand) >= 2:
+                                hx, hy = int(hand[0]), int(hand[1])
+                                # Draw hand circles
+                                cv2.circle(frame, (hx, hy), 12, (255, 0, 255), -1)
+                                cv2.circle(frame, (hx, hy), 15, (255, 255, 255), 2)
+                                # Hand label
+                                hand_label = hand_labels[i] if i < len(hand_labels) else "H"
+                                cv2.putText(frame, hand_label, (hx - 5, hy + 5),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            
+            # Draw transaction event lines on ALL frames - only if debug_overlay is enabled
+            if debug_overlay and last_transaction_events:
+                for event in last_transaction_events:
+                    # Get person indices and hand names from event
+                    p1_idx = event.get('person1_idx')
+                    p2_idx = event.get('person2_idx')
+                    hand1_name = event.get('hand1')  # 'left' or 'right'
+                    hand2_name = event.get('hand2')  # 'left' or 'right'
+                    
+                    # Get hand coordinates from the people data
+                    h1_coords = None
+                    h2_coords = None
+                    
+                    if p1_idx is not None and p1_idx < len(last_debug_people):
+                        person1 = last_debug_people[p1_idx]
+                        if person1.get('hands'):
+                            # Hands are stored as list: [left_hand, right_hand]
+                            if hand1_name == 'left' and len(person1['hands']) > 0:
+                                h1_coords = person1['hands'][0]  # Left hand is index 0
+                            elif hand1_name == 'right' and len(person1['hands']) > 1:
+                                h1_coords = person1['hands'][1]  # Right hand is index 1
+                    
+                    if p2_idx is not None and p2_idx < len(last_debug_people):
+                        person2 = last_debug_people[p2_idx]
+                        if person2.get('hands'):
+                            # Hands are stored as list: [left_hand, right_hand]
+                            if hand2_name == 'left' and len(person2['hands']) > 0:
+                                h2_coords = person2['hands'][0]  # Left hand is index 0
+                            elif hand2_name == 'right' and len(person2['hands']) > 1:
+                                h2_coords = person2['hands'][1]  # Right hand is index 1
+                    
+                    if h1_coords and h2_coords and len(h1_coords) >= 2 and len(h2_coords) >= 2:
+                        # Draw magenta line between hands
+                        pt1 = (int(h1_coords[0]), int(h1_coords[1]))
+                        pt2 = (int(h2_coords[0]), int(h2_coords[1]))
+                        cv2.line(frame, pt1, pt2, (255, 0, 255), 4)
+                        
+                        # Draw distance text on the line
+                        distance = event.get('distance', 0)
+                        mid_x = (pt1[0] + pt2[0]) // 2
+                        mid_y = (pt1[1] + pt2[1]) // 2
+                        
+                        # Draw background for text
+                        text = f"{distance:.0f}px"
+                        (text_width, text_height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+                        cv2.rectangle(frame, (mid_x - text_width//2 - 5, mid_y - text_height - 5),
+                                    (mid_x + text_width//2 + 5, mid_y + 5), (0, 0, 0), -1)
+                        cv2.putText(frame, text, (mid_x - text_width//2, mid_y),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
+                        
+                        # Draw midpoint circle
+                        midpoint = event.get('midpoint')
+                        if midpoint and len(midpoint) >= 2:
+                            cv2.circle(frame, (int(midpoint[0]), int(midpoint[1])), 
+                                     10, (255, 255, 0), -1)
+                            cv2.circle(frame, (int(midpoint[0]), int(midpoint[1])), 
+                                     13, (0, 0, 0), 2)
+            
+            # Draw main detection boxes (always draw, including on skipped frames)
+            if should_detect:
+                last_frame_detections = frame_detections.copy()
+            else:
+                frame_detections = last_frame_detections.copy()
+            
             for det in frame_detections:
                 # Draw bounding box
                 x1, y1, x2, y2 = det.bbox
@@ -3213,12 +3528,16 @@ def api_test_process(request):
                     'FIRE': (0, 165, 255)
                 }.get(det.label, (255, 255, 255))
                 
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
                 
-                # Draw label
+                # Draw label with background
                 label_text = f"{det.label}: {det.confidence:.2f}"
-                cv2.putText(frame, label_text, (x1, y1 - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+                cv2.rectangle(frame, (x1, y1 - text_height - 10),
+                             (x1 + text_width + 10, y1), color, -1)
+                cv2.putText(frame, label_text, (x1 + 5, y1 - 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
                 
                 # Save detection
                 timestamp = frame_count / fps if fps > 0 else 0
@@ -3230,10 +3549,52 @@ def api_test_process(request):
                     'bbox': det.bbox
                 })
             
+            # Draw additional debug info if any (only if debug_overlay is enabled)
+            if debug_overlay and debug_info:
+                debug_y = 50
+                # Expand background for debug info
+                cv2.rectangle(frame, (5, 45), (450, 50 + len(debug_info) * 30), (0, 0, 0), -1)
+                cv2.rectangle(frame, (5, 45), (450, 50 + len(debug_info) * 30), (255, 255, 255), 2)
+                
+                for info in debug_info:
+                    cv2.putText(frame, info, (10, debug_y),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    debug_y += 30
+            
             out.write(frame)
         
         cap.release()
         out.release()
+        
+        # Convert to H.264 MP4 for browser compatibility
+        import subprocess
+        import os
+        
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-i', str(temp_path),
+            '-c:v', 'libx264',
+            '-preset', 'fast',
+            '-crf', '23',
+            '-pix_fmt', 'yuv420p',  # Ensure compatibility
+            '-movflags', '+faststart',  # Move moov atom to beginning for seeking
+            '-max_muxing_queue_size', '1024',  # Prevent muxing issues
+            '-y',
+            str(output_path)
+        ]
+        
+        try:
+            with _ffmpeg_lock:
+                subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
+            
+            # Delete temp file
+            if temp_path.exists():
+                os.remove(temp_path)
+                
+        except subprocess.CalledProcessError as e:
+            # If FFmpeg fails, use the temp file as output
+            import shutil
+            shutil.move(str(temp_path), str(output_path))
         
         processing_time = round(time.time() - start_time, 2)
         
@@ -3242,9 +3603,11 @@ def api_test_process(request):
             'results': {
                 'output_video': f'/media/test_results/{output_filename}',
                 'duration': round(duration, 2),
+                'total_frames': total_frames,
                 'frames_processed': processed_count,
                 'processing_time': processing_time,
-                'detections': detections
+                'detections': detections,
+                'debug_overlay': debug_overlay
             }
         })
         

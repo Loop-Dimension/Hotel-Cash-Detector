@@ -105,6 +105,16 @@ class Camera(models.Model):
     cashier_zone_height = models.IntegerField(default=480)
     cashier_zone_enabled = models.BooleanField(default=False)
     
+    # Cash Drawer/Register/Safe zone - where cashier puts money after receiving
+    cash_drawer_zone_x = models.IntegerField(default=0)
+    cash_drawer_zone_y = models.IntegerField(default=0)
+    cash_drawer_zone_width = models.IntegerField(default=200)
+    cash_drawer_zone_height = models.IntegerField(default=150)
+    cash_drawer_zone_enabled = models.BooleanField(default=False)
+    
+    # Hand tracking duration (frames) - how long to track cashier's hand after touch
+    hand_tracking_duration = models.IntegerField(default=90)  # ~3 seconds at 30fps
+    
     # Independent confidence thresholds per camera
     cash_confidence = models.FloatField(default=0.5)
     violence_confidence = models.FloatField(default=0.6)
@@ -155,6 +165,25 @@ class Camera(models.Model):
         self.cashier_zone_enabled = enabled
         self.save()
     
+    def get_cash_drawer_zone(self):
+        """Get cash drawer zone as dict"""
+        return {
+            'x': self.cash_drawer_zone_x,
+            'y': self.cash_drawer_zone_y,
+            'width': self.cash_drawer_zone_width,
+            'height': self.cash_drawer_zone_height,
+            'enabled': self.cash_drawer_zone_enabled
+        }
+    
+    def set_cash_drawer_zone(self, x, y, width, height, enabled=True):
+        """Set cash drawer zone from coordinates"""
+        self.cash_drawer_zone_x = int(x)
+        self.cash_drawer_zone_y = int(y)
+        self.cash_drawer_zone_width = int(width)
+        self.cash_drawer_zone_height = int(height)
+        self.cash_drawer_zone_enabled = enabled
+        self.save()
+    
     def get_confidence_thresholds(self):
         """Get all confidence thresholds"""
         return {
@@ -172,7 +201,9 @@ class Camera(models.Model):
             'cash_confidence': self.cash_confidence,
             'violence_confidence': self.violence_confidence,
             'fire_confidence': self.fire_confidence,
-            'cashier_zone': self.get_cashier_zone()
+            'cashier_zone': self.get_cashier_zone(),
+            'cash_drawer_zone': self.get_cash_drawer_zone(),
+            'hand_tracking_duration': self.hand_tracking_duration
         }
 
 

@@ -1,11 +1,19 @@
 """
-Cash Transaction Detector
+Cash Transaction Detector - Enhanced Two-Step Detection
 
-Detects cash transactions by analyzing:
-1. Person presence in cashier zone
-2. Hand positions and movements using pose estimation
-3. Hand-to-hand proximity between people (cash handoff)
-4. Extended hand gestures typical of payment
+Detection Flow:
+1. STEP 1 - Hand Touch: Detect when Customer hand touches Cashier hand
+   - Cashier = person inside Cashier Zone
+   - Customer = person outside Cashier Zone
+   - Distance between hands < hand_touch_distance threshold
+   
+2. STEP 2 - Cash Deposit: After touch, track Cashier's hand
+   - Track for hand_tracking_duration frames
+   - Detect when Cashier's hand enters Cash Drawer Zone
+   - Only then trigger CASH detection
+
+This ensures we only detect REAL cash transactions:
+Customer pays → Cashier receives → Cashier deposits in drawer
 """
 import cv2
 import numpy as np
@@ -16,13 +24,11 @@ from .base_detector import BaseDetector, Detection
 
 class CashTransactionDetector(BaseDetector):
     """
-    Detects cash transactions using pose estimation and spatial analysis.
+    Enhanced Cash Transaction Detector with Two-Step Verification.
     
-    Since we can't detect Korean currency directly (no trained model),
-    we detect the ACTION of cash exchange:
-    - Two people near cashier zone
-    - Hands coming together / close proximity
-    - Hand-to-hand movement patterns
+    Detection only triggers when:
+    1. Customer touches Cashier's hand (proximity check)
+    2. Cashier's hand then moves to Cash Drawer zone
     """
     
     def __init__(self, config: Dict = None):
@@ -30,34 +36,46 @@ class CashTransactionDetector(BaseDetector):
         self.pose_model = None
         self.person_model = None
         
-        # Cashier zone as percentage [x%, y%, width%, height%] - responsive to video size
-        # Default zone covers center-bottom area (typical cashier position)
-        self.cashier_zone_percent = config.get('cashier_zone_percent', [0.1, 0.3, 0.8, 0.6])
-        
-        # Legacy pixel-based zone (will be converted to percentage if video size known)
+        # Cashier zone (where cashier stands)
         self.cashier_zone = config.get('cashier_zone', [100, 100, 400, 300])
         
-        # Video dimensions (updated when processing frames)
+        # Cash Drawer zone (where money is deposited)
+        self.cash_drawer_zone = config.get('cash_drawer_zone', [50, 200, 150, 100])
+        
+        # Video dimensions
         self.video_width = config.get('video_width', 1920)
         self.video_height = config.get('video_height', 1080)
         
         # Detection parameters
         self.hand_touch_distance = config.get('hand_touch_distance', 100)
         self.pose_confidence = config.get('pose_confidence', 0.5)
-        self.min_transaction_frames = config.get('min_transaction_frames', 1)  # Immediate detection
-        self.min_cash_confidence = config.get('min_cash_confidence', 0.70)  # 70% minimum
+        self.min_cash_confidence = config.get('min_cash_confidence', 0.70)
         
-        # Show pose overlay with hand positions and distances (disabled by default, debug only)
+        # Hand tracking duration (frames to track after touch)
+        self.hand_tracking_duration = config.get('hand_tracking_duration', 90)  # ~3 seconds at 30fps
+        
+        # Debug info storage
+        self.last_detection_debug = {}
         self.show_pose_overlay = config.get('show_pose_overlay', False)
         
-        # Tracking state
-        self.potential_transactions = deque(maxlen=30)  # Last 30 frames
-        self.consecutive_detections = 0
-        self.last_transaction_frame = -100  # Cooldown tracking
-        self.transaction_cooldown = 15  # frames between transactions (reduced from 45)
+        # ==================== TWO-STEP TRACKING STATE ====================
+        # Step 1: Hand touch detection
+        self.pending_transaction = None  # Stores touch event waiting for drawer deposit
+        self.touch_frame = -1  # Frame when touch occurred
+        self.tracking_cashier_hands = False  # Whether we're tracking cashier's hands
         
-        # Hand keypoint indices for COCO format (used by YOLOv8-pose)
-        # 9: left_wrist, 10: right_wrist
+        # Step 2: Cashier hand tracking  
+        self.cashier_hand_history = deque(maxlen=30)  # Track hand positions
+        self.frames_since_touch = 0
+        
+        # Cooldown to prevent duplicate detections
+        self.last_transaction_frame = -100
+        self.transaction_cooldown = 60  # frames between transactions (~2 seconds)
+        
+        # Frame counter
+        self.frame_count = 0
+        
+        # Hand keypoint indices (COCO format)
         self.LEFT_WRIST = 9
         self.RIGHT_WRIST = 10
         
@@ -110,49 +128,36 @@ class CashTransactionDetector(BaseDetector):
             return False
     
     def update_video_dimensions(self, width: int, height: int):
-        """Update video dimensions and recalculate pixel zone from percentage"""
+        """Update video dimensions"""
         self.video_width = width
         self.video_height = height
-        # Convert percentage zone to pixel zone for current video size
-        self.cashier_zone = self.percent_to_pixels(self.cashier_zone_percent)
     
-    def percent_to_pixels(self, zone_percent: List[float]) -> List[int]:
-        """Convert percentage-based zone to pixel coordinates"""
-        px, py, pw, ph = zone_percent
-        return [
-            int(px * self.video_width),
-            int(py * self.video_height),
-            int(pw * self.video_width),
-            int(ph * self.video_height)
-        ]
+    def set_cashier_zone(self, zone: List[int]):
+        """Update the cashier zone [x, y, w, h]"""
+        self.cashier_zone = zone
     
-    def pixels_to_percent(self, zone_pixels: List[int]) -> List[float]:
-        """Convert pixel-based zone to percentage coordinates"""
-        x, y, w, h = zone_pixels
-        return [
-            x / self.video_width if self.video_width > 0 else 0,
-            y / self.video_height if self.video_height > 0 else 0,
-            w / self.video_width if self.video_width > 0 else 0,
-            h / self.video_height if self.video_height > 0 else 0
-        ]
-    
-    def set_cashier_zone(self, zone: List[int], as_percent: bool = False):
-        """Update the cashier zone (can be pixels or percentage)"""
-        if as_percent:
-            self.cashier_zone_percent = zone
-            self.cashier_zone = self.percent_to_pixels(zone)
-        else:
-            self.cashier_zone = zone
-            self.cashier_zone_percent = self.pixels_to_percent(zone)
+    def set_cash_drawer_zone(self, zone: List[int]):
+        """Update the cash drawer zone [x, y, w, h]"""
+        self.cash_drawer_zone = zone
     
     def set_hand_touch_distance(self, distance: int):
         """Update hand touch distance threshold"""
-        self.hand_touch_distance = max(10, min(500, distance))  # Clamp between 10-500px
+        self.hand_touch_distance = max(10, min(500, distance))
+    
+    def set_hand_tracking_duration(self, frames: int):
+        """Update hand tracking duration (frames after touch)"""
+        self.hand_tracking_duration = max(15, min(300, frames))
     
     def is_in_cashier_zone(self, point: Tuple[int, int]) -> bool:
         """Check if a point is inside the cashier zone"""
         x, y = point
         zx, zy, zw, zh = self.cashier_zone
+        return zx <= x <= zx + zw and zy <= y <= zy + zh
+    
+    def is_in_cash_drawer_zone(self, point: Tuple[int, int]) -> bool:
+        """Check if a point is inside the cash drawer zone"""
+        x, y = point
+        zx, zy, zw, zh = self.cash_drawer_zone
         return zx <= x <= zx + zw and zy <= y <= zy + zh
     
     def get_person_center(self, keypoints: np.ndarray, bbox: Tuple[int, int, int, int]) -> Tuple[int, int]:
@@ -335,14 +340,19 @@ class CashTransactionDetector(BaseDetector):
     
     def detect(self, frame: np.ndarray) -> List[Detection]:
         """
-        Detect cash transactions in the frame
+        Enhanced Two-Step Cash Transaction Detection
         
-        Detection strategy:
-        1. Find all people using pose estimation
-        2. Identify people in/near cashier zone
-        3. Track hand positions
-        4. Detect hand-to-hand proximity events
-        5. Confirm transaction after consecutive detections
+        STEP 1: Detect Cashier-Customer Hand Touch
+        - Cashier = person inside Cashier Zone
+        - Customer = person outside Cashier Zone  
+        - Hands must be within hand_touch_distance
+        
+        STEP 2: Track Cashier's Hand to Cash Drawer
+        - After touch detected, track cashier's hands
+        - If cashier's hand enters Cash Drawer Zone within tracking duration
+        - THEN trigger CASH detection
+        
+        This ensures we only detect REAL cash transactions.
         """
         detections = []
         
@@ -350,7 +360,9 @@ class CashTransactionDetector(BaseDetector):
             return detections
         
         try:
-            # Update video dimensions from frame (for responsive zone)
+            self.frame_count += 1
+            
+            # Update video dimensions from frame
             h, w = frame.shape[:2]
             if w != self.video_width or h != self.video_height:
                 self.update_video_dimensions(w, h)
@@ -359,7 +371,11 @@ class CashTransactionDetector(BaseDetector):
             results = self.pose_model(frame, verbose=False, conf=self.pose_confidence)
             
             if not results or len(results) == 0:
-                self.consecutive_detections = 0
+                # No people detected - check if we should timeout pending transaction
+                if self.tracking_cashier_hands:
+                    self.frames_since_touch += 1
+                    if self.frames_since_touch > self.hand_tracking_duration:
+                        self._reset_tracking("No people detected - timeout")
                 return detections
             
             result = results[0]
@@ -368,6 +384,7 @@ class CashTransactionDetector(BaseDetector):
             people_hands = []
             cashier_zone_people = []
             customer_zone_people = []
+            debug_people = []
             
             if result.keypoints is not None and result.boxes is not None:
                 keypoints_data = result.keypoints.data.cpu().numpy()
@@ -376,9 +393,6 @@ class CashTransactionDetector(BaseDetector):
                 for idx, (kpts, box) in enumerate(zip(keypoints_data, boxes)):
                     bbox = tuple(map(int, box))
                     hands = self.get_hand_positions(kpts)
-                    
-                    # Use BODY AREA RATIO to determine if person is in cashier zone
-                    # This ensures one person = one classification based on where most of their body is
                     center = self.get_person_center(kpts, bbox)
                     in_zone = self.is_person_in_cashier_zone(kpts, bbox)
                     
@@ -393,139 +407,246 @@ class CashTransactionDetector(BaseDetector):
                     
                     people_hands.append(person_info)
                     
-                    if person_info['in_cashier_zone']:
+                    # Debug visualization data
+                    hands_list = []
+                    if 'left' in hands:
+                        hands_list.append(hands['left'])
+                    if 'right' in hands:
+                        hands_list.append(hands['right'])
+                    
+                    debug_people.append({
+                        'bbox': bbox,
+                        'hands': hands_list,
+                        'keypoints': kpts.tolist(),
+                        'in_zone': in_zone,
+                        'role': 'CASHIER' if in_zone else 'CLIENT'
+                    })
+                    
+                    if in_zone:
                         cashier_zone_people.append(person_info)
                     else:
                         customer_zone_people.append(person_info)
             
-            # Look for hand proximity events between CASHIER and CLIENT only
-            # detect_hand_proximity now enforces strict XOR (cashier+client)
-            transaction_events = self.detect_hand_proximity(people_hands)
-            
-            # Track potential transactions
-            self.potential_transactions.append(len(transaction_events) > 0)
-            
-            # Check for consistent detection - increment BEFORE checking threshold
-            if transaction_events:
-                self.consecutive_detections += 1
+            # ==================== STEP 2: CHECK CASH DRAWER DEPOSIT ====================
+            # If we're tracking after a touch, check if cashier's hand goes to drawer
+            if self.tracking_cashier_hands and self.pending_transaction:
+                self.frames_since_touch += 1
                 
-                # Debug: Log detection attempt
-                best = min(transaction_events, key=lambda x: x.get('distance', 999))
-                cooldown_active = self.frame_count - self.last_transaction_frame <= self.transaction_cooldown
-                print(f"[CashDetect] Hand touch: dist={best['distance']:.0f} ({best['person1_role']}-{best['person2_role']}), consec={self.consecutive_detections}, cooldown={cooldown_active}")
-            else:
-                self.consecutive_detections = max(0, self.consecutive_detections - 1)
+                # Check timeout
+                if self.frames_since_touch > self.hand_tracking_duration:
+                    self._reset_tracking("Tracking timeout - no drawer deposit detected")
+                else:
+                    # Check if any cashier's hand is in the cash drawer zone
+                    for cashier in cashier_zone_people:
+                        for hand_name, hand_pos in cashier.get('hands', {}).items():
+                            if self.is_in_cash_drawer_zone((hand_pos[0], hand_pos[1])):
+                                # SUCCESS! Cashier deposited in drawer after customer touch
+                                detection = self._create_detection(
+                                    frame, 
+                                    self.pending_transaction,
+                                    cashier,
+                                    hand_pos,
+                                    "drawer_deposit"
+                                )
+                                if detection:
+                                    detections.append(detection)
+                                    print(f"[CashDetect] ✅ CASH DETECTED! Touch → Drawer deposit in {self.frames_since_touch} frames")
+                                    self.last_transaction_frame = self.frame_count
+                                
+                                self._reset_tracking("Detection complete")
+                                
+                                # Update debug info with detection event
+                                self.last_detection_debug = {
+                                    'people': debug_people,
+                                    'transaction_events': [self.pending_transaction] if self.pending_transaction else [],
+                                    'num_people': len(people_hands),
+                                    'num_cashier': len(cashier_zone_people),
+                                    'num_client': len(customer_zone_people),
+                                    'state': 'DETECTED',
+                                    'tracking_frames': self.frames_since_touch
+                                }
+                                return detections
             
-            # Confirm transaction after minimum frames
-            # FIXED: Check consecutive_detections >= 1 (we just incremented it above)
-            if (self.consecutive_detections >= self.min_transaction_frames and 
-                self.frame_count - self.last_transaction_frame > self.transaction_cooldown and
-                len(transaction_events) > 0):
-                
-                # Find the best transaction event using distance score
-                best_event = max(transaction_events, key=lambda x: x.get('distance_score', 0))
-                
-                # FILTER: Skip if confidence is too low (prevents false positives)
-                reported_confidence = best_event.get('distance_score', best_event['confidence'])
-                if reported_confidence < self.min_cash_confidence:
-                    # Low confidence detection - skip but don't reset consecutive count
-                    print(f"[CashDetect] Low confidence ({reported_confidence:.2f} < {self.min_cash_confidence}), skipping")
+            # ==================== STEP 1: DETECT HAND TOUCH ====================
+            # Only look for new touches if not already tracking
+            if not self.tracking_cashier_hands:
+                # Check cooldown
+                if self.frame_count - self.last_transaction_frame <= self.transaction_cooldown:
+                    self.last_detection_debug = {
+                        'people': debug_people,
+                        'transaction_events': [],
+                        'num_people': len(people_hands),
+                        'num_cashier': len(cashier_zone_people),
+                        'num_client': len(customer_zone_people),
+                        'state': 'COOLDOWN'
+                    }
                     return detections
                 
-                # STRICT: Only accept if distance is within threshold (already filtered above)
-                # No OR logic - distance must be satisfied
+                # Look for hand touch between cashier and customer
+                touch_events = self._detect_hand_touch(people_hands)
                 
-                # Create bounding box around the transaction area
-                mp = best_event['midpoint']
-                tx_bbox = (
-                    max(0, mp[0] - 60),
-                    max(0, mp[1] - 60),
-                    min(frame.shape[1], mp[0] + 60),
-                    min(frame.shape[0], mp[1] + 60)
-                )
-                
-                # Get person info for cashier and customer
-                p1_idx = best_event['person1_idx']
-                p2_idx = best_event['person2_idx']
-                p1_info = people_hands[p1_idx] if p1_idx < len(people_hands) else None
-                p2_info = people_hands[p2_idx] if p2_idx < len(people_hands) else None
-                
-                # Determine which is cashier and which is customer
-                cashier_info = None
-                customer_info = None
-                if p1_info and p2_info:
-                    if p1_info.get('in_cashier_zone'):
-                        cashier_info = p1_info
-                        customer_info = p2_info
-                    else:
-                        cashier_info = p2_info
-                        customer_info = p1_info
-                
-                # Build detailed metadata
-                detection_metadata = {
-                    'type': 'hand_exchange',
-                    'distance': round(best_event['distance'], 1),
-                    'distance_threshold': self.hand_touch_distance,
-                    'hand_confidence': round(best_event['confidence'], 3),
-                    'people_count': len(people_hands),
-                    'cashier_zone': self.cashier_zone,
+                if touch_events:
+                    # Found a touch! Start tracking cashier's hand
+                    best_event = min(touch_events, key=lambda x: x.get('distance', 999))
+                    
+                    self.pending_transaction = best_event
+                    self.tracking_cashier_hands = True
+                    self.frames_since_touch = 0
+                    self.touch_frame = self.frame_count
+                    
+                    print(f"[CashDetect] 🤝 Hand touch detected! dist={best_event['distance']:.0f}px, tracking cashier for {self.hand_tracking_duration} frames")
+                    
+                    self.last_detection_debug = {
+                        'people': debug_people,
+                        'transaction_events': touch_events,
+                        'num_people': len(people_hands),
+                        'num_cashier': len(cashier_zone_people),
+                        'num_client': len(customer_zone_people),
+                        'state': 'TRACKING',
+                        'touch_distance': best_event['distance']
+                    }
+                else:
+                    self.last_detection_debug = {
+                        'people': debug_people,
+                        'transaction_events': [],
+                        'num_people': len(people_hands),
+                        'num_cashier': len(cashier_zone_people),
+                        'num_client': len(customer_zone_people),
+                        'state': 'WAITING'
+                    }
+            else:
+                # Still tracking - update debug info
+                self.last_detection_debug = {
+                    'people': debug_people,
+                    'transaction_events': [self.pending_transaction] if self.pending_transaction else [],
+                    'num_people': len(people_hands),
+                    'num_cashier': len(cashier_zone_people),
+                    'num_client': len(customer_zone_people),
+                    'state': 'TRACKING',
+                    'tracking_frames': self.frames_since_touch,
+                    'tracking_remaining': self.hand_tracking_duration - self.frames_since_touch
                 }
-                
-                # Add cashier details
-                if cashier_info:
-                    detection_metadata['cashier'] = {
-                        'center': list(cashier_info['center']),
-                        'bbox': list(cashier_info['bbox']),
-                        'hands': {k: [v[0], v[1], round(v[2], 3)] for k, v in cashier_info.get('hands', {}).items()},
-                        'in_zone': True,
-                        'hand_used': best_event['hand1'] if best_event['person1_role'] == 'cashier' else best_event['hand2']
-                    }
-                
-                # Add customer details
-                if customer_info:
-                    detection_metadata['customer'] = {
-                        'center': list(customer_info['center']),
-                        'bbox': list(customer_info['bbox']),
-                        'hands': {k: [v[0], v[1], round(v[2], 3)] for k, v in customer_info.get('hands', {}).items()},
-                        'in_zone': False,
-                        'hand_used': best_event['hand2'] if best_event['person1_role'] == 'cashier' else best_event['hand1']
-                    }
-                
-                # Add interaction point
-                detection_metadata['interaction_point'] = list(mp)
-                
-                detection = Detection(
-                    label="CASH",
-                    confidence=reported_confidence,
-                    bbox=tx_bbox,
-                    metadata=detection_metadata
-                )
-                detections.append(detection)
-                print(f"[CashDetect] ✅ DETECTION TRIGGERED! dist={best_event['distance']:.0f}, conf={reported_confidence:.2f}")
-                
-                self.last_transaction_frame = self.frame_count
-                self.consecutive_detections = 0
-            
-            # Also detect if only cashier is present with extended hands
-            # (receiving money from someone off-screen or far away)
-            if not transaction_events and len(cashier_zone_people) > 0:
-                for person in cashier_zone_people:
-                    hands = person['hands']
-                    if hands:
-                        # Check if hands are extended (far from body center)
-                        bbox = person['bbox']
-                        body_center_x = (bbox[0] + bbox[2]) // 2
-                        
-                        for hand_name, hand_pos in hands.items():
-                            # If hand is extended outward significantly
-                            if abs(hand_pos[0] - body_center_x) > 100:
-                                # Potential receiving gesture - track but don't alert yet
-                                pass
         
         except Exception as e:
             print(f"⚠️ Cash detection error: {e}")
+            import traceback
+            traceback.print_exc()
         
         return detections
+    
+    def _detect_hand_touch(self, people_hands: List[Dict]) -> List[Dict]:
+        """
+        Detect when Customer hand touches Cashier hand.
+        
+        Rules:
+        - Cashier = person inside Cashier Zone
+        - Customer = person outside Cashier Zone
+        - Distance between their hands < hand_touch_distance
+        """
+        touch_events = []
+        
+        for i, person1 in enumerate(people_hands):
+            for j, person2 in enumerate(people_hands):
+                if i >= j:
+                    continue
+                
+                p1_in = person1.get('in_cashier_zone', False)
+                p2_in = person2.get('in_cashier_zone', False)
+                
+                # Must be exactly one cashier + one customer
+                if not ((p1_in and not p2_in) or (not p1_in and p2_in)):
+                    continue
+                
+                # Check all hand combinations
+                for hand1_name, hand1_pos in person1.get('hands', {}).items():
+                    for hand2_name, hand2_pos in person2.get('hands', {}).items():
+                        distance = self.calculate_hand_distance(hand1_pos[:2], hand2_pos[:2])
+                        
+                        if distance < self.hand_touch_distance:
+                            midpoint = (
+                                (hand1_pos[0] + hand2_pos[0]) // 2,
+                                (hand1_pos[1] + hand2_pos[1]) // 2
+                            )
+                            
+                            # Identify cashier and customer
+                            if p1_in:
+                                cashier_idx, customer_idx = i, j
+                                cashier_hand, customer_hand = hand1_name, hand2_name
+                            else:
+                                cashier_idx, customer_idx = j, i
+                                cashier_hand, customer_hand = hand2_name, hand1_name
+                            
+                            touch_events.append({
+                                'cashier_idx': cashier_idx,
+                                'customer_idx': customer_idx,
+                                'person1_idx': i,
+                                'person2_idx': j,
+                                'person1_role': 'cashier' if p1_in else 'client',
+                                'person2_role': 'cashier' if p2_in else 'client',
+                                'cashier_hand': cashier_hand,
+                                'customer_hand': customer_hand,
+                                'hand1': hand1_name,
+                                'hand2': hand2_name,
+                                'distance': distance,
+                                'midpoint': midpoint,
+                                'confidence': min(hand1_pos[2], hand2_pos[2])
+                            })
+        
+        return touch_events
+    
+    def _create_detection(self, frame, touch_event, cashier_info, drawer_hand_pos, detection_type) -> Optional[Detection]:
+        """Create a CASH detection after successful two-step verification"""
+        try:
+            # Calculate confidence based on the quality of detection
+            touch_distance = touch_event.get('distance', 100)
+            distance_score = max(0, 1 - (touch_distance / self.hand_touch_distance))
+            
+            # Higher confidence if both steps completed quickly
+            time_score = max(0, 1 - (self.frames_since_touch / self.hand_tracking_duration))
+            
+            confidence = (distance_score * 0.6 + time_score * 0.4)  # Weight touch more
+            confidence = max(0.5, min(1.0, confidence))  # Clamp to 0.5-1.0
+            
+            # Create bounding box around the cash drawer area
+            drawer_x, drawer_y = int(drawer_hand_pos[0]), int(drawer_hand_pos[1])
+            tx_bbox = (
+                max(0, drawer_x - 80),
+                max(0, drawer_y - 80),
+                min(frame.shape[1], drawer_x + 80),
+                min(frame.shape[0], drawer_y + 80)
+            )
+            
+            metadata = {
+                'type': 'two_step_verification',
+                'detection_type': detection_type,
+                'touch_distance': round(touch_event['distance'], 1),
+                'frames_to_drawer': self.frames_since_touch,
+                'tracking_duration': self.hand_tracking_duration,
+                'cashier_zone': self.cashier_zone,
+                'cash_drawer_zone': self.cash_drawer_zone,
+                'cashier_bbox': list(cashier_info['bbox']),
+                'drawer_hand_position': [drawer_x, drawer_y]
+            }
+            
+            return Detection(
+                label="CASH",
+                confidence=confidence,
+                bbox=tx_bbox,
+                metadata=metadata
+            )
+            
+        except Exception as e:
+            print(f"⚠️ Error creating detection: {e}")
+            return None
+    
+    def _reset_tracking(self, reason: str = ""):
+        """Reset the tracking state"""
+        if reason:
+            print(f"[CashDetect] Tracking reset: {reason}")
+        self.pending_transaction = None
+        self.tracking_cashier_hands = False
+        self.frames_since_touch = 0
+        self.cashier_hand_history.clear()
     
     def draw_cashier_zone(self, frame: np.ndarray) -> np.ndarray:
         """Draw the cashier zone overlay on frame"""

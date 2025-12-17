@@ -44,6 +44,9 @@ media/thumbnails/*.png
 media/json/*.json
 media/test_results/*.mp4
 media/test_results/*.avi
+media/uploads/test/*.mp4
+media/uploads/test/*.avi
+media/uploads/test/*.jpg
 /django_app/media/
 /flask/output/
 /flask/uploads/

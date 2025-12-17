@@ -48,6 +48,7 @@ urlpatterns = [
     path('api/cameras/', views.api_cameras, name='api_cameras'),
     path('api/cameras/<int:camera_id>/', views.api_camera_detail, name='api_camera_detail'),
     path('api/cameras/<int:camera_id>/set-zone/', views.api_set_cashier_zone, name='api_set_cashier_zone'),
+    path('api/cameras/<int:camera_id>/set-cash-drawer-zone/', views.api_set_cash_drawer_zone, name='api_set_cash_drawer_zone'),
     path('api/cameras/<int:camera_id>/toggle-detection/', views.api_toggle_detection, name='api_toggle_detection'),
     path('api/cameras/<int:camera_id>/settings/', views.api_camera_settings, name='api_camera_settings'),
     path('api/cameras/<int:camera_id>/test-connection/', views.api_test_camera_connection, name='api_test_camera_connection'),
