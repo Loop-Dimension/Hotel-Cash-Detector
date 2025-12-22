@@ -207,8 +207,12 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
     zone = camera.get_cashier_zone()
     detector_config = {
         'models_dir': str(settings.BASE_DIR / 'models'),
-        'pose_model': settings.DETECTION_CONFIG.get('POSE_MODEL', 'yolov8s-pose.pt'),
-        'yolo_model': settings.DETECTION_CONFIG.get('YOLO_MODEL', 'yolov8s.pt'),
+        # GPU/CPU setting from environment
+        'use_gpu': settings.DETECTION_CONFIG.get('USE_GPU', 'auto'),
+        # Model selection - cash uses pose, violence/fire use nano
+        'cash_pose_model': settings.DETECTION_CONFIG.get('CASH_POSE_MODEL', 'yolov8s-pose.pt'),
+        'violence_pose_model': settings.DETECTION_CONFIG.get('VIOLENCE_POSE_MODEL', 'yolov8n-pose.pt'),
+        'fire_yolo_model': settings.DETECTION_CONFIG.get('FIRE_YOLO_MODEL', 'yolov8n.pt'),
         'fire_model': settings.DETECTION_CONFIG.get('FIRE_MODEL', 'fire_smoke_yolov8.pt'),
         'cashier_zone': [zone['x'], zone['y'], zone['width'], zone['height']],
         'hand_touch_distance': camera.hand_touch_distance,

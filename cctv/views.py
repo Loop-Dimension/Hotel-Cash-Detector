@@ -1297,6 +1297,13 @@ def get_detector_for_camera(camera):
         # Use camera-specific confidence thresholds
         config = {
             'models_dir': str(settings.DETECTION_CONFIG['MODELS_DIR']),
+            # GPU/CPU setting from environment
+            'use_gpu': settings.DETECTION_CONFIG.get('USE_GPU', 'auto'),
+            # Model selection - cash uses pose, violence/fire use nano
+            'cash_pose_model': settings.DETECTION_CONFIG.get('CASH_POSE_MODEL', 'yolov8s-pose.pt'),
+            'violence_pose_model': settings.DETECTION_CONFIG.get('VIOLENCE_POSE_MODEL', 'yolov8n-pose.pt'),
+            'fire_yolo_model': settings.DETECTION_CONFIG.get('FIRE_YOLO_MODEL', 'yolov8n.pt'),
+            'fire_model': settings.DETECTION_CONFIG.get('FIRE_MODEL', 'fire_smoke_yolov8.pt'),
             'cashier_zone': [
                 camera.cashier_zone_x,
                 camera.cashier_zone_y,
@@ -1518,7 +1525,7 @@ def generate_debug_frames(camera):
             frame = worker.get_current_frame(with_overlay=False)
             if frame is not None:
                 # Draw our own debug overlay with poses, distances, labels
-                debug_frame = draw_debug_frame(frame.copy(), camera, pose_model)
+                debug_frame = draw_debug_frame(frame.copy(), camera, pose_model, fps=worker.current_fps)
                 _, buffer = cv2.imencode('.jpg', debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
@@ -1542,13 +1549,26 @@ def generate_debug_frames(camera):
     
     pose_model = get_debug_pose_model()
     
+    # FPS tracking for non-worker mode
+    fps_counter = 0
+    fps_start_time = time.time()
+    current_fps = 0.0
+    
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
             
-            debug_frame = draw_debug_frame(frame.copy(), camera, pose_model)
+            # Calculate FPS
+            fps_counter += 1
+            elapsed = time.time() - fps_start_time
+            if elapsed >= 1.0:
+                current_fps = fps_counter / elapsed
+                fps_counter = 0
+                fps_start_time = time.time()
+            
+            debug_frame = draw_debug_frame(frame.copy(), camera, pose_model, fps=current_fps)
             _, buffer = cv2.imencode('.jpg', debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
@@ -1556,9 +1576,17 @@ def generate_debug_frames(camera):
         cap.release()
 
 
-def draw_debug_frame(frame, camera, pose_model=None):
+def draw_debug_frame(frame, camera, pose_model=None, fps=0.0):
     """Draw comprehensive debug overlay on frame with poses, distances, and roles"""
     h, w = frame.shape[:2]
+    
+    # Draw FPS in bottom left corner
+    if fps > 0:
+        fps_text = f"FPS: {fps:.1f}"
+        # Black background for FPS text
+        (text_w, text_h), _ = cv2.getTextSize(fps_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+        cv2.rectangle(frame, (5, h - text_h - 15), (text_w + 20, h - 5), (0, 0, 0), -1)
+        cv2.putText(frame, fps_text, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
     
     # Get cashier zone
     cashier_zone = [camera.cashier_zone_x, camera.cashier_zone_y, 
@@ -2238,6 +2266,16 @@ class BackgroundCameraWorker:
         
         # Stream fps (detected from camera)
         self.stream_fps = 30  # Default, will be updated from camera
+        
+        # FPS tracking for display
+        self.fps_counter = 0
+        self.fps_start_time = None
+        self.current_fps = 0.0
+        
+        # FPS tracking for display
+        self.fps_counter = 0
+        self.fps_start_time = None
+        self.current_fps = 0.0
     
     def get_uptime(self):
         """Get worker uptime as formatted string"""
@@ -2310,9 +2348,12 @@ class BackgroundCameraWorker:
         zone = camera.get_cashier_zone()
         config = {
             'models_dir': str(self.models_dir),
-            # Model names from settings
-            'pose_model': settings.DETECTION_CONFIG.get('POSE_MODEL', 'yolov8s-pose.pt'),
-            'yolo_model': settings.DETECTION_CONFIG.get('YOLO_MODEL', 'yolov8s.pt'),
+            # GPU/CPU setting from environment
+            'use_gpu': settings.DETECTION_CONFIG.get('USE_GPU', 'auto'),
+            # Model selection - cash uses pose, violence/fire use nano
+            'cash_pose_model': settings.DETECTION_CONFIG.get('CASH_POSE_MODEL', 'yolov8s-pose.pt'),
+            'violence_pose_model': settings.DETECTION_CONFIG.get('VIOLENCE_POSE_MODEL', 'yolov8n-pose.pt'),
+            'fire_yolo_model': settings.DETECTION_CONFIG.get('FIRE_YOLO_MODEL', 'yolov8n.pt'),
             'fire_model': settings.DETECTION_CONFIG.get('FIRE_MODEL', 'fire_smoke_yolov8.pt'),
             # Detection settings
             'cashier_zone': [zone['x'], zone['y'], zone['width'], zone['height']],
@@ -2702,6 +2743,18 @@ class BackgroundCameraWorker:
             last_success_time = time.time()
             frame_count += 1
             self.frame_count = frame_count
+            
+            # Calculate FPS
+            if self.fps_start_time is None:
+                self.fps_start_time = time.time()
+                self.fps_counter = 0
+            else:
+                self.fps_counter += 1
+                elapsed = time.time() - self.fps_start_time
+                if elapsed >= 1.0:  # Update FPS every second
+                    self.current_fps = self.fps_counter / elapsed
+                    self.fps_counter = 0
+                    self.fps_start_time = time.time()
             
             # Update current frame for live viewing (minimal lock time)
             with self.frame_lock:
@@ -3268,6 +3321,13 @@ def api_test_process(request):
         models_dir = settings.BASE_DIR / 'models'
         config = {
             'models_dir': str(models_dir),
+            # GPU/CPU setting from environment
+            'use_gpu': settings.DETECTION_CONFIG.get('USE_GPU', 'auto'),
+            # Model selection - cash uses pose, violence/fire use nano
+            'cash_pose_model': settings.DETECTION_CONFIG.get('CASH_POSE_MODEL', 'yolov8s-pose.pt'),
+            'violence_pose_model': settings.DETECTION_CONFIG.get('VIOLENCE_POSE_MODEL', 'yolov8n-pose.pt'),
+            'fire_yolo_model': settings.DETECTION_CONFIG.get('FIRE_YOLO_MODEL', 'yolov8n.pt'),
+            'fire_model': settings.DETECTION_CONFIG.get('FIRE_MODEL', 'fire_smoke_yolov8.pt'),
             **params
         }
         detector = UnifiedDetector(config)

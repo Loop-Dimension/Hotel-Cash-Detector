@@ -32,9 +32,13 @@ class UnifiedDetector:
         # Get models directory
         models_dir = self.config.get('models_dir', 'models')
         
-        # Get model names from config (default to yolov8s for better accuracy)
-        pose_model = self.config.get('pose_model', 'yolov8s-pose.pt')
-        yolo_model = self.config.get('yolo_model', 'yolov8s.pt')
+        # Get model names from config - each detector uses optimized model
+        # Cash: pose model for accurate hand tracking
+        cash_pose_model = self.config.get('cash_pose_model', self.config.get('pose_model', 'yolov8s-pose.pt'))
+        # Violence: nano pose for full scan (faster)
+        violence_pose_model = self.config.get('violence_pose_model', 'yolov8n-pose.pt')
+        # Fire: nano YOLO for full scan (faster) + custom fire model
+        fire_yolo_model = self.config.get('fire_yolo_model', 'yolov8n.pt')
         fire_model = self.config.get('fire_model', 'fire_smoke_yolov8.pt')
         
         # Cashier zone settings
@@ -44,11 +48,15 @@ class UnifiedDetector:
         # Show pose overlay with hand positions and distances (disabled by default, shown in debug mode)
         self.show_pose_overlay = self.config.get('show_pose_overlay', False)
         
-        # Initialize individual detectors with model names
+        # GPU/CPU setting - passed to all sub-detectors
+        use_gpu = self.config.get('use_gpu', 'auto')
+        
+        # Initialize individual detectors with model names and GPU setting
         self.cash_detector = CashTransactionDetector({
             'models_dir': models_dir,
-            'pose_model': pose_model,
-            'yolo_model': yolo_model,
+            'pose_model': cash_pose_model,  # Use full pose model for accurate hand tracking
+            'yolo_model': cash_pose_model,  # Fallback to pose model
+            'use_gpu': use_gpu,
             'cashier_zone': self.config.get('cashier_zone', [100, 100, 400, 300]),
             'hand_touch_distance': self.config.get('hand_touch_distance', 100),
             'pose_confidence': self.config.get('pose_confidence', 0.5),
@@ -59,7 +67,8 @@ class UnifiedDetector:
         
         self.violence_detector = ViolenceDetector({
             'models_dir': models_dir,
-            'pose_model': pose_model,
+            'pose_model': violence_pose_model,  # Use nano pose for full scan (faster)
+            'use_gpu': use_gpu,
             'violence_confidence': self.config.get('violence_confidence', 0.6),
             'min_violence_frames': self.config.get('min_violence_frames', 5),
             'motion_threshold': self.config.get('motion_threshold', 50)
@@ -68,6 +77,7 @@ class UnifiedDetector:
         self.fire_detector = FireDetector({
             'models_dir': models_dir,
             'fire_model': fire_model,
+            'use_gpu': use_gpu,
             'fire_confidence': self.config.get('fire_confidence', 0.7),
             'min_fire_frames': self.config.get('min_fire_frames', 10),
             'min_fire_area': self.config.get('min_fire_area', 2000)

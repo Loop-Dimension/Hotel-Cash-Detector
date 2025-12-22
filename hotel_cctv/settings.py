@@ -150,10 +150,25 @@ DETECTION_CONFIG = {
     'OUTPUT_DIR': BASE_DIR / os.getenv('OUTPUT_DIR', 'output'),
     'UPLOAD_DIR': BASE_DIR / os.getenv('UPLOAD_DIR', 'uploads'),
     
+    # GPU/CPU Configuration
+    # Options: 'True', 'False', 'auto'
+    # - True: Force GPU usage (requires CUDA)
+    # - False: Force CPU usage (slower but works everywhere)
+    # - auto: Automatically detect GPU availability (default)
+    'USE_GPU': os.getenv('USE_GPU', 'auto'),
+    
     # Model filenames (relative to MODELS_DIR)
-    'YOLO_MODEL': os.getenv('YOLO_MODEL', 'yolov8s.pt'),
-    'POSE_MODEL': os.getenv('POSE_MODEL', 'yolov8s-pose.pt'),
+    # Cash Detection - Use pose model for accurate hand tracking
+    'CASH_POSE_MODEL': os.getenv('CASH_POSE_MODEL', 'yolov8s-pose.pt'),
+    # Violence Detection - Use nano pose for full scan (faster)
+    'VIOLENCE_POSE_MODEL': os.getenv('VIOLENCE_POSE_MODEL', 'yolov8n-pose.pt'),
+    # Fire Detection - Use nano YOLO for full scan (faster)
+    'FIRE_YOLO_MODEL': os.getenv('FIRE_YOLO_MODEL', 'yolov8n.pt'),
     'FIRE_MODEL': os.getenv('FIRE_MODEL', 'fire_smoke_yolov8.pt'),
+    
+    # Legacy model names (for backward compatibility)
+    'YOLO_MODEL': os.getenv('YOLO_MODEL', 'yolov8n.pt'),
+    'POSE_MODEL': os.getenv('POSE_MODEL', 'yolov8s-pose.pt'),
     
     # Default detection thresholds (can be overridden per camera)
     'CONFIDENCE_THRESHOLD': float(os.getenv('CASH_DETECTION_CONFIDENCE', '0.5')),

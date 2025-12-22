@@ -9,11 +9,13 @@ psycopg2-binary
 opencv-python
 opencv-contrib-python
 ultralytics
-# NOTE: For GPU support, install PyTorch with CUDA separately:
-# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-# The lines below are for CPU fallback only
+
+# PyTorch - CPU and GPU Support
+# For GPU: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# For CPU: The default torch installation below works on CPU
 torch
 torchvision
+torchaudio
 numpy
 Pillow
 

@@ -84,6 +84,7 @@ class CashTransactionDetector(BaseDetector):
         try:
             from ultralytics import YOLO
             from pathlib import Path
+            from . import get_device
             
             # Get model paths from config or use defaults
             models_dir = Path(self.config.get('models_dir', 'models'))
@@ -92,11 +93,13 @@ class CashTransactionDetector(BaseDetector):
             pose_model_name = self.config.get('pose_model', 'yolov8s-pose.pt')
             yolo_model_name = self.config.get('yolo_model', 'yolov8s.pt')
             
-            # Check GPU availability
-            import torch
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            print(f"🎮 Using device: {device}")
-            if torch.cuda.is_available():
+            # Get device based on USE_GPU setting
+            use_gpu_setting = self.config.get('use_gpu', 'auto')
+            device = get_device(use_gpu_setting)
+            
+            print(f"🎮 Cash Detector using device: {device.upper()}")
+            if device == 'cuda':
+                import torch
                 print(f"   GPU: {torch.cuda.get_device_name(0)}")
             
             # Load pose model for hand detection
