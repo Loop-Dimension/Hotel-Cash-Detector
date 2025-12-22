@@ -1,7 +1,8 @@
-# AWS Deployment Guide - g4dn.xlarge
+# AWS Deployment Guide - CPU Instance
 
-**Instance:** g4dn.xlarge (4 vCPU, 16GB RAM, NVIDIA T4 GPU)  
+**Instance:** t3.xlarge or t3.2xlarge (4-8 vCPU, 16-32GB RAM, CPU-only)  
 **Domain:** cctv.hio.ai.kr  
+**Deployment Path:** /var/www/Hotel-Cash-Detector  
 **SSL:** Let's Encrypt (Free)
 
 ---
@@ -34,7 +35,11 @@ ffmpeg -version
 ## Step 2: Clone Repository
 
 ```bash
-cd ~
+# Create /var/www directory if it doesn't exist
+sudo mkdir -p /var/www
+sudo chown -R ubuntu:ubuntu /var/www
+
+cd /var/www
 git clone https://github.com/Loop-Dimension/Hotel-Cash-Detector.git
 cd Hotel-Cash-Detector
 ```
@@ -53,29 +58,30 @@ source venv/bin/activate
 ```bash
 pip install --upgrade pip
 
-# Install PyTorch with CUDA support FIRST (for GPU acceleration)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# Install PyTorch CPU version (no CUDA)
+pip install torch torchvision torchaudio
 
 # Install remaining dependencies
 pip install -r requirements.txt
 
-# Verify GPU is available
-python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')"
+# Verify CPU mode
+python -c "import torch; print('CUDA Available:', torch.cuda.is_available()); print('Using:', 'CPU' if not torch.cuda.is_available() else 'GPU')"
 ```
 
 **Expected output:**
 ```
-CUDA: True
-GPU: Tesla T4
+CUDA Available: False
+Using: CPU
 ```
 
 ### 3.3 Download YOLO Models
 ```bash
 # Models will auto-download on first run, or manually download:
-cd models
-wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt
+cd /var/www/Hotel-Cash-Detector/models
+wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt
+wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n-pose.pt
 wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s-pose.pt
-cd ..
+cd /var/www/Hotel-Cash-Detector
 ```
 
 ---
@@ -95,6 +101,9 @@ ALLOWED_HOSTS=cctv.hio.ai.kr,your-ec2-ip,localhost
 
 # Database (SQLite for now)
 DATABASE_URL=sqlite:///db.sqlite3
+
+# GPU/CPU Settings
+USE_GPU=False
 
 # Detection settings
 CASH_DETECTION_CONFIDENCE=0.5
@@ -152,7 +161,7 @@ curl http://localhost:8000
 
 ### 5.1 Create Gunicorn Configuration
 ```bash
-nano ~/Hotel-Cash-Detector/gunicorn_config.py
+nano /var/www/Hotel-Cash-Detector/gunicorn_config.py
 ```
 
 ```python
@@ -200,12 +209,12 @@ After=network.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/home/ubuntu/Hotel-Cash-Detector
-Environment="PATH=/home/ubuntu/Hotel-Cash-Detector/venv/bin"
-EnvironmentFile=/home/ubuntu/Hotel-Cash-Detector/.env
+WorkingDirectory=/var/www/Hotel-Cash-Detector
+Environment="PATH=/var/www/Hotel-Cash-Detector/venv/bin"
+EnvironmentFile=/var/www/Hotel-Cash-Detector/.env
 
-ExecStart=/home/ubuntu/Hotel-Cash-Detector/venv/bin/gunicorn \
-    --config /home/ubuntu/Hotel-Cash-Detector/gunicorn_config.py \
+ExecStart=/var/www/Hotel-Cash-Detector/venv/bin/gunicorn \
+    --config /var/www/Hotel-Cash-Detector/gunicorn_config.py \
     hotel_cctv.wsgi:application
 
 ExecReload=/bin/kill -s HUP $MAINPID
@@ -222,10 +231,26 @@ WantedBy=multi-user.target
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable hotel-cctv
+
+# IMPORTANT: Before starting, verify these prerequisites
+# 1. Virtual environment is activated and dependencies installed
+# 2. Database migrations completed: python manage.py migrate
+# 3. Static files collected: python manage.py collectstatic --noinput
+# 4. .env file exists with required settings
+
 sudo systemctl start hotel-cctv
 
 # Check status
 sudo systemctl status hotel-cctv
+
+# If service fails to start, check logs:
+sudo journalctl -xeu hotel-cctv.service
+
+# Common fixes:
+# - Ensure virtual environment Python path is correct
+# - Check .env file exists and has proper format
+# - Verify database file permissions
+# - Make sure all migrations are applied
 
 # View logs
 sudo journalctl -u hotel-cctv -f
@@ -278,11 +303,11 @@ server {
     }
 
     location /static/ {
-        alias /home/ubuntu/Hotel-Cash-Detector/staticfiles/;
+        alias /var/www/Hotel-Cash-Detector/staticfiles/;
     }
 
     location /media/ {
-        alias /home/ubuntu/Hotel-Cash-Detector/media/;
+        alias /var/www/Hotel-Cash-Detector/media/;
     }
 }
 ```
@@ -392,27 +417,23 @@ sudo systemctl enable certbot.timer
 ## Step 9: Setup File Permissions
 
 ```bash
-# CRITICAL: Allow www-data to traverse /home/ubuntu directory
-# Without this, Nginx will get 403 errors on static files
-chmod 755 /home/ubuntu
-
 # Ensure proper ownership
-sudo chown -R ubuntu:www-data ~/Hotel-Cash-Detector/staticfiles
-sudo chown -R ubuntu:www-data ~/Hotel-Cash-Detector/static
-sudo chown -R ubuntu:www-data ~/Hotel-Cash-Detector/media
+sudo chown -R ubuntu:www-data /var/www/Hotel-Cash-Detector/staticfiles
+sudo chown -R ubuntu:www-data /var/www/Hotel-Cash-Detector/static
+sudo chown -R ubuntu:www-data /var/www/Hotel-Cash-Detector/media
 
 # Set proper permissions
-sudo chmod -R 755 ~/Hotel-Cash-Detector/staticfiles
-sudo chmod -R 755 ~/Hotel-Cash-Detector/static
-sudo chmod -R 755 ~/Hotel-Cash-Detector/media
+sudo chmod -R 755 /var/www/Hotel-Cash-Detector/staticfiles
+sudo chmod -R 755 /var/www/Hotel-Cash-Detector/static
+sudo chmod -R 755 /var/www/Hotel-Cash-Detector/media
 
 # Create media subdirectories if they don't exist
-mkdir -p ~/Hotel-Cash-Detector/media/{clips,thumbnails,json}
-sudo chown -R ubuntu:www-data ~/Hotel-Cash-Detector/media
-sudo chmod -R 755 ~/Hotel-Cash-Detector/media
+mkdir -p /var/www/Hotel-Cash-Detector/media/{clips,thumbnails,json}
+sudo chown -R ubuntu:www-data /var/www/Hotel-Cash-Detector/media
+sudo chmod -R 755 /var/www/Hotel-Cash-Detector/media
 
 # Database permissions
-chmod 664 ~/Hotel-Cash-Detector/db.sqlite3
+chmod 664 /var/www/Hotel-Cash-Detector/db.sqlite3
 ```
 
 ---
@@ -460,7 +481,7 @@ sudo tail -f /var/log/nginx/error.log
 
 ### 11.1 Update Application
 ```bash
-cd ~/Hotel-Cash-Detector
+cd /var/www/Hotel-Cash-Detector
 git pull origin main
 source venv/bin/activate
 pip install -r requirements.txt
@@ -497,13 +518,17 @@ sudo systemctl restart nginx
 sudo systemctl restart hotel-cctv nginx
 ```
 
-### 11.4 Monitor GPU Usage
+### 11.4 Monitor CPU & Memory Usage
 ```bash
-# Install nvidia-smi (if not already installed)
-nvidia-smi
+# Check CPU and memory usage
+top
 
-# Watch GPU usage in real-time
-watch -n 1 nvidia-smi
+# Or use htop (install if needed: sudo apt install htop)
+htop
+
+# Check system resources
+free -h
+mpstat 1
 ```
 
 ### 11.5 Monitor Disk Space
@@ -512,12 +537,12 @@ watch -n 1 nvidia-smi
 df -h
 
 # Check media folder size
-du -sh ~/Hotel-Cash-Detector/media/
+du -sh /var/www/Hotel-Cash-Detector/media/
 
 # Clean old clips (older than 30 days)
-find ~/Hotel-Cash-Detector/media/clips/ -mtime +30 -delete
-find ~/Hotel-Cash-Detector/media/thumbnails/ -mtime +30 -delete
-find ~/Hotel-Cash-Detector/media/json/ -mtime +30 -delete
+find /var/www/Hotel-Cash-Detector/media/clips/ -mtime +30 -delete
+find /var/www/Hotel-Cash-Detector/media/thumbnails/ -mtime +30 -delete
+find /var/www/Hotel-Cash-Detector/media/json/ -mtime +30 -delete
 ```
 
 ### 11.6 Setup Automatic Cleanup (Cron)
@@ -526,9 +551,9 @@ find ~/Hotel-Cash-Detector/media/json/ -mtime +30 -delete
 crontab -e
 
 # Add this line to clean files older than 30 days (runs daily at 2 AM)
-0 2 * * * find /home/ubuntu/Hotel-Cash-Detector/media/clips/ -mtime +30 -delete
-0 2 * * * find /home/ubuntu/Hotel-Cash-Detector/media/thumbnails/ -mtime +30 -delete
-0 2 * * * find /home/ubuntu/Hotel-Cash-Detector/media/json/ -mtime +30 -delete
+0 2 * * * find /var/www/Hotel-Cash-Detector/media/clips/ -mtime +30 -delete
+0 2 * * * find /var/www/Hotel-Cash-Detector/media/thumbnails/ -mtime +30 -delete
+0 2 * * * find /var/www/Hotel-Cash-Detector/media/json/ -mtime +30 -delete
 ```
 
 ---
@@ -546,9 +571,9 @@ nano ~/backup.sh
 
 ```bash
 #!/bin/bash
-BACKUP_DIR="/home/ubuntu/backups"
+BACKUP_DIR="/var/www/backups"
 DATE=$(date +%Y%m%d_%H%M%S)
-DB_PATH="/home/ubuntu/Hotel-Cash-Detector/db.sqlite3"
+DB_PATH="/var/www/Hotel-Cash-Detector/db.sqlite3"
 
 # Backup database
 cp $DB_PATH $BACKUP_DIR/db_backup_$DATE.sqlite3
@@ -577,13 +602,50 @@ sudo apt install -y awscli
 aws configure
 
 # Backup to S3 (add to backup.sh)
-aws s3 sync ~/Hotel-Cash-Detector/media/ s3://your-bucket/media-backup/
-aws s3 cp ~/Hotel-Cash-Detector/db.sqlite3 s3://your-bucket/db-backup/db_$(date +%Y%m%d).sqlite3
+aws s3 sync /var/www/Hotel-Cash-Detector/media/ s3://your-bucket/media-backup/
+aws s3 cp /var/www/Hotel-Cash-Detector/db.sqlite3 s3://your-bucket/db-backup/db_$(date +%Y%m%d).sqlite3
 ```
 
 ---
 
 ## Troubleshooting
+
+### Issue: Service fails to start with "unavailable resources" error
+```bash
+# Check detailed error logs
+sudo journalctl -xeu hotel-cctv.service
+
+# Common causes and fixes:
+
+# 1. Virtual environment not found or incorrect path
+ls -la /var/www/Hotel-Cash-Detector/venv/bin/python
+# If missing, recreate venv:
+cd /var/www/Hotel-Cash-Detector
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# 2. Missing .env file
+ls -la /var/www/Hotel-Cash-Detector/.env
+# If missing, create it (see Step 4.1)
+
+# 3. Database not initialized
+cd /var/www/Hotel-Cash-Detector
+source venv/bin/activate
+python manage.py migrate
+
+# 4. Missing static files
+python manage.py collectstatic --noinput
+
+# 5. Permission issues
+sudo chown -R ubuntu:ubuntu /var/www/Hotel-Cash-Detector
+chmod 664 /var/www/Hotel-Cash-Detector/db.sqlite3
+
+# After fixing, restart service
+sudo systemctl daemon-reload
+sudo systemctl restart hotel-cctv
+sudo systemctl status hotel-cctv
+```
 
 ### Issue: Gunicorn won't start
 ```bash
@@ -591,7 +653,7 @@ aws s3 cp ~/Hotel-Cash-Detector/db.sqlite3 s3://your-bucket/db-backup/db_$(date 
 sudo journalctl -u hotel-cctv -n 50
 
 # Test manually
-cd ~/Hotel-Cash-Detector
+cd /var/www/Hotel-Cash-Detector
 source venv/bin/activate
 gunicorn hotel_cctv.wsgi:application --bind 127.0.0.1:8000
 ```
@@ -605,7 +667,7 @@ sudo systemctl status hotel-cctv
 sudo tail -f /var/log/nginx/error.log
 
 # Check permissions
-ls -la ~/Hotel-Cash-Detector/
+ls -la /var/www/Hotel-Cash-Detector/
 ```
 
 ### Issue: SSL certificate fails
@@ -626,9 +688,8 @@ sudo cat /var/log/letsencrypt/letsencrypt.log
 sudo tail -f /var/log/nginx/error.log
 
 # If you see "Permission denied" errors, fix permissions:
-chmod 755 /home/ubuntu
-sudo chown -R ubuntu:www-data ~/Hotel-Cash-Detector/staticfiles
-sudo chmod -R 755 ~/Hotel-Cash-Detector/staticfiles
+sudo chown -R ubuntu:www-data /var/www/Hotel-Cash-Detector/staticfiles
+sudo chmod -R 755 /var/www/Hotel-Cash-Detector/staticfiles
 sudo systemctl restart nginx
 
 # Test static file access
@@ -660,20 +721,21 @@ sudo systemctl restart hotel-cctv
 
 ## Performance Optimization
 
-### Enable GPU Acceleration
+### CPU Optimization Tips
 ```bash
-# Verify CUDA is available
-python3 -c "import torch; print(torch.cuda.is_available())"
+# For CPU-only instances, increase worker count
+# Edit .env and set:
+USE_GPU=False
 
-# Check GPU
-nvidia-smi
+# Monitor CPU usage
+htop
 ```
 
 ### Optimize Worker Count
 ```bash
 # Edit gunicorn config based on camera count
-# Rule: 1 worker per 2-3 cameras
-sudo nano ~/Hotel-Cash-Detector/gunicorn_config.py
+# Rule: 1 worker per 2-3 cameras (CPU uses more workers)
+sudo nano /var/www/Hotel-Cash-Detector/gunicorn_config.py
 
 # workers = number_of_cameras / 2 (minimum 2, maximum 8)
 ```
@@ -705,10 +767,10 @@ sudo journalctl -u hotel-cctv -f
 sudo tail -f /var/log/nginx/error.log
 
 # Update application
-cd ~/Hotel-Cash-Detector && git pull && sudo systemctl restart hotel-cctv
+cd /var/www/Hotel-Cash-Detector && git pull && sudo systemctl restart hotel-cctv
 
-# Check GPU
-nvidia-smi
+# Check system resources
+htop
 
 # Check disk space
 df -h
@@ -726,7 +788,9 @@ curl -I https://cctv.hio.ai.kr
 
 ---
 
-**Deployment Date:** December 11, 2025  
-**Instance Type:** AWS g4dn.xlarge  
+**Deployment Date:** December 22, 2025  
+**Instance Type:** AWS t3.xlarge/t3.2xlarge (CPU)  
+**Deployment Path:** /var/www/Hotel-Cash-Detector  
 **Domain:** cctv.hio.ai.kr  
-**SSL Provider:** Let's Encrypt
+**SSL Provider:** Let's Encrypt  
+**GPU:** Disabled (CPU-only)
