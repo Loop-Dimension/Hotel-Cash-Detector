@@ -168,8 +168,13 @@ nano /var/www/Hotel-Cash-Detector/gunicorn_config.py
 import multiprocessing
 
 bind = "127.0.0.1:8000"
-workers = 4
-worker_class = "sync"
+
+# IMPORTANT: Use 1 worker + multiple threads for CPU instances
+# - workers = 1: Prevents multiprocessing conflicts with background detection
+# - threads = 4-8: Uses all CPU cores for web requests
+workers = 1
+threads = 4
+worker_class = "gthread"
 worker_connections = 1000
 timeout = 120
 keepalive = 5
@@ -717,6 +722,31 @@ ps aux --sort=-%mem | head -n 10
 sudo systemctl restart hotel-cctv
 ```
 
+### Issue: Background Detection Service status not refreshing or shows errors
+```bash
+# This happens when multiple gunicorn workers conflict with multiprocessing
+# Solution: Use 1 worker in gunicorn config
+
+# Edit gunicorn config
+sudo nano /var/www/Hotel-Cash-Detector/gunicorn_config.py
+
+# Change this line:
+# workers = 4  # WRONG for background detection
+# To:
+# workers = 1  # CORRECT for background detection
+
+# Restart service
+sudo systemctl restart hotel-cctv
+
+# Verify single worker is running
+ps aux | grep gunicorn
+# You should see only 1 gunicorn worker process (plus 1 master)
+
+# Stop all background workers and restart
+# In Django admin: Background Detection Service → Stop All
+# Then start cameras individually
+```
+
 ---
 
 ## Performance Optimization
@@ -733,11 +763,14 @@ htop
 
 ### Optimize Worker Count
 ```bash
-# Edit gunicorn config based on camera count
-# Rule: 1 worker per 2-3 cameras (CPU uses more workers)
+# IMPORTANT: For background detection, ALWAYS use 1 worker
+# Multiple workers cause multiprocessing conflicts
+
 sudo nano /var/www/Hotel-Cash-Detector/gunicorn_config.py
 
-# workers = number_of_cameras / 2 (minimum 2, maximum 8)
+# Set workers = 1 (this is correct for CPU instances with background detection)
+# The app uses internal multiprocessing for camera workers
+# Each camera runs in its own process, so gunicorn workers must be 1
 ```
 
 ---
