@@ -27,6 +27,14 @@ except ImportError as e:
     DETECTOR_AVAILABLE = False
     print(f"Warning: Detectors not available - {e}")
 
+# Import Gemini validator
+try:
+    from detectors.gemini_validator import GeminiValidator
+    GEMINI_AVAILABLE = True
+except ImportError as e:
+    GEMINI_AVAILABLE = False
+    print(f"Warning: Gemini validator not available - {e}")
+
 # Global manager for all workers (create once, reuse)
 _manager = None
 
@@ -359,17 +367,38 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
                         if last_time and (now - last_time).total_seconds() < event_cooldown:
                             continue
                         
-                        # Save event with clip
+                        # Gemini AI Validation - verify detection before saving
+                        gemini_validated = True
+                        gemini_confidence = 1.0
+                        gemini_reason = "Validation skipped"
+                        
+                        if GEMINI_AVAILABLE and settings.DETECTION_CONFIG.get('GEMINI_VALIDATION_ENABLED', True):
+                            try:
+                                gemini_api_key = getattr(settings, 'GEMINI_API_KEY', '')
+                                if gemini_api_key:
+                                    validator = GeminiValidator(api_key=gemini_api_key)
+                                    gemini_validated, gemini_confidence, gemini_reason = validator.validate_event(frame, event_type)
+                                    print(f"[Worker-{camera_id}] Gemini validation: {event_type} = {gemini_validated} ({gemini_reason})")
+                                    
+                                    if not gemini_validated:
+                                        print(f"[Worker-{camera_id}] Event rejected by Gemini: {event_type} - {gemini_reason}")
+                                        continue  # Skip saving this event
+                            except Exception as e:
+                                print(f"[Worker-{camera_id}] Gemini validation error: {e}")
+                                # On error, allow the event (don't block on validation errors)
+                        
+                        # Save event with clip (only if Gemini validated)
                         clip_path, thumb_path = _save_clip(
                             frame_buffer[-150:] if len(frame_buffer) >= 150 else frame_buffer,
                             camera, event_type
                         )
                         
                         if clip_path:
-                            _save_event(camera, event_type, confidence, frame_count, bbox, clip_path, thumb_path)
+                            _save_event(camera, event_type, confidence, frame_count, bbox, clip_path, thumb_path, 
+                                       gemini_validated=gemini_validated, gemini_confidence=gemini_confidence, gemini_reason=gemini_reason)
                             shared_state['events_detected'] = shared_state.get('events_detected', 0) + 1
                             last_event_time[event_type] = now
-                            print(f"[Worker-{camera_id}] Event saved: {event_type}")
+                            print(f"[Worker-{camera_id}] Event saved: {event_type} (Gemini: {gemini_reason})")
                         
             except Exception as e:
                 error_msg = f"Detection error: {str(e)}"
@@ -467,9 +496,43 @@ def _save_clip(frames, camera, event_type):
     return f'/media/clips/{final_filename}', f'/media/thumbnails/{thumb_filename}'
 
 
-def _save_event(camera, event_type, confidence, frame_number, bbox, clip_path, thumbnail_path):
-    """Save event to database"""
+def _save_event(camera, event_type, confidence, frame_number, bbox, clip_path, thumbnail_path,
+                gemini_validated=True, gemini_confidence=1.0, gemini_reason=""):
+    """Save event to database with Gemini validation metadata"""
     try:
+        import json
+        from datetime import datetime
+        
+        # Save JSON metadata file
+        json_dir = Path(settings.MEDIA_ROOT) / 'json'
+        json_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now()
+        json_filename = f"{event_type}_{camera.camera_id}_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
+        json_path = json_dir / json_filename
+        
+        metadata = {
+            'timestamp': timestamp.isoformat(),
+            'event_type': event_type,
+            'camera_id': camera.camera_id,
+            'camera_name': camera.name,
+            'confidence': round(confidence, 3),
+            'frame_number': frame_number,
+            'bbox': list(bbox) if bbox else None,
+            'clip_path': clip_path,
+            'thumbnail_path': thumbnail_path,
+            'gemini_validation': {
+                'validated': gemini_validated,
+                'confidence': round(gemini_confidence, 3),
+                'reason': gemini_reason
+            }
+        }
+        
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+        
+        json_relative_path = f"json/{json_filename}"
+        
         Event.objects.create(
             branch=camera.branch,
             camera=camera,
@@ -482,6 +545,8 @@ def _save_event(camera, event_type, confidence, frame_number, bbox, clip_path, t
             bbox_y2=bbox[3] if bbox else 0,
             clip_path=clip_path,
             thumbnail_path=thumbnail_path,
+            metadata=json_relative_path,
         )
+        print(f"[DB] Event saved with Gemini validation: {event_type} - {gemini_reason}")
     except Exception as e:
         print(f"[DB] Error saving event: {e}")

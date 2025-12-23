@@ -33,6 +33,14 @@ except ImportError as e:
     DETECTOR_AVAILABLE = False
     print(f"Warning: Detectors not available - {e}")
 
+# Try to import Gemini validator
+try:
+    from detectors.gemini_validator import GeminiValidator
+    GEMINI_AVAILABLE = True
+except ImportError as e:
+    GEMINI_AVAILABLE = False
+    print(f"Warning: Gemini validator not available - {e}")
+
 import threading
 import time
 
@@ -2872,6 +2880,26 @@ class BackgroundCameraWorker:
                         # Still in cooldown, skip this detection (will merge with existing clip)
                         continue
                     
+                    # Gemini AI Validation - verify detection before saving
+                    gemini_validated = True
+                    gemini_confidence = 1.0
+                    gemini_reason = "Validation skipped"
+                    
+                    if GEMINI_AVAILABLE and settings.DETECTION_CONFIG.get('GEMINI_VALIDATION_ENABLED', True):
+                        try:
+                            gemini_api_key = getattr(settings, 'GEMINI_API_KEY', '')
+                            if gemini_api_key:
+                                validator = GeminiValidator(api_key=gemini_api_key)
+                                gemini_validated, gemini_confidence, gemini_reason = validator.validate_event(frame, event_type)
+                                print(f"[Detection] Gemini validation: {event_type} = {gemini_validated} ({gemini_reason})")
+                                
+                                if not gemini_validated:
+                                    print(f"[Detection] Event rejected by Gemini: {event_type} - {gemini_reason}")
+                                    continue  # Skip saving this event
+                        except Exception as e:
+                            print(f"[Detection] Gemini validation error: {e}")
+                            # On error, allow the event (don't block on validation errors)
+                    
                     # Get full detection metadata for JSON output
                     det_metadata = det.get('metadata', {})
                     
@@ -2885,6 +2913,9 @@ class BackgroundCameraWorker:
                                 'trigger_time': now,
                                 'fps': fps,
                                 'distance': det_metadata.get('distance'),
+                                'gemini_validated': gemini_validated,
+                                'gemini_confidence': gemini_confidence,
+                                'gemini_reason': gemini_reason,
                                 'distance_threshold': det_metadata.get('distance_threshold'),
                                 'cashier': det_metadata.get('cashier'),
                                 'customer': det_metadata.get('customer'),
@@ -2993,6 +3024,13 @@ class BackgroundCameraWorker:
                     if pending.get('interaction_point'):
                         event_metadata['interaction_point'] = pending['interaction_point']
                     
+                    # Add Gemini validation metadata
+                    event_metadata['gemini_validation'] = {
+                        'validated': pending.get('gemini_validated', True),
+                        'confidence': pending.get('gemini_confidence', 1.0),
+                        'reason': pending.get('gemini_reason', 'No validation')
+                    }
+                    
                     # Save event to database with metadata
                     self.save_event(
                         camera,
@@ -3005,7 +3043,8 @@ class BackgroundCameraWorker:
                         metadata=event_metadata
                     )
                     self.events_detected += 1
-                    print(f"[ClipSaver] Saved clip: {clip_path}")
+                    gemini_msg = f" (Gemini: {pending.get('gemini_reason', 'N/A')})" if pending.get('gemini_validated') else ""
+                    print(f"[ClipSaver] Saved clip: {clip_path}{gemini_msg}")
                 else:
                     print(f"[ClipSaver] Clip save failed, not creating event")
                 

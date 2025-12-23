@@ -198,7 +198,16 @@ DETECTION_CONFIG = {
     
     # FFmpeg path
     'FFMPEG_PATH': os.getenv('FFMPEG_PATH', 'ffmpeg'),
+    
+    # Gemini AI Validation
+    # When enabled, detected events are validated by Gemini before storing
+    # This reduces false positives by using AI as a secondary validation layer
+    'GEMINI_VALIDATION_ENABLED': os.getenv('GEMINI_VALIDATION_ENABLED', 'True').lower() == 'true',
 }
+
+# Gemini API Key for event validation
+# Supports both spellings (GEMINI and GIMINI for compatibility)
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', os.getenv('GIMINI_API_KEY', ''))
 
 # Admin credentials from environment (for seed command)
 ADMIN_CREDENTIALS = {
