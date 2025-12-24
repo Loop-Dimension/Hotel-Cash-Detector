@@ -25,12 +25,15 @@ cd "$PROJECT_DIR"
 pwd
 echo ""
 
-echo -e "${YELLOW}2. Pulling latest code from Git...${NC}"
-git pull origin main
+echo -e "${YELLOW}2. Fetching latest code from Git (force update)...${NC}"
+# Discard all local changes to tracked files only
+# Media, static, .env, and other .gitignore files are preserved
+git fetch origin main
+git reset --hard origin/main
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✓ Git pull successful${NC}"
+    echo -e "${GREEN}✓ Git update successful (code files reset, media/static preserved)${NC}"
 else
-    echo -e "${RED}✗ Git pull failed${NC}"
+    echo -e "${RED}✗ Git update failed${NC}"
     exit 1
 fi
 echo ""
