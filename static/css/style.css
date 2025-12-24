@@ -1555,6 +1555,12 @@ h3 {
         gap: 12px;
     }
     
+    /* Video logs - single column on mobile */
+    .video-three-col {
+        grid-template-columns: 1fr !important;
+        gap: 12px;
+    }
+    
     .stat-card {
         padding: 16px;
     }

@@ -53,14 +53,14 @@
             <span class="text-right">{{ t.actions }}</span>
         </div>
         <div class="table-body" id="userTableBody">
-            {% for user in users %}
+            {% for account in accounts %}
             <div class="table-row">
-                <span>{{ user.username }}</span>
-                <span>{{ user.first_name }} {{ user.last_name }}</span>
-                <span>{{ user.role|default:'Staff' }}</span>
+                <span>{{ account.username }}</span>
+                <span>{{ account.first_name }} {{ account.last_name }}</span>
+                <span>{{ account.get_role_display }}</span>
                 <span class="text-right">
-                    <button class="btn btn-sm btn-ghost" onclick="editUser({{ user.id }})">{{ t.edit }}</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteUser({{ user.id }})">{{ t.delete }}</button>
+                    <button class="btn btn-sm btn-ghost" onclick="editUser({{ account.id }})">{{ t.edit }}</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteUser({{ account.id }})">{{ t.delete }}</button>
                 </span>
             </div>
             {% empty %}
@@ -175,9 +175,8 @@
                 </div>
                 <div class="form-group">
                     <label>{{ t.role }}</label>
-                    <select name="role">
-                        <option value="staff">Staff</option>
-                        <option value="manager">Manager</option>
+                    <select name="role" required>
+                        <option value="project_manager">Project Manager</option>
                         <option value="admin">Admin</option>
                     </select>
                 </div>
@@ -324,9 +323,15 @@
             
             if (response.ok) {
                 showToast('{{ t.success }}', 'success');
-                window.location.reload();
+                closeModal('addUserModal');
+                setTimeout(() => window.location.reload(), 500);
+            } else {
+                const errorData = await response.json();
+                console.error('User creation error:', errorData);
+                showToast(errorData.detail || '{{ t.error }}', 'error');
             }
         } catch (error) {
+            console.error('User creation exception:', error);
             showToast('{{ t.error }}', 'error');
         }
     }
@@ -427,7 +432,6 @@
         } catch (error) {
             showToast('{{ t.error }}', 'error');
         }
-    }
     }
     
     async function deleteCamera(cameraId) {
