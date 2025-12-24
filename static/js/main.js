@@ -38,6 +38,25 @@ document.addEventListener('DOMContentLoaded', function() {
     const sidebar = document.querySelector('.sidebar');
     const layout = document.querySelector('.layout');
     const collapseBtn = document.querySelector('.collapse-btn');
+    const mobileMenuBtn = document.querySelector('#mobileMenuBtn');
+    
+    // Mobile menu toggle
+    if (mobileMenuBtn) {
+        mobileMenuBtn.addEventListener('click', function() {
+            sidebar?.classList.toggle('mobile-open');
+            this.classList.toggle('active');
+        });
+        
+        // Close mobile menu when clicking outside
+        document.addEventListener('click', function(e) {
+            if (window.innerWidth <= 768) {
+                if (!sidebar?.contains(e.target) && !mobileMenuBtn.contains(e.target)) {
+                    sidebar?.classList.remove('mobile-open');
+                    mobileMenuBtn.classList.remove('active');
+                }
+            }
+        });
+    }
     
     // Load saved state from localStorage - default to COLLAPSED for compact view
     const savedState = localStorage.getItem('sidebarCollapsed');
