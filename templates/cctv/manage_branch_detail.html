@@ -10,10 +10,12 @@
         <h1>{{ branch.name }}</h1>
         <p class="branch-region">{{ branch.region.name }}</p>
     </div>
+    {% if user.is_admin %}
     <div class="page-actions">
         <button class="btn btn-secondary" onclick="openEditBranchModal()">{{ t.edit }}</button>
         <button class="btn btn-danger" onclick="deleteBranch()">{{ t.delete }}</button>
     </div>
+    {% endif %}
 </div>
 
 <!-- Branch Info -->

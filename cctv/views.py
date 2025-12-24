@@ -1,5 +1,23 @@
 """
 Views for Hotel CCTV Monitoring System
+
+PERMISSION MODEL:
+- ADMIN: Full access to all branches, regions, cameras, events, and users
+  * Can create/edit/delete branches and regions
+  * Can create admin and project_manager users
+  * Can see all data across the entire system
+  
+- PROJECT_MANAGER: Limited access to assigned branches only
+  * Can only see branches they are assigned to (branch.managers)
+  * Can create project_manager users for their branches (not admin users)
+  * Can manage cameras and view events for their branches only
+  * Cannot create/edit/delete branches or regions
+  
+Access Control Implementation:
+- get_user_branches(user): Returns all branches for admin, assigned branches for managers
+- Each view checks: user.is_admin() or branch in get_user_branches(user)
+- API endpoints enforce same permission model
+- Frontend navigation shows different menu items based on role
 """
 import json
 import cv2
@@ -308,14 +326,15 @@ def manage_branch_detail(request, branch_id):
     if not user.is_admin() and branch not in get_user_branches(user):
         return redirect('cctv:home')
     
-    accounts = branch.accounts.all()
+    # Get users (project managers) assigned to this branch
+    accounts = branch.managers.all()
     cameras = branch.cameras.all()
     regions = Region.objects.all()
     
     context = {
         'user': user,
         'branch': branch,
-        'accounts': accounts,
+        'accounts': accounts,  # These are User objects assigned as managers
         'cameras': cameras,
         'regions': regions,
         'active_page': 'manage-branch-detail',
@@ -1969,11 +1988,16 @@ def api_detection_debug_info(request, camera_id):
 def api_users(request):
     """API for users"""
     user = request.user
-    if not user.is_admin():
-        return JsonResponse({'error': 'Permission denied'}, status=403)
     
     if request.method == 'GET':
-        users = User.objects.all()
+        # Admins see all users, managers see users in their branches
+        if user.is_admin():
+            users = User.objects.all()
+        else:
+            # Get users assigned to manager's branches
+            user_branches = get_user_branches(user)
+            users = User.objects.filter(managed_branches__in=user_branches).distinct()
+        
         data = [{
             'id': u.id,
             'username': u.username,
@@ -1988,28 +2012,49 @@ def api_users(request):
     elif request.method == 'POST':
         data = json.loads(request.body)
         
-        # Create user
-        new_user = User.objects.create_user(
-            username=data.get('username'),
-            email=data.get('email', ''),
-            password=data.get('password', 'password123'),
-            first_name=data.get('first_name', ''),
-            last_name=data.get('last_name', ''),
-            role=data.get('role', 'staff'),
-        )
-        
-        # Add to branch if specified
+        # Check if user has permission to create users
         if 'branch_id' in data:
             branch = get_object_or_404(Branch, id=data['branch_id'])
-            branch.managers.add(new_user)
+            # Check if user has access to this branch
+            if not user.is_admin() and branch not in get_user_branches(user):
+                return JsonResponse({'error': 'Permission denied'}, status=403)
+        else:
+            # Only admins can create users without branch assignment
+            if not user.is_admin():
+                return JsonResponse({'error': 'Branch ID required', 'detail': 'Project managers must specify a branch'}, status=400)
         
-        return JsonResponse({
-            'success': True,
-            'user': {
-                'id': new_user.id,
-                'username': new_user.username,
-            }
-        })
+        # Validate role permissions
+        requested_role = data.get('role', 'project_manager')
+        if requested_role == 'admin' and not user.is_admin():
+            return JsonResponse({'error': 'Permission denied', 'detail': 'Only admins can create admin users'}, status=403)
+        
+        try:
+            # Create user
+            new_user = User.objects.create_user(
+                username=data.get('username'),
+                email=data.get('email', ''),
+                password=data.get('password', 'password123'),
+                first_name=data.get('first_name', ''),
+                last_name=data.get('last_name', ''),
+                role=requested_role,
+            )
+            
+            # Add to branch if specified
+            if 'branch_id' in data:
+                branch = get_object_or_404(Branch, id=data['branch_id'])
+                branch.managers.add(new_user)
+            
+            return JsonResponse({
+                'success': True,
+                'user': {
+                    'id': new_user.id,
+                    'username': new_user.username,
+                    'first_name': new_user.first_name,
+                    'role': new_user.get_role_display(),
+                }
+            })
+        except Exception as e:
+            return JsonResponse({'error': 'User creation failed', 'detail': str(e)}, status=400)
 
 
 @login_required
@@ -2017,10 +2062,15 @@ def api_users(request):
 def api_user_detail(request, user_id):
     """API for single user"""
     current_user = request.user
-    if not current_user.is_admin():
-        return JsonResponse({'error': 'Permission denied'}, status=403)
-    
     target_user = get_object_or_404(User, id=user_id)
+    
+    # Check permissions: admins can manage all, managers can manage users in their branches
+    if not current_user.is_admin():
+        user_branches = get_user_branches(current_user)
+        target_branches = target_user.managed_branches.all()
+        # Check if any of target user's branches overlap with current user's branches
+        if not any(branch in user_branches for branch in target_branches):
+            return JsonResponse({'error': 'Permission denied'}, status=403)
     
     if request.method == 'GET':
         return JsonResponse({
