@@ -57,15 +57,23 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         };
         
-        mobileMenuBtn.addEventListener('click', function(e) {
+        // Handle both click and touch events for mobile
+        const handleMenuToggle = function(e) {
+            e.preventDefault();
             e.stopPropagation();
             const isOpen = sidebar.classList.contains('mobile-open');
             toggleMobileMenu(!isOpen);
-        });
+        };
+        
+        mobileMenuBtn.addEventListener('click', handleMenuToggle);
+        mobileMenuBtn.addEventListener('touchend', handleMenuToggle, { passive: false });
         
         // Close when clicking backdrop
         if (mobileBackdrop) {
             mobileBackdrop.addEventListener('click', function() {
+                toggleMobileMenu(false);
+            });
+            mobileBackdrop.addEventListener('touchend', function() {
                 toggleMobileMenu(false);
             });
         }
@@ -91,6 +99,7 @@ document.addEventListener('DOMContentLoaded', function() {
             layout.classList.add('layout-collapsed');
             collapseBtn.textContent = '→';
         }
+    }
     
     if (collapseBtn) {
         collapseBtn.addEventListener('click', function() {

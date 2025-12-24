@@ -117,6 +117,8 @@ button {
     cursor: pointer;
     padding: 4px;
     z-index: 101;
+    position: relative;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .mobile-menu-btn span {
@@ -125,6 +127,7 @@ button {
     background: #ffffff;
     border-radius: 2px;
     transition: all 0.3s;
+    display: block;
 }
 
 .mobile-menu-btn.active span:nth-child(1) {
@@ -1417,6 +1420,7 @@ h3 {
 
     .mobile-menu-btn {
         display: flex !important;
+        touch-action: manipulation;
     }
     
     /* Mobile Menu Backdrop */

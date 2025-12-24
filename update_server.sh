@@ -87,15 +87,14 @@ else
     echo -e "${RED}✗ Failed to restart service${NC}"
     exit 1
 fi
-
 echo ""
-echo "change +x for update_server.sh"
-echo "chmod +x update_server.sh"
+
+echo -e "${YELLOW}9. Setting execute permissions on update script...${NC}"
 chmod +x update_server.sh
+echo -e "${GREEN}✓ Execute permissions set${NC}"
 echo ""
 
-
-echo -e "${YELLOW}8. Checking service status...${NC}"
+echo -e "${YELLOW}9. Checking service status...${NC}"
 sleep 3
 sudo systemctl status "$SERVICE_NAME" --no-pager
 echo ""
