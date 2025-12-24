@@ -87,7 +87,13 @@ else
     echo -e "${RED}✗ Failed to restart service${NC}"
     exit 1
 fi
+
 echo ""
+echo "change +x for update_server.sh"
+echo "chmod +x update_server.sh"
+chmod +x update_server.sh
+echo ""
+
 
 echo -e "${YELLOW}8. Checking service status...${NC}"
 sleep 3
