@@ -39,11 +39,13 @@ document.addEventListener('DOMContentLoaded', function() {
     const layout = document.querySelector('.layout');
     const collapseBtn = document.querySelector('.collapse-btn');
     
-    // Load saved state from localStorage
-    const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+    // Load saved state from localStorage - default to COLLAPSED for compact view
+    const savedState = localStorage.getItem('sidebarCollapsed');
+    const isCollapsed = savedState === null ? true : savedState === 'true';
     if (isCollapsed) {
         sidebar?.classList.add('collapsed');
         layout?.classList.add('layout-collapsed');
+        if (collapseBtn) collapseBtn.textContent = '→';
     }
     
     if (collapseBtn) {

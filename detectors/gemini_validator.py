@@ -10,12 +10,12 @@ Usage:
     is_valid, confidence, reason = validator.validate_event(frame, "cash")
 """
 
-import base64
 import cv2
 import json
 import os
 from typing import Tuple, Optional
-import requests
+from google import genai
+from google.genai import types
 
 
 class GeminiValidator:
@@ -25,10 +25,11 @@ class GeminiValidator:
     This acts as a filter layer - only events confirmed by Gemini are stored.
     """
     
-    # Gemini API endpoint - use gemini-2.0-flash-exp (free tier, vision support)
-    # https://ai.google.dev/api/generate-content
-    MODEL_NAME = "gemini-2.0-flash-exp"
-    API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+    # Gemini API - use gemini-2.5-flash-lite (cheapest, FREE standard tier)
+    # Best for: high volume, cost-efficient image validation
+    # Pricing: FREE (standard) | $0.10/1M input + $0.40/1M output (paid)
+    # https://ai.google.dev/gemini-api/docs/pricing
+    MODEL_NAME = "gemini-2.5-flash-lite"
     
     # Validation prompts for each event type
     PROMPTS = {
@@ -119,66 +120,64 @@ Respond in JSON format ONLY:
         """
         self.api_key = api_key or os.environ.get('GEMINI_API_KEY', '')
         self.enabled = enabled and bool(self.api_key)
+        self.client = None
+        
+        if self.enabled:
+            try:
+                self.client = genai.Client(api_key=self.api_key)
+                print(f"[GeminiValidator] Initialized with model: {self.MODEL_NAME}")
+            except Exception as e:
+                print(f"[GeminiValidator] Failed to initialize: {e}")
+                self.enabled = False
         
         if not self.api_key and enabled:
             print("[GeminiValidator] Warning: No API key provided, validation disabled")
     
-    def _encode_image(self, frame) -> str:
-        """Convert OpenCV frame to base64 string."""
+    def _encode_image(self, frame):
+        """Convert OpenCV frame to bytes for Gemini API."""
         # Encode frame as JPEG
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        # Convert to base64
-        return base64.b64encode(buffer).decode('utf-8')
+        return buffer.tobytes()
     
-    def _call_gemini_api(self, image_base64: str, prompt: str) -> dict:
+    def _call_gemini_api(self, image_bytes: bytes, prompt: str) -> dict:
         """
-        Call Gemini API with image and prompt.
+        Call Gemini API with image and prompt using official SDK.
         
         Returns:
             dict: Parsed JSON response or error dict
         """
-        headers = {
-            'Content-Type': 'application/json',
-        }
-        
-        payload = {
-            "contents": [{
-                "parts": [
-                    {
-                        "text": prompt
-                    },
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": image_base64
-                        }
-                    }
-                ]
-            }],
-            "generationConfig": {
-                "temperature": 0.1,
-                "topK": 1,
-                "topP": 1,
-                "maxOutputTokens": 500,
-            }
-        }
+        if not self.client:
+            return {"error": "Client not initialized"}
         
         try:
-            url = f"{self.API_BASE_URL}/models/{self.MODEL_NAME}:generateContent?key={self.api_key}"
-            response = requests.post(url, headers=headers, json=payload, timeout=10)
-            
-            if response.status_code != 200:
-                print(f"[GeminiValidator] API error: {response.status_code} - {response.text[:200]}")
-                return {"error": f"API error: {response.status_code}"}
-            
-            result = response.json()
+            response = self.client.models.generate_content(
+                model=self.MODEL_NAME,
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_text(text=prompt),
+                            types.Part.from_bytes(
+                                data=image_bytes,
+                                mime_type="image/jpeg"
+                            )
+                        ]
+                    )
+                ],
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    top_k=1,
+                    top_p=1.0,
+                    max_output_tokens=500,
+                    response_mime_type="application/json"
+                )
+            )
             
             # Extract text from response
-            if 'candidates' in result and len(result['candidates']) > 0:
-                text = result['candidates'][0]['content']['parts'][0]['text']
+            if response.text:
+                text = response.text.strip()
                 
-                # Parse JSON from response (handle markdown code blocks)
-                text = text.strip()
+                # Parse JSON from response (handle markdown code blocks if any)
                 if text.startswith('```json'):
                     text = text[7:]
                 if text.startswith('```'):
@@ -191,14 +190,12 @@ Respond in JSON format ONLY:
             else:
                 return {"error": "No response from Gemini"}
                 
-        except requests.Timeout:
-            print("[GeminiValidator] API timeout")
-            return {"error": "API timeout"}
         except json.JSONDecodeError as e:
             print(f"[GeminiValidator] JSON parse error: {e}")
+            print(f"[GeminiValidator] Response text: {response.text[:200] if response else 'None'}")
             return {"error": "Invalid JSON response"}
         except Exception as e:
-            print(f"[GeminiValidator] Error: {e}")
+            print(f"[GeminiValidator] API error: {e}")
             return {"error": str(e)}
     
     def validate_event(self, frame, event_type: str) -> Tuple[bool, float, str]:
@@ -230,13 +227,13 @@ Respond in JSON format ONLY:
         
         try:
             # Encode image
-            image_base64 = self._encode_image(frame)
+            image_bytes = self._encode_image(frame)
             
             # Get prompt for event type
             prompt = self.PROMPTS[event_type]
             
             # Call Gemini API
-            result = self._call_gemini_api(image_base64, prompt)
+            result = self._call_gemini_api(image_bytes, prompt)
             
             # Check for errors
             if 'error' in result:

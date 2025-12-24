@@ -167,7 +167,10 @@
             document.getElementById('statusCamera').textContent = event.camera_name;
             document.getElementById('statusType').textContent = event.event_type;
             document.getElementById('statusConfidence').textContent = (event.confidence * 100).toFixed(1) + '%';
-            document.getElementById('statusTime').textContent = event.created_at;
+            // Format time as HH:MM:SS only
+            const eventDate = new Date(event.created_at);
+            const timeStr = eventDate.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+            document.getElementById('statusTime').textContent = timeStr;
             document.getElementById('statusStatus').innerHTML = `<span class="status-pill status-${event.status}">${event.status}</span>`;
             
             // Show live feed from the camera

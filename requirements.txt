@@ -31,5 +31,8 @@ python-dotenv
 requests
 psutil
 
+# Google Gemini AI SDK
+google-genai
+
 # Development Tools
 pylint
