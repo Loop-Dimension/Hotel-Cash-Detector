@@ -34,7 +34,53 @@ class GeminiValidator:
     # https://ai.google.dev/gemini-api/docs/pricing
     MODEL_NAME = "gemini-2.5-flash-lite"
     
-    # Default validation prompts for each event type
+    # Default unified prompt for all event types
+    DEFAULT_UNIFIED_PROMPT = """Analyze this CCTV image for the event type: {event_type}
+
+EVENT TYPE DEFINITIONS:
+======================
+
+CASH TRANSACTION (event_type = "cash"):
+Look for these signs:
+- A cashier behind a counter/register
+- A customer in front of the counter
+- Hands exchanging money, cards, or items
+- Cash register or POS terminal visible
+- Hand reaching into cash drawer
+
+VIOLENCE/ALTERCATION (event_type = "violence"):
+Look for these signs:
+- People in fighting poses (raised fists, defensive stances)
+- Physical contact between people (punching, pushing, grabbing)
+- Aggressive body language
+- People on the ground from being pushed/hit
+- Multiple people aggressively surrounding one person
+
+DO NOT flag as violence:
+- Normal standing or walking
+- Friendly interaction or handshakes
+- People simply close together
+
+FIRE/SMOKE (event_type = "fire"):
+Look for these signs:
+- Visible flames (orange/red/yellow colors)
+- Smoke (white, gray, or black)
+- Unusual lighting that could indicate fire
+
+DO NOT flag as fire:
+- Normal lighting or red/orange objects
+- Steam from cooking
+- Sunlight reflections
+
+RESPONSE FORMAT:
+Respond in JSON format ONLY:
+{
+    "is_valid": true/false,
+    "confidence": 0.0-1.0,
+    "reason": "brief explanation of why this is or is not a valid detection"
+}"""
+    
+    # Legacy prompts (for backward compatibility)
     PROMPTS = {
         'cash': """Analyze this CCTV image from a cash register area. 
 Determine if there is a CASH TRANSACTION happening.
@@ -141,12 +187,24 @@ Respond in JSON format ONLY:
             print("[GeminiValidator] Warning: No API key provided, validation disabled")
     
     def set_custom_prompts(self, prompts: Dict[str, str]):
-        """Set custom prompts for event types"""
+        """Set custom prompts for event types (supports unified prompt)"""
         self.custom_prompts = prompts
     
     def get_prompt(self, event_type: str) -> str:
-        """Get prompt for event type (custom or default)"""
-        return self.custom_prompts.get(event_type) or self.PROMPTS.get(event_type, '')
+        """Get prompt for event type - uses unified prompt with {event_type} placeholder"""
+        # Check for unified prompt first (stored in 'cash' key for compatibility)
+        unified_prompt = self.custom_prompts.get('cash', '')
+        
+        # If the prompt contains {event_type}, it's a unified prompt
+        if unified_prompt and '{event_type}' in unified_prompt:
+            return unified_prompt.replace('{event_type}', event_type)
+        
+        # Legacy: check for specific event type prompt
+        if self.custom_prompts.get(event_type):
+            return self.custom_prompts.get(event_type)
+        
+        # Default: use built-in unified prompt
+        return self.DEFAULT_UNIFIED_PROMPT.replace('{event_type}', event_type)
     
     def _encode_image(self, frame):
         """Convert OpenCV frame to bytes for Gemini API."""
@@ -179,11 +237,13 @@ Respond in JSON format ONLY:
                         response_raw: str, image_path: str, processing_time_ms: int):
         """Log validation result to database"""
         try:
+            import django
+            django.setup()  # Ensure Django is initialized
             from cctv.models import GeminiLog, Camera
             
             camera = Camera.objects.get(id=camera_id) if camera_id else None
             if camera:
-                GeminiLog.objects.create(
+                log = GeminiLog.objects.create(
                     camera=camera,
                     event_type=event_type,
                     is_validated=is_valid,
@@ -191,11 +251,14 @@ Respond in JSON format ONLY:
                     reason=reason,
                     prompt_used=prompt,
                     response_raw=response_raw,
-                    image_path=image_path,
+                    image_path=image_path or '',
                     processing_time_ms=processing_time_ms
                 )
+                print(f"[GeminiValidator] Logged validation ID {log.id} for camera {camera_id}")
         except Exception as e:
+            import traceback
             print(f"[GeminiValidator] Failed to log validation: {e}")
+            traceback.print_exc()
     
     def _call_gemini_api(self, image_bytes: bytes, prompt: str) -> dict:
         """

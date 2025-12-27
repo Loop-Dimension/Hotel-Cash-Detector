@@ -4091,70 +4091,93 @@ def api_polygon_zones(request, camera_id):
 
 @login_required
 def api_gemini_global_prompts(request):
-    """Get or update global Gemini prompts (stored in first camera as template)"""
+    """Get or update global Gemini prompts (unified prompt for all event types)"""
     user = request.user
     if not user.is_admin():
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
-    # Default prompts
-    default_prompts = {
-        'cash': """Analyze this CCTV image for a cash transaction. Look for:
-1. A customer handing something to a cashier
-2. Money or payment being exchanged
-3. Cash register or drawer interaction
+    # Default unified prompt that handles all event types
+    default_unified_prompt = """Analyze this CCTV image for the event type: {event_type}
 
-Respond with JSON: {"is_valid": true/false, "confidence": 0.0-1.0, "reason": "explanation"}""",
-        
-        'violence': """Analyze this CCTV image for violence or altercation. Look for:
-1. Physical contact between people (hitting, pushing, grabbing)
-2. Aggressive body language or postures
-3. People in distress or defensive positions
+EVENT TYPE DEFINITIONS:
+======================
 
-Respond with JSON: {"is_valid": true/false, "confidence": 0.0-1.0, "reason": "explanation"}""",
-        
-        'fire': """Analyze this CCTV image for fire or smoke. Look for:
-1. Visible flames or fire
-2. Smoke or haze in the image
-3. Unusual lighting that could indicate fire
+CASH TRANSACTION (event_type = "cash"):
+Look for these signs:
+- A cashier behind a counter/register
+- A customer in front of the counter
+- Hands exchanging money, cards, or items
+- Cash register or POS terminal visible
+- Hand reaching into cash drawer
 
-Respond with JSON: {"is_valid": true/false, "confidence": 0.0-1.0, "reason": "explanation"}"""
-    }
+VIOLENCE/ALTERCATION (event_type = "violence"):
+Look for these signs:
+- People in fighting poses (raised fists, defensive stances)
+- Physical contact between people (punching, pushing, grabbing)
+- Aggressive body language
+- People on the ground from being pushed/hit
+- Multiple people aggressively surrounding one person
+
+DO NOT flag as violence:
+- Normal standing or walking
+- Friendly interaction or handshakes
+- People simply close together
+
+FIRE/SMOKE (event_type = "fire"):
+Look for these signs:
+- Visible flames (orange/red/yellow colors)
+- Smoke (white, gray, or black)
+- Unusual lighting that could indicate fire
+
+DO NOT flag as fire:
+- Normal lighting or red/orange objects
+- Steam from cooking
+- Sunlight reflections
+
+RESPONSE FORMAT:
+Respond in JSON format ONLY:
+{
+    "is_valid": true/false,
+    "confidence": 0.0-1.0,
+    "reason": "brief explanation of why this is or is not a valid detection"
+}"""
     
     if request.method == 'GET':
-        # Get prompts from the first camera that has them, or use defaults
+        # Get unified prompt from the first camera that has it, or use default
         first_camera = Camera.objects.first()
         
-        if first_camera:
-            prompts = {
-                'cash': first_camera.gemini_cash_prompt or default_prompts['cash'],
-                'violence': first_camera.gemini_violence_prompt or default_prompts['violence'],
-                'fire': first_camera.gemini_fire_prompt or default_prompts['fire'],
-            }
-        else:
-            prompts = default_prompts
+        unified_prompt = default_unified_prompt
+        if first_camera and first_camera.gemini_cash_prompt:
+            # Use stored unified prompt (stored in cash_prompt field for compatibility)
+            unified_prompt = first_camera.gemini_cash_prompt
         
         return JsonResponse({
-            'prompts': prompts,
-            'defaults': default_prompts
+            'prompts': {
+                'unified': unified_prompt
+            },
+            'defaults': {
+                'unified': default_unified_prompt
+            }
         })
     
     elif request.method == 'POST':
         data = json.loads(request.body)
+        unified_prompt = data.get('unified', '')
         
-        # Update all cameras with the new prompts
+        # Update all cameras with the unified prompt (stored in cash_prompt for compatibility)
         cameras = Camera.objects.all()
         updated = 0
         for camera in cameras:
-            # Always update, even if value is same as default
-            camera.gemini_cash_prompt = data.get('cash') or None
-            camera.gemini_violence_prompt = data.get('violence') or None
-            camera.gemini_fire_prompt = data.get('fire') or None
+            # Store unified prompt in cash_prompt field, clear others
+            camera.gemini_cash_prompt = unified_prompt or None
+            camera.gemini_violence_prompt = None  # Not used anymore
+            camera.gemini_fire_prompt = None  # Not used anymore
             camera.save()
             updated += 1
         
         return JsonResponse({
             'success': True,
-            'message': f'Prompts updated for {updated} cameras'
+            'message': f'Unified prompt updated for {updated} cameras'
         })
     
     return JsonResponse({'error': 'Method not allowed'}, status=405)
@@ -4210,7 +4233,7 @@ def api_gemini_all_logs(request):
             'confidence': log.confidence,
             'reason': log.reason,
             'processing_time_ms': log.processing_time_ms,
-            'image_path': log.image_path,
+            'image_path': f'/media/{log.image_path}' if log.image_path else None,
             'created_at': log.created_at.isoformat(),
         } for log in logs],
         'total': all_logs.count(),
