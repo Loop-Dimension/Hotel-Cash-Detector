@@ -1,0 +1,221 @@
+{% extends 'cctv/base.html' %}
+{% load static %}
+
+{% block title %}Gemini AI Prompts - {{ t.app_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-container {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+    
+    .prompt-section {
+        background: #fff;
+        border-radius: 12px;
+        padding: 24px;
+        margin-bottom: 24px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    
+    .prompt-section h3 {
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    
+    .prompt-section .icon {
+        font-size: 24px;
+    }
+    
+    .prompt-textarea {
+        width: 100%;
+        min-height: 150px;
+        padding: 16px;
+        border: 1px solid var(--gray-200);
+        border-radius: 8px;
+        font-family: 'Monaco', 'Consolas', monospace;
+        font-size: 13px;
+        line-height: 1.6;
+        resize: vertical;
+    }
+    
+    .prompt-textarea:focus {
+        outline: none;
+        border-color: var(--blue-500);
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+    
+    .prompt-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+    }
+    
+    .btn-group {
+        display: flex;
+        gap: 12px;
+    }
+    
+    .info-banner {
+        background: var(--blue-50);
+        border: 1px solid var(--blue-200);
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 24px;
+    }
+    
+    .info-banner p {
+        margin: 0;
+        color: var(--blue-700);
+    }
+    
+    .prompt-label {
+        font-weight: 600;
+        color: var(--text-primary);
+        font-size: 16px;
+    }
+    
+    .prompt-desc {
+        color: var(--text-secondary);
+        font-size: 13px;
+        margin-top: 4px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-header-left">
+        <h1>🤖 Gemini AI Prompts</h1>
+        <p class="text-muted">Configure global AI validation prompts for all cameras</p>
+    </div>
+    <div class="page-actions">
+        <button class="btn btn-secondary" onclick="resetAllPrompts()">↻ Reset All to Defaults</button>
+        <button class="btn btn-primary" onclick="saveAllPrompts()">💾 Save All Prompts</button>
+    </div>
+</div>
+
+<div class="page-container">
+    <div class="info-banner">
+        <p>💡 These prompts are used by Gemini AI to validate detected events. Customize them to improve detection accuracy for your specific environment.</p>
+    </div>
+    
+    <!-- Cash Detection Prompt -->
+    <div class="prompt-section">
+        <div class="prompt-header">
+            <div>
+                <div class="prompt-label">💵 Cash Detection Prompt</div>
+                <div class="prompt-desc">Used when validating cash transaction events</div>
+            </div>
+            <button class="btn btn-sm btn-ghost" onclick="resetPrompt('cash')">Reset to Default</button>
+        </div>
+        <textarea id="promptCash" class="prompt-textarea" placeholder="Loading..."></textarea>
+    </div>
+    
+    <!-- Violence Detection Prompt -->
+    <div class="prompt-section">
+        <div class="prompt-header">
+            <div>
+                <div class="prompt-label">⚠️ Violence Detection Prompt</div>
+                <div class="prompt-desc">Used when validating violence/altercation events</div>
+            </div>
+            <button class="btn btn-sm btn-ghost" onclick="resetPrompt('violence')">Reset to Default</button>
+        </div>
+        <textarea id="promptViolence" class="prompt-textarea" placeholder="Loading..."></textarea>
+    </div>
+    
+    <!-- Fire Detection Prompt -->
+    <div class="prompt-section">
+        <div class="prompt-header">
+            <div>
+                <div class="prompt-label">🔥 Fire Detection Prompt</div>
+                <div class="prompt-desc">Used when validating fire/smoke events</div>
+            </div>
+            <button class="btn btn-sm btn-ghost" onclick="resetPrompt('fire')">Reset to Default</button>
+        </div>
+        <textarea id="promptFire" class="prompt-textarea" placeholder="Loading..."></textarea>
+    </div>
+</div>
+
+<script>
+    let defaultPrompts = {};
+    
+    async function loadPrompts() {
+        try {
+            const response = await fetch('/api/gemini/global-prompts/');
+            const data = await response.json();
+            
+            defaultPrompts = data.defaults || {};
+            
+            document.getElementById('promptCash').value = data.prompts.cash || defaultPrompts.cash || '';
+            document.getElementById('promptViolence').value = data.prompts.violence || defaultPrompts.violence || '';
+            document.getElementById('promptFire').value = data.prompts.fire || defaultPrompts.fire || '';
+        } catch (error) {
+            console.error('Failed to load prompts:', error);
+            alert('Failed to load prompts');
+        }
+    }
+    
+    function resetPrompt(type) {
+        if (defaultPrompts[type]) {
+            document.getElementById('prompt' + type.charAt(0).toUpperCase() + type.slice(1)).value = defaultPrompts[type];
+        }
+    }
+    
+    async function saveAllPrompts() {
+        try {
+            const response = await fetch('/api/gemini/global-prompts/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify({
+                    cash: document.getElementById('promptCash').value,
+                    violence: document.getElementById('promptViolence').value,
+                    fire: document.getElementById('promptFire').value
+                })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                alert('Prompts saved successfully! ' + (data.message || ''));
+            } else {
+                alert('Failed to save prompts');
+            }
+        } catch (error) {
+            console.error('Failed to save prompts:', error);
+            alert('Failed to save prompts');
+        }
+    }
+    
+    async function resetAllPrompts() {
+        if (!confirm('Reset all prompts to defaults?')) return;
+        
+        document.getElementById('promptCash').value = defaultPrompts.cash || '';
+        document.getElementById('promptViolence').value = defaultPrompts.violence || '';
+        document.getElementById('promptFire').value = defaultPrompts.fire || '';
+    }
+    
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+    
+    // Load prompts on page load
+    document.addEventListener('DOMContentLoaded', loadPrompts);
+</script>
+{% endblock %}

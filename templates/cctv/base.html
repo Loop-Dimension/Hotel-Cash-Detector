@@ -111,6 +111,24 @@
                         <span class="nav-label">Test Detection</span>
                     </a>
                     
+                    <div class="nav-group">
+                        <button class="nav-item nav-parent" type="button">
+                            <span class="nav-icon">🤖</span>
+                            <span class="nav-label">Gemini AI</span>
+                            <span class="caret {% if 'gemini' in active_page %}open{% endif %}">▼</span>
+                        </button>
+                        <div class="nav-sublist" style="{% if 'gemini' in active_page %}display:flex{% endif %}">
+                            <a href="{% url 'cctv:gemini_prompts' %}" class="nav-item nav-sub {% if active_page == 'gemini-prompts' %}active{% endif %}">
+                                <span class="nav-dot"></span>
+                                <span class="nav-label">Prompts</span>
+                            </a>
+                            <a href="{% url 'cctv:gemini_logs' %}" class="nav-item nav-sub {% if active_page == 'gemini-logs' %}active{% endif %}">
+                                <span class="nav-dot"></span>
+                                <span class="nav-label">Logs</span>
+                            </a>
+                        </div>
+                    </div>
+                    
                     {% else %}
                     <!-- Project Manager Navigation -->
                     <a href="{% url 'cctv:home' %}" class="nav-item {% if active_page == 'home' %}active{% endif %}">

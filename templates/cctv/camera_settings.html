@@ -230,6 +230,111 @@
         font-weight: 600;
     }
     
+    /* Tabs styling */
+    .settings-tabs {
+        display: flex;
+        gap: 0;
+        margin: 20px 0 32px 0;
+        border-bottom: 3px solid var(--gray-200);
+        background: white;
+        border-radius: 8px 8px 0 0;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+    
+    .tab-btn {
+        padding: 16px 28px;
+        background: var(--gray-50);
+        border: none;
+        color: var(--text-secondary);
+        font-weight: 600;
+        cursor: pointer;
+        position: relative;
+        transition: all 0.3s;
+        font-size: 15px;
+        border-bottom: 3px solid transparent;
+    }
+    
+    .tab-btn:first-child {
+        border-radius: 8px 0 0 0;
+    }
+    
+    .tab-btn:hover {
+        color: var(--blue-600);
+        background: var(--blue-50);
+    }
+    
+    .tab-btn.active {
+        color: var(--blue-600);
+        background: white;
+        border-bottom: 3px solid var(--blue-500);
+    }
+    
+    .tab-content {
+        display: none;
+    }
+    
+    .tab-content.active {
+        display: block;
+    }
+    
+    /* Polygon drawing mode */
+    .polygon-point {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        background: #fff;
+        border: 2px solid #ffcc00;
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        cursor: move;
+        z-index: 10;
+    }
+    
+    .polygon-point.cash-drawer {
+        border-color: #22c55e;
+    }
+    
+    /* Gemini logs table */
+    .logs-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+    
+    .logs-table th,
+    .logs-table td {
+        padding: 10px 12px;
+        text-align: left;
+        border-bottom: 1px solid var(--gray-200);
+    }
+    
+    .logs-table th {
+        background: var(--gray-100);
+        font-weight: 600;
+    }
+    
+    .logs-table tr:hover {
+        background: var(--gray-50);
+    }
+    
+    .badge-validated {
+        background: var(--green-100);
+        color: var(--green-700);
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    
+    .badge-rejected {
+        background: var(--red-100);
+        color: var(--red-700);
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    
     @media (max-width: 1024px) {
         .settings-grid {
             grid-template-columns: 1fr;
@@ -250,6 +355,7 @@
     </div>
 </div>
 
+<!-- Main Content -->
 <div class="settings-grid">
     <!-- Live Video Section (Always visible) -->
     <div class="settings-section" id="liveVideoSection">
@@ -319,9 +425,12 @@
                     <p style="color: var(--gray-400); font-size: 13px; margin: 0;">Select which zone to draw, then click and drag on the video above</p>
                 </div>
                 
-                <!-- ==================== CASHIER ZONE SETUP ==================== -->
+                <!--==================== CASHIER ZONE SETUP ==================== -->
                 <div style="margin-bottom: 24px; padding: 20px; background: var(--gray-800); border-radius: 12px;">
-                    <h4 style="color: #fff; margin-bottom: 16px;">📍 {{ t.setup_cashier_zone }}</h4>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                        <h4 style="color: #fff; margin: 0;">📍 {{ t.setup_cashier_zone }}</h4>
+                        <span style="background: #22c55e; color: #000; padding: 6px 14px; font-size: 13px; border-radius: 6px; font-weight: bold;">⬡ Polygon Mode</span>
+                    </div>
                     
                     <div class="toggle-group" style="background: var(--gray-700); margin-bottom: 16px;">
                         <div class="toggle-info">
@@ -337,7 +446,7 @@
                     <div class="toggle-group" style="background: var(--yellow-900); border: 1px solid var(--yellow-600); margin-bottom: 16px;">
                         <div class="toggle-info">
                             <span class="toggle-label" style="color: #fbbf24;">{{ t.show_zone_overlay }}</span>
-                            <span class="toggle-desc" style="color: var(--yellow-200);">Show yellow box on video</span>
+                            <span class="toggle-desc" style="color: var(--yellow-200);">Show yellow polygon on video</span>
                         </div>
                         <label class="toggle-switch">
                             <input type="checkbox" id="showZoneOverlay" onchange="toggleZoneOverlay()">
@@ -345,40 +454,29 @@
                         </label>
                     </div>
                     
-                    <div class="zone-controls" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px;">
-                        <div class="form-group">
-                            <label style="color: var(--gray-300);">{{ t.zone_x }}</label>
-                            <input type="number" id="zoneX" value="{{ camera.cashier_zone_x }}" min="0" max="1920" 
-                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
-                        </div>
-                        <div class="form-group">
-                            <label style="color: var(--gray-300);">{{ t.zone_y }}</label>
-                            <input type="number" id="zoneY" value="{{ camera.cashier_zone_y }}" min="0" max="1080"
-                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
-                        </div>
-                        <div class="form-group">
-                            <label style="color: var(--gray-300);">{{ t.zone_width }}</label>
-                            <input type="number" id="zoneWidth" value="{{ camera.cashier_zone_width }}" min="50" max="1920"
-                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
-                        </div>
-                        <div class="form-group">
-                            <label style="color: var(--gray-300);">{{ t.zone_height }}</label>
-                            <input type="number" id="zoneHeight" value="{{ camera.cashier_zone_height }}" min="50" max="1080"
-                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
-                        </div>
+                    <!-- Polygon Points Info -->
+                    <div id="cashierPolygonInfo" style="background: var(--gray-700); padding: 12px; border-radius: 8px; margin-bottom: 16px;">
+                        <p style="color: #ffcc00; margin: 0; font-size: 13px;">
+                            <span id="cashierPolygonStatus">⬡ No polygon drawn yet</span>
+                        </p>
                     </div>
                     
-                    <p style="color: var(--gray-400); font-size: 12px; margin-bottom: 12px;">💡 Tip: Click and drag on the video to draw the cashier zone</p>
+                    <p style="color: var(--gray-400); font-size: 12px; margin-bottom: 12px;">
+                        💡 <strong>Polygon Mode:</strong> Click points on video to draw shape. Double-click or click near first point to close.
+                    </p>
                     
                     <div class="btn-group" style="display: flex; gap: 12px;">
-                        <button class="btn btn-secondary" onclick="resetZone()">{{ t.reset_zone }}</button>
+                        <button class="btn btn-secondary" onclick="clearCashierPolygon()">Clear Polygon</button>
                         <button class="btn btn-primary" onclick="saveZone()">{{ t.save_zone }}</button>
                     </div>
                 </div>
                 
                 <!-- ==================== CASH DRAWER ZONE SETUP ==================== -->
                 <div style="margin-bottom: 24px; padding: 20px; background: var(--gray-800); border-radius: 12px; border: 1px solid var(--green-700);">
-                    <h4 style="color: #22c55e; margin-bottom: 16px;">💰 Cash Drawer Zone (Two-Step Detection)</h4>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                        <h4 style="color: #22c55e; margin: 0;">💰 Cash Drawer Zone (Two-Step Detection)</h4>
+                        <span style="background: #22c55e; color: #000; padding: 6px 14px; font-size: 13px; border-radius: 6px; font-weight: bold;">⬡ Polygon Mode</span>
+                    </div>
                     <p style="color: var(--gray-400); font-size: 13px; margin-bottom: 16px;">
                         Enhanced cash detection: <strong>Customer touches Cashier</strong> → <strong>Cashier's hand goes to Cash Drawer</strong> → <strong>CASH detected</strong>
                     </p>
@@ -397,7 +495,7 @@
                     <div class="toggle-group" style="background: var(--green-900); border: 1px solid var(--green-600); margin-bottom: 16px;">
                         <div class="toggle-info">
                             <span class="toggle-label" style="color: #22c55e;">Show Cash Drawer Overlay</span>
-                            <span class="toggle-desc" style="color: var(--green-200);">Show green box on video</span>
+                            <span class="toggle-desc" style="color: var(--green-200);">Show green polygon on video</span>
                         </div>
                         <label class="toggle-switch">
                             <input type="checkbox" id="showCashDrawerOverlay" onchange="toggleCashDrawerOverlay()">
@@ -405,27 +503,11 @@
                         </label>
                     </div>
                     
-                    <div class="zone-controls" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px;">
-                        <div class="form-group">
-                            <label style="color: var(--gray-300);">Cash Drawer X</label>
-                            <input type="number" id="cashDrawerX" value="{{ camera.cash_drawer_zone_x|default:50 }}" min="0" max="1920" 
-                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
-                        </div>
-                        <div class="form-group">
-                            <label style="color: var(--gray-300);">Cash Drawer Y</label>
-                            <input type="number" id="cashDrawerY" value="{{ camera.cash_drawer_zone_y|default:200 }}" min="0" max="1080"
-                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
-                        </div>
-                        <div class="form-group">
-                            <label style="color: var(--gray-300);">Cash Drawer Width</label>
-                            <input type="number" id="cashDrawerWidth" value="{{ camera.cash_drawer_zone_width|default:150 }}" min="50" max="1920"
-                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
-                        </div>
-                        <div class="form-group">
-                            <label style="color: var(--gray-300);">Cash Drawer Height</label>
-                            <input type="number" id="cashDrawerHeight" value="{{ camera.cash_drawer_zone_height|default:100 }}" min="50" max="1080"
-                                   style="background: var(--gray-900); color: #fff; border-color: var(--gray-600);">
-                        </div>
+                    <!-- Polygon Points Info -->
+                    <div id="cashDrawerPolygonInfo" style="background: var(--gray-700); padding: 12px; border-radius: 8px; margin-bottom: 16px;">
+                        <p style="color: #22c55e; margin: 0; font-size: 13px;">
+                            <span id="cashDrawerPolygonStatus">⬡ No polygon drawn yet</span>
+                        </p>
                     </div>
                     
                     <!-- Hand Tracking Duration Slider -->
@@ -443,10 +525,10 @@
                         </p>
                     </div>
                     
-                    <p style="color: var(--gray-400); font-size: 12px; margin-bottom: 12px;">💡 Tip: Select drawing mode above, then click and drag on video to draw zone</p>
+                    <p style="color: var(--gray-400); font-size: 12px; margin-bottom: 12px;">💡 <strong>Polygon Mode:</strong> Click points on video to draw shape. Double-click or click near first point to close.</p>
                     
                     <div class="btn-group" style="display: flex; gap: 12px;">
-                        <button class="btn btn-secondary" onclick="resetCashDrawerZone()">Reset Cash Drawer</button>
+                        <button class="btn btn-secondary" onclick="clearCashDrawerPolygon()">Clear Polygon</button>
                         <button class="btn btn-primary" style="background: #22c55e; border-color: #22c55e;" onclick="saveCashDrawerZone()">Save Cash Drawer</button>
                     </div>
                 </div>
@@ -631,6 +713,7 @@
         </div>
     </div>
 </div>
+
 {% endblock %}
 
 {% block extra_js %}
@@ -639,8 +722,6 @@
     const canvas = document.getElementById('zoneCanvas');
     const ctx = canvas.getContext('2d');
     
-    let isDrawing = false;
-    let startX, startY;
     let videoActive = false;
     let canvasWidth = 1024;
     let canvasHeight = 576;
@@ -648,9 +729,19 @@
     let showCashDrawerOverlay = false;  // Green box hidden by default
     let activeDrawZone = 'cashier';  // 'cashier' or 'cashDrawer'
     
-    // Function to set which zone to draw
+    // Polygon drawing mode variables (POLYGON ONLY - no rectangle mode)
+    let polygonMode = true;  // Always polygon mode
+    let currentZoneType = 'cashier';  // 'cashier' or 'drawer'
+    let polygonPoints = [];  // Current polygon being drawn
+    let cashierPolygon = [];  // Saved cashier polygon
+    let cashDrawerPolygon = [];  // Saved cash drawer polygon
+    
+    // Function to set which zone to draw (polygon mode)
     function setDrawingZone(zoneType) {
         activeDrawZone = zoneType;
+        // Also set the polygon zone type
+        currentZoneType = zoneType === 'cashDrawer' ? 'drawer' : 'cashier';
+        polygonPoints = [];  // Clear any in-progress polygon drawing
         
         // Update button styles
         const cashierBtn = document.getElementById('selectCashierZone');
@@ -677,6 +768,8 @@
             drawerBtn.style.color = '#000';
             drawerBtn.style.fontWeight = 'bold';
         }
+        
+        showToast(`Now drawing: ${zoneType === 'cashier' ? 'Cashier Zone (Yellow)' : 'Cash Drawer Zone (Green)'}. Click points to create polygon.`, 'info');
     }
     let currentZone = {
         x: {{ camera.cashier_zone_x }},
@@ -691,6 +784,33 @@
         height: {{ camera.cash_drawer_zone_height|default:100 }}
     };
     
+    // Load polygon data from database if available
+    {% if camera.cashier_zone_polygon %}
+    try {
+        cashierPolygon = JSON.parse('{{ camera.cashier_zone_polygon|escapejs }}');
+        // Auto-enable overlay if polygon exists
+        if (cashierPolygon.length >= 3) {
+            showZoneOverlay = true;
+            document.getElementById('showZoneOverlay').checked = true;
+        }
+    } catch(e) {
+        cashierPolygon = [];
+    }
+    {% endif %}
+    
+    {% if camera.cash_drawer_zone_polygon %}
+    try {
+        cashDrawerPolygon = JSON.parse('{{ camera.cash_drawer_zone_polygon|escapejs }}');
+        // Auto-enable overlay if polygon exists
+        if (cashDrawerPolygon.length >= 3) {
+            showCashDrawerOverlay = true;
+            document.getElementById('showCashDrawerOverlay').checked = true;
+        }
+    } catch(e) {
+        cashDrawerPolygon = [];
+    }
+    {% endif %}
+    
     // Toggle zone overlay visibility (yellow box on video)
     function toggleZoneOverlay() {
         showZoneOverlay = document.getElementById('showZoneOverlay').checked;
@@ -701,37 +821,6 @@
     function toggleCashDrawerOverlay() {
         showCashDrawerOverlay = document.getElementById('showCashDrawerOverlay').checked;
         drawZone();
-    }
-    
-    // Function to set which zone to draw (called by zone selection buttons)
-    function setDrawingZone(zoneType) {
-        activeDrawZone = zoneType;
-        
-        // Update button styles
-        const cashierBtn = document.getElementById('selectCashierZone');
-        const drawerBtn = document.getElementById('selectCashDrawerZone');
-        
-        if (zoneType === 'cashier') {
-            cashierBtn.style.background = '#ffcc00';
-            cashierBtn.style.borderColor = '#ffcc00';
-            cashierBtn.style.color = '#000';
-            cashierBtn.style.fontWeight = 'bold';
-            
-            drawerBtn.style.background = 'var(--gray-700)';
-            drawerBtn.style.borderColor = 'var(--gray-600)';
-            drawerBtn.style.color = '#fff';
-            drawerBtn.style.fontWeight = 'normal';
-        } else {
-            cashierBtn.style.background = 'var(--gray-700)';
-            cashierBtn.style.borderColor = 'var(--gray-600)';
-            cashierBtn.style.color = '#fff';
-            cashierBtn.style.fontWeight = 'normal';
-            
-            drawerBtn.style.background = '#22c55e';
-            drawerBtn.style.borderColor = '#22c55e';
-            drawerBtn.style.color = '#000';
-            drawerBtn.style.fontWeight = 'bold';
-        }
     }
     
     // Toggle debug mode - shows both zones when enabled
@@ -767,6 +856,10 @@
             ctx.fillText('Click "Live Preview" to start video', canvas.width / 2, canvas.height / 2);
         }
         drawZone();
+        
+        // Update polygon status display
+        updatePolygonStatus('cashier', cashierPolygon);
+        updatePolygonStatus('drawer', cashDrawerPolygon);
     }
     
     function drawZone() {
@@ -782,58 +875,28 @@
             ctx.fillText('Click "Live Preview" to start video', canvas.width / 2, canvas.height / 2);
         }
         
-        // Draw Cashier Zone (yellow) when overlay toggle is ON
+        // Draw Cashier Zone (yellow) when overlay toggle is ON - POLYGON ONLY
         if (showZoneOverlay) {
-            ctx.strokeStyle = '#ffcc00';
-            ctx.lineWidth = 3;
-            ctx.setLineDash([10, 5]);
-            ctx.strokeRect(currentZone.x, currentZone.y, currentZone.width, currentZone.height);
-            
-            // Fill with transparent yellow
-            ctx.fillStyle = 'rgba(255, 204, 0, 0.2)';
-            ctx.fillRect(currentZone.x, currentZone.y, currentZone.width, currentZone.height);
-            
-            // Label with background for visibility
-            ctx.setLineDash([]);
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-            ctx.fillRect(currentZone.x, currentZone.y, 120, 28);
-            ctx.fillStyle = '#ffcc00';
-            ctx.font = 'bold 14px Pretendard Variable';
-            ctx.textAlign = 'left';
-            ctx.fillText('CASHIER ZONE', currentZone.x + 8, currentZone.y + 19);
-            
-            // Update input fields
-            document.getElementById('zoneX').value = Math.round(currentZone.x);
-            document.getElementById('zoneY').value = Math.round(currentZone.y);
-            document.getElementById('zoneWidth').value = Math.round(currentZone.width);
-            document.getElementById('zoneHeight').value = Math.round(currentZone.height);
+            if (cashierPolygon.length >= 3) {
+                // Draw polygon
+                drawPolygon(cashierPolygon, '#ffcc00', 'CASHIER ZONE');
+            }
+            // No rectangle fallback - polygon only mode
         }
         
-        // Draw Cash Drawer Zone (green) when overlay toggle is ON
+        // Draw Cash Drawer Zone (green) when overlay toggle is ON - POLYGON ONLY
         if (showCashDrawerOverlay) {
-            ctx.strokeStyle = '#22c55e';
-            ctx.lineWidth = 3;
-            ctx.setLineDash([10, 5]);
-            ctx.strokeRect(cashDrawerZone.x, cashDrawerZone.y, cashDrawerZone.width, cashDrawerZone.height);
-            
-            // Fill with transparent green
-            ctx.fillStyle = 'rgba(34, 197, 94, 0.2)';
-            ctx.fillRect(cashDrawerZone.x, cashDrawerZone.y, cashDrawerZone.width, cashDrawerZone.height);
-            
-            // Label with background for visibility
-            ctx.setLineDash([]);
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-            ctx.fillRect(cashDrawerZone.x, cashDrawerZone.y, 130, 28);
-            ctx.fillStyle = '#22c55e';
-            ctx.font = 'bold 14px Pretendard Variable';
-            ctx.textAlign = 'left';
-            ctx.fillText('💰 CASH DRAWER', cashDrawerZone.x + 8, cashDrawerZone.y + 19);
-            
-            // Update Cash Drawer input fields
-            document.getElementById('cashDrawerX').value = Math.round(cashDrawerZone.x);
-            document.getElementById('cashDrawerY').value = Math.round(cashDrawerZone.y);
-            document.getElementById('cashDrawerWidth').value = Math.round(cashDrawerZone.width);
-            document.getElementById('cashDrawerHeight').value = Math.round(cashDrawerZone.height);
+            if (cashDrawerPolygon.length >= 3) {
+                // Draw polygon
+                drawPolygon(cashDrawerPolygon, '#22c55e', '💰 CASH DRAWER');
+            }
+            // No rectangle fallback - polygon only mode
+        }
+        
+        // Draw current polygon being drawn
+        if (polygonPoints.length > 0) {
+            const color = currentZoneType === 'cashier' ? '#ffcc00' : '#22c55e';
+            drawPolygon(polygonPoints, color, 'Drawing...');
         }
     }
     
@@ -843,83 +906,48 @@
         const scaleX = canvas.width / rect.width;
         const scaleY = canvas.height / rect.height;
         
-        startX = (e.clientX - rect.left) * scaleX;
-        startY = (e.clientY - rect.top) * scaleY;
-        isDrawing = true;
+        const clickX = (e.clientX - rect.left) * scaleX;
+        const clickY = (e.clientY - rect.top) * scaleY;
         
-        // Use the activeDrawZone set by button selection (no need for SHIFT key)
-    });
-    
-    canvas.addEventListener('mousemove', (e) => {
-        if (!isDrawing) return;
+        // Polygon-only mode: add point
+        polygonPoints.push([clickX, clickY]);
         
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        
-        const currentX = (e.clientX - rect.left) * scaleX;
-        const currentY = (e.clientY - rect.top) * scaleY;
-        
-        const newZone = {
-            x: Math.min(startX, currentX),
-            y: Math.min(startY, currentY),
-            width: Math.abs(currentX - startX),
-            height: Math.abs(currentY - startY)
-        };
-        
-        if (activeDrawZone === 'cashDrawer') {
-            cashDrawerZone = newZone;
-            // Auto-enable overlay when drawing
-            if (!showCashDrawerOverlay) {
-                showCashDrawerOverlay = true;
-                document.getElementById('showCashDrawerOverlay').checked = true;
-            }
-        } else {
-            currentZone = newZone;
-            // Auto-enable overlay when drawing
-            if (!showZoneOverlay) {
-                showZoneOverlay = true;
-                document.getElementById('showZoneOverlay').checked = true;
+        // Check if clicked near first point to close polygon (within 15px)
+        if (polygonPoints.length >= 3) {
+            const firstPoint = polygonPoints[0];
+            const distance = Math.sqrt(
+                Math.pow(clickX - firstPoint[0], 2) + 
+                Math.pow(clickY - firstPoint[1], 2)
+            );
+            
+            if (distance < 15) {
+                // Close polygon - remove the last point (which is near the first)
+                polygonPoints.pop();
+                closeCurrentPolygon();
             }
         }
         
         drawZone();
     });
     
-    canvas.addEventListener('mouseup', () => {
-        isDrawing = false;
-    });
-    
-    canvas.addEventListener('mouseleave', () => {
-        isDrawing = false;
-    });
-    
-    // Update zone from input fields
-    ['zoneX', 'zoneY', 'zoneWidth', 'zoneHeight'].forEach(id => {
-        document.getElementById(id).addEventListener('change', () => {
-            currentZone = {
-                x: parseInt(document.getElementById('zoneX').value) || 0,
-                y: parseInt(document.getElementById('zoneY').value) || 0,
-                width: parseInt(document.getElementById('zoneWidth').value) || 100,
-                height: parseInt(document.getElementById('zoneHeight').value) || 100
-            };
+    // Double-click to close polygon
+    canvas.addEventListener('dblclick', (e) => {
+        if (polygonPoints.length >= 3) {
+            closeCurrentPolygon();
             drawZone();
-        });
+        }
     });
     
-    // Update Cash Drawer zone from input fields
-    ['cashDrawerX', 'cashDrawerY', 'cashDrawerWidth', 'cashDrawerHeight'].forEach(id => {
-        document.getElementById(id).addEventListener('change', () => {
-            cashDrawerZone = {
-                x: parseInt(document.getElementById('cashDrawerX').value) || 50,
-                y: parseInt(document.getElementById('cashDrawerY').value) || 200,
-                width: parseInt(document.getElementById('cashDrawerWidth').value) || 150,
-                height: parseInt(document.getElementById('cashDrawerHeight').value) || 100
-            };
+    // Mousemove - just for visual feedback while drawing polygon
+    canvas.addEventListener('mousemove', (e) => {
+        // No rectangle dragging - polygon mode only
+        // Just trigger redraw for visual feedback
+        if (polygonPoints.length > 0) {
             drawZone();
-        });
+        }
     });
     
+    // Reset zone functions
     function resetZone() {
         currentZone = { x: 0, y: 0, width: 640, height: 480 };
         drawZone();
@@ -958,8 +986,11 @@
             y: currentZone.y,
             width: currentZone.width,
             height: currentZone.height,
-            enabled: document.getElementById('zoneEnabled').checked
+            enabled: document.getElementById('zoneEnabled').checked,
+            polygon: cashierPolygon.length >= 3 ? cashierPolygon : null
         };
+        
+        console.log('Saving cashier zone:', data);
         
         try {
             const response = await fetch(`/api/cameras/${cameraId}/set-zone/`, {
@@ -971,12 +1002,16 @@
                 body: JSON.stringify(data)
             });
             
+            const result = await response.json();
+            console.log('Save result:', result);
+            
             if (response.ok) {
                 showToast('{{ t.settings_saved }}', 'success');
             } else {
                 showToast('{{ t.error }}', 'error');
             }
         } catch (error) {
+            console.error('Save error:', error);
             showToast('{{ t.error }}', 'error');
         }
     }
@@ -987,7 +1022,8 @@
             y: cashDrawerZone.y,
             width: cashDrawerZone.width,
             height: cashDrawerZone.height,
-            enabled: document.getElementById('cashDrawerZoneEnabled').checked
+            enabled: document.getElementById('cashDrawerZoneEnabled').checked,
+            polygon: cashDrawerPolygon.length >= 3 ? cashDrawerPolygon : null
         };
         
         try {
@@ -1358,6 +1394,146 @@
             
         } catch (error) {
             console.error('Failed to refresh debug info:', error);
+        }
+    }
+    
+    // ==================== POLYGON DRAWING (POLYGON-ONLY MODE) ====================
+    
+    // Helper function to close the current polygon being drawn
+    function closeCurrentPolygon() {
+        if (polygonPoints.length < 3) return;
+        
+        if (currentZoneType === 'cashier') {
+            cashierPolygon = [...polygonPoints];
+            showZoneOverlay = true;
+            document.getElementById('showZoneOverlay').checked = true;
+            updatePolygonStatus('cashier', cashierPolygon);
+        } else {
+            cashDrawerPolygon = [...polygonPoints];
+            showCashDrawerOverlay = true;
+            document.getElementById('showCashDrawerOverlay').checked = true;
+            updatePolygonStatus('drawer', cashDrawerPolygon);
+        }
+        polygonPoints = [];
+        showToast(`${currentZoneType === 'cashier' ? 'Cashier' : 'Cash Drawer'} polygon drawn! Click "Save" button to persist.`, 'success');
+    }
+    
+    // Update polygon status display
+    function updatePolygonStatus(zoneType, polygon) {
+        const statusId = zoneType === 'cashier' ? 'cashierPolygonStatus' : 'cashDrawerPolygonStatus';
+        const statusEl = document.getElementById(statusId);
+        if (statusEl) {
+            if (polygon && polygon.length >= 3) {
+                statusEl.innerHTML = `✅ Polygon with ${polygon.length} points`;
+                statusEl.style.color = '#22c55e';
+            } else {
+                statusEl.innerHTML = '⬡ No polygon drawn yet';
+                statusEl.style.color = '#ffcc00';
+            }
+        }
+    }
+    
+    // Clear cashier polygon
+    function clearCashierPolygon() {
+        cashierPolygon = [];
+        polygonPoints = [];
+        currentZoneType = 'cashier';
+        updatePolygonStatus('cashier', cashierPolygon);
+        drawZone();
+        showToast('Cashier polygon cleared. Draw a new one by clicking points.', 'info');
+    }
+    
+    // Clear cash drawer polygon
+    function clearCashDrawerPolygon() {
+        cashDrawerPolygon = [];
+        polygonPoints = [];
+        currentZoneType = 'drawer';
+        updatePolygonStatus('drawer', cashDrawerPolygon);
+        drawZone();
+        showToast('Cash Drawer polygon cleared. Draw a new one by clicking points.', 'info');
+    }
+    
+    // Set which zone type to draw next
+    function setPolygonZoneType(zoneType) {
+        currentZoneType = zoneType;
+        polygonPoints = [];  // Clear any in-progress drawing
+        
+        // Update button styles to show active zone
+        const cashierBtn = document.getElementById('selectCashierZone');
+        const drawerBtn = document.getElementById('selectCashDrawerZone');
+        
+        if (zoneType === 'cashier') {
+            if (cashierBtn) {
+                cashierBtn.style.background = '#ffcc00';
+                cashierBtn.style.color = '#000';
+            }
+            if (drawerBtn) {
+                drawerBtn.style.background = 'var(--gray-700)';
+                drawerBtn.style.color = '#fff';
+            }
+        } else {
+            if (drawerBtn) {
+                drawerBtn.style.background = '#22c55e';
+                drawerBtn.style.color = '#000';
+            }
+            if (cashierBtn) {
+                cashierBtn.style.background = 'var(--gray-700)';
+                cashierBtn.style.color = '#fff';
+            }
+        }
+        
+        showToast(`Now drawing: ${zoneType === 'cashier' ? 'Cashier Zone' : 'Cash Drawer Zone'}. Click points to create polygon.`, 'info');
+    }
+    
+    function drawPolygon(points, color, label) {
+        if (!points || points.length < 2) return;
+        
+        ctx.beginPath();
+        ctx.moveTo(points[0][0], points[0][1]);
+        for (let i = 1; i < points.length; i++) {
+            ctx.lineTo(points[i][0], points[i][1]);
+        }
+        if (points.length >= 3) {
+            ctx.closePath();
+        }
+        
+        // Fill with 15% opacity for better visibility
+        if (color.startsWith('#')) {
+            // Convert hex to rgba
+            const r = parseInt(color.slice(1, 3), 16);
+            const g = parseInt(color.slice(3, 5), 16);
+            const b = parseInt(color.slice(5, 7), 16);
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.15)`;
+        } else {
+            ctx.fillStyle = color.replace(')', ', 0.15)').replace('rgb', 'rgba');
+        }
+        ctx.fill();
+        
+        // Stroke
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        // Draw points
+        points.forEach((point, i) => {
+            ctx.beginPath();
+            ctx.arc(point[0], point[1], 5, 0, Math.PI * 2);
+            ctx.fillStyle = '#fff';
+            ctx.fill();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        });
+        
+        // Label
+        if (label && points.length > 0) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(points[0][0], points[0][1] - 20, label.length * 8 + 10, 20);
+            ctx.fillStyle = color;
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(label, points[0][0] + 5, points[0][1] - 6);
         }
     }
     

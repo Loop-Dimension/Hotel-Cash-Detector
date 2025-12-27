@@ -223,6 +223,11 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
         'fire_yolo_model': settings.DETECTION_CONFIG.get('FIRE_YOLO_MODEL', 'yolov8n.pt'),
         'fire_model': settings.DETECTION_CONFIG.get('FIRE_MODEL', 'fire_smoke_yolov8.pt'),
         'cashier_zone': [zone['x'], zone['y'], zone['width'], zone['height']],
+        'use_polygon_zones': True,  # POLYGON-ONLY MODE
+        'cashier_zone_polygon': camera.get_cashier_zone_polygon_points(),
+        'cash_drawer_zone': [camera.cash_drawer_zone_x, camera.cash_drawer_zone_y, 
+                             camera.cash_drawer_zone_width, camera.cash_drawer_zone_height],
+        'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points() if hasattr(camera, 'get_cash_drawer_zone_polygon_points') else None,
         'hand_touch_distance': camera.hand_touch_distance,
         'pose_confidence': 0.5,
         'min_transaction_frames': 1,
@@ -376,7 +381,20 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
                             try:
                                 gemini_api_key = getattr(settings, 'GEMINI_API_KEY', '')
                                 if gemini_api_key:
-                                    validator = GeminiValidator(api_key=gemini_api_key)
+                                    # Create validator with camera_id for logging
+                                    validator = GeminiValidator(api_key=gemini_api_key, camera_id=camera.id)
+                                    
+                                    # Set custom prompts if defined for this camera
+                                    custom_prompts = {}
+                                    if camera.gemini_cash_prompt:
+                                        custom_prompts['cash'] = camera.gemini_cash_prompt
+                                    if camera.gemini_violence_prompt:
+                                        custom_prompts['violence'] = camera.gemini_violence_prompt
+                                    if camera.gemini_fire_prompt:
+                                        custom_prompts['fire'] = camera.gemini_fire_prompt
+                                    if custom_prompts:
+                                        validator.set_custom_prompts(custom_prompts)
+                                    
                                     gemini_validated, gemini_confidence, gemini_reason = validator.validate_event(frame, event_type)
                                     print(f"[Worker-{camera_id}] Gemini validation: {event_type} = {gemini_validated} ({gemini_reason})")
                                     

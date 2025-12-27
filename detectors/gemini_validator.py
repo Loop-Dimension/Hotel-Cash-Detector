@@ -13,7 +13,9 @@ Usage:
 import cv2
 import json
 import os
-from typing import Tuple, Optional
+import time
+from typing import Tuple, Optional, Dict
+from pathlib import Path
 from google import genai
 from google.genai import types
 
@@ -23,6 +25,7 @@ class GeminiValidator:
     Validates detection events using Google Gemini Vision API.
     
     This acts as a filter layer - only events confirmed by Gemini are stored.
+    Supports custom prompts per camera and logging of all validations.
     """
     
     # Gemini API - use gemini-2.5-flash-lite (cheapest, FREE standard tier)
@@ -31,7 +34,7 @@ class GeminiValidator:
     # https://ai.google.dev/gemini-api/docs/pricing
     MODEL_NAME = "gemini-2.5-flash-lite"
     
-    # Validation prompts for each event type
+    # Default validation prompts for each event type
     PROMPTS = {
         'cash': """Analyze this CCTV image from a cash register area. 
 Determine if there is a CASH TRANSACTION happening.
@@ -110,17 +113,21 @@ Respond in JSON format ONLY:
 }"""
     }
     
-    def __init__(self, api_key: str = None, enabled: bool = True):
+    def __init__(self, api_key: str = None, enabled: bool = True, camera_id: int = None):
         """
         Initialize the Gemini validator.
         
         Args:
             api_key: Google Gemini API key. If None, reads from GEMINI_API_KEY env var.
             enabled: If False, all validations return True (bypass mode).
+            camera_id: Camera ID for logging and custom prompts.
         """
         self.api_key = api_key or os.environ.get('GEMINI_API_KEY', '')
         self.enabled = enabled and bool(self.api_key)
         self.client = None
+        self.camera_id = camera_id
+        self.custom_prompts = {}  # Custom prompts per event type
+        self.last_validation_log = None  # Store last validation for debugging
         
         if self.enabled:
             try:
@@ -133,11 +140,62 @@ Respond in JSON format ONLY:
         if not self.api_key and enabled:
             print("[GeminiValidator] Warning: No API key provided, validation disabled")
     
+    def set_custom_prompts(self, prompts: Dict[str, str]):
+        """Set custom prompts for event types"""
+        self.custom_prompts = prompts
+    
+    def get_prompt(self, event_type: str) -> str:
+        """Get prompt for event type (custom or default)"""
+        return self.custom_prompts.get(event_type) or self.PROMPTS.get(event_type, '')
+    
     def _encode_image(self, frame):
         """Convert OpenCV frame to bytes for Gemini API."""
         # Encode frame as JPEG
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         return buffer.tobytes()
+    
+    def _save_validation_image(self, frame, event_type: str) -> Optional[str]:
+        """Save validation image for debugging/logging"""
+        try:
+            from datetime import datetime
+            from django.conf import settings
+            
+            # Create gemini_logs directory
+            log_dir = Path(settings.MEDIA_ROOT) / 'gemini_logs'
+            log_dir.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            filename = f"{event_type}_{self.camera_id or 'unknown'}_{timestamp}.jpg"
+            filepath = log_dir / filename
+            
+            cv2.imwrite(str(filepath), frame)
+            return str(filepath.relative_to(settings.MEDIA_ROOT))
+        except Exception as e:
+            print(f"[GeminiValidator] Failed to save validation image: {e}")
+            return None
+    
+    def _log_validation(self, camera_id: int, event_type: str, is_valid: bool, 
+                        confidence: float, reason: str, prompt: str, 
+                        response_raw: str, image_path: str, processing_time_ms: int):
+        """Log validation result to database"""
+        try:
+            from cctv.models import GeminiLog, Camera
+            
+            camera = Camera.objects.get(id=camera_id) if camera_id else None
+            if camera:
+                GeminiLog.objects.create(
+                    camera=camera,
+                    event_type=event_type,
+                    is_validated=is_valid,
+                    confidence=confidence,
+                    reason=reason,
+                    prompt_used=prompt,
+                    response_raw=response_raw,
+                    image_path=image_path,
+                    processing_time_ms=processing_time_ms
+                )
+        except Exception as e:
+            print(f"[GeminiValidator] Failed to log validation: {e}")
     
     def _call_gemini_api(self, image_bytes: bytes, prompt: str) -> dict:
         """
@@ -198,13 +256,14 @@ Respond in JSON format ONLY:
             print(f"[GeminiValidator] API error: {e}")
             return {"error": str(e)}
     
-    def validate_event(self, frame, event_type: str) -> Tuple[bool, float, str]:
+    def validate_event(self, frame, event_type: str, save_image: bool = True) -> Tuple[bool, float, str]:
         """
         Validate a detection event using Gemini AI.
         
         Args:
             frame: OpenCV frame (numpy array) to analyze
             event_type: Type of event ('cash', 'violence', 'fire')
+            save_image: Whether to save the validation image for logging
             
         Returns:
             Tuple of (is_valid, confidence, reason)
@@ -212,12 +271,18 @@ Respond in JSON format ONLY:
             - confidence: Gemini's confidence score (0.0-1.0)
             - reason: Explanation from Gemini
         """
+        start_time = time.time()
+        image_path = None
+        prompt = ""
+        response_raw = ""
+        
         # If disabled or no API key, bypass validation
         if not self.enabled:
             return True, 1.0, "Validation bypassed (no API key)"
         
-        # Check for valid event type
-        if event_type not in self.PROMPTS:
+        # Get prompt (custom or default)
+        prompt = self.get_prompt(event_type)
+        if not prompt:
             print(f"[GeminiValidator] Unknown event type: {event_type}")
             return True, 1.0, f"Unknown event type: {event_type}"
         
@@ -226,14 +291,16 @@ Respond in JSON format ONLY:
             return False, 0.0, "Invalid frame"
         
         try:
+            # Save image for logging if enabled
+            if save_image and self.camera_id:
+                image_path = self._save_validation_image(frame, event_type)
+            
             # Encode image
             image_bytes = self._encode_image(frame)
             
-            # Get prompt for event type
-            prompt = self.PROMPTS[event_type]
-            
             # Call Gemini API
             result = self._call_gemini_api(image_bytes, prompt)
+            response_raw = json.dumps(result)
             
             # Check for errors
             if 'error' in result:
@@ -253,6 +320,28 @@ Respond in JSON format ONLY:
             
             confidence = result.get('confidence', 0.0)
             reason = result.get('reason', 'No reason provided')
+            
+            # Calculate processing time
+            processing_time_ms = int((time.time() - start_time) * 1000)
+            
+            # Store for debugging
+            self.last_validation_log = {
+                'event_type': event_type,
+                'is_valid': is_valid,
+                'confidence': confidence,
+                'reason': reason,
+                'prompt': prompt,
+                'response': result,
+                'image_path': image_path,
+                'processing_time_ms': processing_time_ms
+            }
+            
+            # Log to database
+            if self.camera_id:
+                self._log_validation(
+                    self.camera_id, event_type, is_valid, confidence, 
+                    reason, prompt, response_raw, image_path, processing_time_ms
+                )
             
             print(f"[GeminiValidator] {event_type}: valid={is_valid}, conf={confidence:.2f}, reason={reason}")
             

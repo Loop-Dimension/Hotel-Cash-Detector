@@ -26,6 +26,10 @@ urlpatterns = [
     path('api/test/upload/', views.api_test_upload, name='api_test_upload'),
     path('api/test/process/', views.api_test_process, name='api_test_process'),
     
+    # Gemini AI Pages (Global)
+    path('gemini/prompts/', views.gemini_prompts_page, name='gemini_prompts'),
+    path('gemini/logs/', views.gemini_logs_page, name='gemini_logs'),
+    
     # Branch management
     path('manage/branches/', views.manage_branches, name='manage_branches'),
     path('manage/branches/<int:branch_id>/', views.manage_branch_detail, name='manage_branch_detail'),
@@ -91,4 +95,17 @@ urlpatterns = [
     path('api/workers/stop-all/', views.stop_all_background_workers, name='api_workers_stop_all'),
     path('api/workers/<int:camera_id>/start/', views.start_background_worker, name='api_worker_start'),
     path('api/workers/<int:camera_id>/stop/', views.stop_background_worker, name='api_worker_stop'),
+    
+    # Gemini AI Logs & Prompts API (Camera-specific)
+    path('api/cameras/<int:camera_id>/gemini/logs/', views.api_gemini_logs, name='api_gemini_logs'),
+    path('api/gemini/logs/<int:log_id>/', views.api_gemini_log_detail, name='api_gemini_log_detail'),
+    path('api/cameras/<int:camera_id>/gemini/prompts/', views.api_gemini_prompts, name='api_gemini_prompts'),
+    path('api/cameras/<int:camera_id>/gemini/reset-prompts/', views.api_gemini_reset_prompts, name='api_gemini_reset_prompts'),
+    
+    # Gemini AI API (Global)
+    path('api/gemini/global-prompts/', views.api_gemini_global_prompts, name='api_gemini_global_prompts'),
+    path('api/gemini/all-logs/', views.api_gemini_all_logs, name='api_gemini_all_logs'),
+    
+    # Polygon Zones API
+    path('api/cameras/<int:camera_id>/polygon-zones/', views.api_polygon_zones, name='api_polygon_zones'),
 ]

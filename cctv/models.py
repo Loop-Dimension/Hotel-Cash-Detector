@@ -115,6 +115,16 @@ class Camera(models.Model):
     # Hand tracking duration (frames) - how long to track cashier's hand after touch
     hand_tracking_duration = models.IntegerField(default=90)  # ~3 seconds at 30fps
     
+    # Polygon zone support (free-form shapes instead of rectangles)
+    use_polygon_zones = models.BooleanField(default=False, help_text='Use polygon zones instead of rectangular zones')
+    cashier_zone_polygon = models.TextField(blank=True, null=True, help_text='JSON array of polygon points [[x1,y1],[x2,y2],...] for cashier zone')
+    cash_drawer_zone_polygon = models.TextField(blank=True, null=True, help_text='JSON array of polygon points [[x1,y1],[x2,y2],...] for cash drawer zone')
+    
+    # Custom Gemini prompts per camera
+    gemini_cash_prompt = models.TextField(blank=True, null=True, help_text='Custom Gemini prompt for cash detection validation')
+    gemini_violence_prompt = models.TextField(blank=True, null=True, help_text='Custom Gemini prompt for violence detection validation')
+    gemini_fire_prompt = models.TextField(blank=True, null=True, help_text='Custom Gemini prompt for fire detection validation')
+    
     # Independent confidence thresholds per camera
     cash_confidence = models.FloatField(default=0.5)
     violence_confidence = models.FloatField(default=0.6)
@@ -184,6 +194,53 @@ class Camera(models.Model):
         self.cash_drawer_zone_enabled = enabled
         self.save()
     
+    def get_cashier_zone_polygon_points(self):
+        """Get cashier zone as polygon points list"""
+        import json
+        if self.cashier_zone_polygon:
+            try:
+                return json.loads(self.cashier_zone_polygon)
+            except json.JSONDecodeError:
+                pass
+        # Return None if no polygon exists
+        return None
+    
+    def set_cashier_zone_polygon(self, points, enabled=True):
+        """Set cashier zone from polygon points [[x1,y1], [x2,y2], ...]"""
+        import json
+        self.cashier_zone_polygon = json.dumps(points)
+        self.cashier_zone_enabled = enabled
+        self.use_polygon_zones = True
+        self.save()
+    
+    def get_cash_drawer_zone_polygon_points(self):
+        """Get cash drawer zone as polygon points list"""
+        import json
+        if self.cash_drawer_zone_polygon:
+            try:
+                return json.loads(self.cash_drawer_zone_polygon)
+            except json.JSONDecodeError:
+                pass
+        # Return None if no polygon exists
+        return None
+    
+    def set_cash_drawer_zone_polygon(self, points, enabled=True):
+        """Set cash drawer zone from polygon points [[x1,y1], [x2,y2], ...]"""
+        import json
+        self.cash_drawer_zone_polygon = json.dumps(points)
+        self.cash_drawer_zone_enabled = enabled
+        self.use_polygon_zones = True
+        self.save()
+    
+    def get_gemini_prompts(self):
+        """Get custom Gemini prompts (or defaults)"""
+        from detectors.gemini_validator import GeminiValidator
+        return {
+            'cash': self.gemini_cash_prompt or GeminiValidator.PROMPTS.get('cash', ''),
+            'violence': self.gemini_violence_prompt or GeminiValidator.PROMPTS.get('violence', ''),
+            'fire': self.gemini_fire_prompt or GeminiValidator.PROMPTS.get('fire', ''),
+        }
+    
     def get_confidence_thresholds(self):
         """Get all confidence thresholds"""
         return {
@@ -203,7 +260,10 @@ class Camera(models.Model):
             'fire_confidence': self.fire_confidence,
             'cashier_zone': self.get_cashier_zone(),
             'cash_drawer_zone': self.get_cash_drawer_zone(),
-            'hand_tracking_duration': self.hand_tracking_duration
+            'hand_tracking_duration': self.hand_tracking_duration,
+            'use_polygon_zones': self.use_polygon_zones,
+            'cashier_zone_polygon': self.get_cashier_zone_polygon_points() if self.use_polygon_zones else None,
+            'cash_drawer_zone_polygon': self.get_cash_drawer_zone_polygon_points() if self.use_polygon_zones else None,
         }
 
 
@@ -298,3 +358,25 @@ class BranchAccount(models.Model):
     
     def __str__(self):
         return f"{self.name} - {self.branch.name} ({self.get_role_display()})"
+
+
+class GeminiLog(models.Model):
+    """Logs for Gemini AI validation events"""
+    camera = models.ForeignKey(Camera, on_delete=models.CASCADE, related_name='gemini_logs')
+    event_type = models.CharField(max_length=20)  # cash, violence, fire
+    is_validated = models.BooleanField(default=False)
+    confidence = models.FloatField(default=0.0)
+    reason = models.TextField(blank=True)
+    prompt_used = models.TextField(blank=True)
+    response_raw = models.TextField(blank=True, help_text='Raw JSON response from Gemini')
+    image_path = models.CharField(max_length=500, blank=True, null=True)
+    processing_time_ms = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'gemini_logs'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        status = "✓" if self.is_validated else "✗"
+        return f"[{status}] {self.event_type} - {self.camera.camera_id} ({self.created_at.strftime('%Y-%m-%d %H:%M')})"

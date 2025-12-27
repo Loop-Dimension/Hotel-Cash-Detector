@@ -29,6 +29,8 @@ class CashTransactionDetector(BaseDetector):
     Detection only triggers when:
     1. Customer touches Cashier's hand (proximity check)
     2. Cashier's hand then moves to Cash Drawer zone
+    
+    Supports both rectangular and polygon zones.
     """
     
     def __init__(self, config: Dict = None):
@@ -36,11 +38,17 @@ class CashTransactionDetector(BaseDetector):
         self.pose_model = None
         self.person_model = None
         
-        # Cashier zone (where cashier stands)
+        # Cashier zone (where cashier stands) - rectangle format
         self.cashier_zone = config.get('cashier_zone', [100, 100, 400, 300])
         
-        # Cash Drawer zone (where money is deposited)
+        # Cash Drawer zone (where money is deposited) - rectangle format
         self.cash_drawer_zone = config.get('cash_drawer_zone', [50, 200, 150, 100])
+        
+        # Polygon zones (free-form shapes) - list of [x, y] points
+        # POLYGON-ONLY MODE: Always use polygons if they exist
+        self.use_polygon_zones = config.get('use_polygon_zones', True)
+        self.cashier_zone_polygon = config.get('cashier_zone_polygon', None)
+        self.cash_drawer_zone_polygon = config.get('cash_drawer_zone_polygon', None)
         
         # Video dimensions
         self.video_width = config.get('video_width', 1920)
@@ -151,17 +159,53 @@ class CashTransactionDetector(BaseDetector):
         """Update hand tracking duration (frames after touch)"""
         self.hand_tracking_duration = max(15, min(300, frames))
     
-    def is_in_cashier_zone(self, point: Tuple[int, int]) -> bool:
-        """Check if a point is inside the cashier zone"""
+    def set_polygon_zones(self, cashier_polygon: List = None, cash_drawer_polygon: List = None):
+        """Set polygon zones for free-form zone shapes"""
+        if cashier_polygon:
+            self.cashier_zone_polygon = cashier_polygon
+            self.use_polygon_zones = True
+        if cash_drawer_polygon:
+            self.cash_drawer_zone_polygon = cash_drawer_polygon
+            self.use_polygon_zones = True
+    
+    def _point_in_polygon(self, point: Tuple[int, int], polygon: List) -> bool:
+        """Check if a point is inside a polygon using ray casting algorithm"""
+        if not polygon or len(polygon) < 3:
+            return False
+        
         x, y = point
-        zx, zy, zw, zh = self.cashier_zone
-        return zx <= x <= zx + zw and zy <= y <= zy + zh
+        n = len(polygon)
+        inside = False
+        
+        p1x, p1y = polygon[0]
+        for i in range(1, n + 1):
+            p2x, p2y = polygon[i % n]
+            if y > min(p1y, p2y):
+                if y <= max(p1y, p2y):
+                    if x <= max(p1x, p2x):
+                        if p1y != p2y:
+                            xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                        if p1x == p2x or x <= xinters:
+                            inside = not inside
+            p1x, p1y = p2x, p2y
+        
+        return inside
+    
+    def is_in_cashier_zone(self, point: Tuple[int, int]) -> bool:
+        """Check if a point is inside the cashier zone (polygon only)"""
+        if self.use_polygon_zones and self.cashier_zone_polygon and len(self.cashier_zone_polygon) >= 3:
+            return self._point_in_polygon(point, self.cashier_zone_polygon)
+        
+        # No polygon defined - return False (polygon-only mode)
+        return False
     
     def is_in_cash_drawer_zone(self, point: Tuple[int, int]) -> bool:
-        """Check if a point is inside the cash drawer zone"""
-        x, y = point
-        zx, zy, zw, zh = self.cash_drawer_zone
-        return zx <= x <= zx + zw and zy <= y <= zy + zh
+        """Check if a point is inside the cash drawer zone (polygon only)"""
+        if self.use_polygon_zones and self.cash_drawer_zone_polygon and len(self.cash_drawer_zone_polygon) >= 3:
+            return self._point_in_polygon(point, self.cash_drawer_zone_polygon)
+        
+        # No polygon defined - return False (polygon-only mode)
+        return False
     
     def get_person_center(self, keypoints: np.ndarray, bbox: Tuple[int, int, int, int]) -> Tuple[int, int]:
         """
@@ -208,53 +252,29 @@ class CashTransactionDetector(BaseDetector):
         """
         Check if a person is in the cashier zone using MAJORITY BODY AREA.
         
-        Uses the bounding box area overlap - if more than 50% of the body
-        is inside the cashier zone, they are classified as cashier.
-        This prevents one person being detected as both cashier and client
-        when they're straddling the zone boundary.
+        For polygon zones: uses center point check.
+        For polygon zones: checks if person's center is inside the polygon.
+        For backward compatibility with rectangle zones still checks overlap,
+        but polygon mode is the primary mode now.
         """
-        x1, y1, x2, y2 = bbox
-        zx, zy, zw, zh = self.cashier_zone
+        # For polygon zones, use center point (polygon-only mode)
+        if self.use_polygon_zones and self.cashier_zone_polygon and len(self.cashier_zone_polygon) >= 3:
+            center = self.get_person_center(keypoints, bbox)
+            return self._point_in_polygon(center, self.cashier_zone_polygon)
         
-        # Calculate intersection area
-        ix1 = max(x1, zx)
-        iy1 = max(y1, zy)
-        ix2 = min(x2, zx + zw)
-        iy2 = min(y2, zy + zh)
-        
-        if ix2 <= ix1 or iy2 <= iy1:
-            # No overlap - person is outside zone
-            return False
-        
-        intersection = (ix2 - ix1) * (iy2 - iy1)
-        box_area = (x2 - x1) * (y2 - y1)
-        
-        if box_area <= 0:
-            return False
-        
-        overlap_ratio = intersection / box_area
-        
-        # If more than 50% of body is in zone, classify as inside
-        return overlap_ratio > 0.5
+        # No valid polygon defined - return False (polygon-only mode)
+        return False
     
     def is_box_in_cashier_zone(self, bbox: Tuple[int, int, int, int], threshold: float = 0.3) -> bool:
-        """Check if a bounding box overlaps with cashier zone (legacy, kept for compatibility)"""
-        x1, y1, x2, y2 = bbox
-        zx, zy, zw, zh = self.cashier_zone
+        """Check if a bounding box overlaps with cashier zone (polygon-only)"""
+        # For polygon zones, check center point
+        if self.use_polygon_zones and self.cashier_zone_polygon and len(self.cashier_zone_polygon) >= 3:
+            x1, y1, x2, y2 = bbox
+            center = (int((x1 + x2) / 2), int((y1 + y2) / 2))
+            return self._point_in_polygon(center, self.cashier_zone_polygon)
         
-        # Calculate intersection
-        ix1 = max(x1, zx)
-        iy1 = max(y1, zy)
-        ix2 = min(x2, zx + zw)
-        iy2 = min(y2, zy + zh)
-        
-        if ix2 <= ix1 or iy2 <= iy1:
-            return False
-        
-        intersection = (ix2 - ix1) * (iy2 - iy1)
-        box_area = (x2 - x1) * (y2 - y1)
-        
-        return (intersection / box_area) >= threshold if box_area > 0 else False
+        # No valid polygon defined - return False (polygon-only mode)
+        return False
     
     def get_hand_positions(self, keypoints: np.ndarray, confidence_threshold: float = 0.3) -> Dict:
         """Extract hand (wrist) positions from pose keypoints"""
@@ -652,20 +672,27 @@ class CashTransactionDetector(BaseDetector):
         self.cashier_hand_history.clear()
     
     def draw_cashier_zone(self, frame: np.ndarray) -> np.ndarray:
-        """Draw the cashier zone overlay on frame"""
-        x, y, w, h = self.cashier_zone
-        
-        # Draw semi-transparent overlay
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 255, 255), -1)
-        cv2.addWeighted(overlay, 0.1, frame, 0.9, 0, frame)
-        
-        # Draw border
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 255), 2)
-        
-        # Draw label
-        cv2.putText(frame, "CASHIER ZONE", (x + 5, y + 25),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        """Draw the cashier zone overlay on frame - POLYGON ONLY"""
+        # Draw polygon if exists (polygon-only mode, no rectangle fallback)
+        if self.use_polygon_zones and self.cashier_zone_polygon and len(self.cashier_zone_polygon) >= 3:
+            # Draw polygon zone
+            points = np.array(self.cashier_zone_polygon, np.int32)
+            points = points.reshape((-1, 1, 2))
+            
+            # Draw semi-transparent overlay
+            overlay = frame.copy()
+            cv2.fillPoly(overlay, [points], (0, 255, 255))
+            cv2.addWeighted(overlay, 0.1, frame, 0.9, 0, frame)
+            
+            # Draw border
+            cv2.polylines(frame, [points], True, (0, 255, 255), 2)
+            
+            # Draw label at first point
+            if len(self.cashier_zone_polygon) > 0:
+                label_x, label_y = int(self.cashier_zone_polygon[0][0]), int(self.cashier_zone_polygon[0][1])
+                cv2.putText(frame, "CASHIER ZONE", (label_x + 5, label_y + 25),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        # No rectangle fallback - polygon only mode
         
         return frame
     

@@ -392,6 +392,38 @@ def test_detection(request):
     return render(request, 'cctv/test_detection.html', context)
 
 
+@login_required
+def gemini_prompts_page(request):
+    """Global Gemini Prompts page (Admin only)"""
+    user = request.user
+    if not user.is_admin():
+        return redirect('cctv:home')
+    
+    context = {
+        'user': user,
+        'active_page': 'gemini-prompts',
+    }
+    return render(request, 'cctv/gemini_prompts.html', context)
+
+
+@login_required
+def gemini_logs_page(request):
+    """Global Gemini Logs page (Admin only)"""
+    user = request.user
+    if not user.is_admin():
+        return redirect('cctv:home')
+    
+    # Get all cameras for filter dropdown
+    cameras = Camera.objects.all().order_by('name')
+    
+    context = {
+        'user': user,
+        'active_page': 'gemini-logs',
+        'cameras': cameras,
+    }
+    return render(request, 'cctv/gemini_logs.html', context)
+
+
 # ==================== API ENDPOINTS ====================
 
 @login_required
@@ -1065,6 +1097,14 @@ def api_set_cashier_zone(request, camera_id):
             data.get('enabled', True)
         )
     
+    # Save polygon data if provided
+    if 'polygon' in data and data['polygon']:
+        camera.cashier_zone_polygon = json.dumps(data['polygon'])
+        camera.save()
+    elif 'polygon' in data and data['polygon'] is None:
+        camera.cashier_zone_polygon = None
+        camera.save()
+    
     return JsonResponse({'success': True, 'cashier_zone': camera.get_cashier_zone()})
 
 
@@ -1103,6 +1143,14 @@ def api_set_cash_drawer_zone(request, camera_id):
             data.get('height', camera.cash_drawer_zone_height),
             data.get('enabled', True)
         )
+    
+    # Save polygon data if provided
+    if 'polygon' in data and data['polygon']:
+        camera.cash_drawer_zone_polygon = json.dumps(data['polygon'])
+        camera.save()
+    elif 'polygon' in data and data['polygon'] is None:
+        camera.cash_drawer_zone_polygon = None
+        camera.save()
     
     return JsonResponse({'success': True, 'cash_drawer_zone': camera.get_cash_drawer_zone()})
 
@@ -1146,7 +1194,7 @@ def api_camera_settings(request, camera_id):
     if 'hand_tracking_duration' in data:
         camera.hand_tracking_duration = max(30, min(300, int(data['hand_tracking_duration'])))
     
-    # Cashier zone
+    # Cashier zone (rectangle)
     if 'cashier_zone' in data:
         zone = data['cashier_zone']
         camera.cashier_zone_x = int(zone.get('x', camera.cashier_zone_x))
@@ -1163,6 +1211,24 @@ def api_camera_settings(request, camera_id):
         camera.cash_drawer_zone_width = int(zone.get('width', camera.cash_drawer_zone_width))
         camera.cash_drawer_zone_height = int(zone.get('height', camera.cash_drawer_zone_height))
         camera.cash_drawer_zone_enabled = bool(zone.get('enabled', camera.cash_drawer_zone_enabled))
+    
+    # Polygon zones (free-form shapes)
+    if 'use_polygon_zones' in data:
+        camera.use_polygon_zones = bool(data['use_polygon_zones'])
+    if 'cashier_zone_polygon' in data:
+        import json as json_module
+        camera.cashier_zone_polygon = json_module.dumps(data['cashier_zone_polygon']) if data['cashier_zone_polygon'] else None
+    if 'cash_drawer_zone_polygon' in data:
+        import json as json_module
+        camera.cash_drawer_zone_polygon = json_module.dumps(data['cash_drawer_zone_polygon']) if data['cash_drawer_zone_polygon'] else None
+    
+    # Custom Gemini prompts
+    if 'gemini_cash_prompt' in data:
+        camera.gemini_cash_prompt = data['gemini_cash_prompt'] or None
+    if 'gemini_violence_prompt' in data:
+        camera.gemini_violence_prompt = data['gemini_violence_prompt'] or None
+    if 'gemini_fire_prompt' in data:
+        camera.gemini_fire_prompt = data['gemini_fire_prompt'] or None
     
     camera.save()
     
@@ -1603,6 +1669,30 @@ def generate_debug_frames(camera):
         cap.release()
 
 
+def point_in_polygon(point, polygon):
+    """Check if a point is inside a polygon using ray casting algorithm"""
+    if not polygon or len(polygon) < 3:
+        return False
+    
+    x, y = point
+    n = len(polygon)
+    inside = False
+    
+    p1x, p1y = polygon[0]
+    for i in range(1, n + 1):
+        p2x, p2y = polygon[i % n]
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xinters:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    
+    return inside
+
+
 def draw_debug_frame(frame, camera, pose_model=None, fps=0.0):
     """Draw comprehensive debug overlay on frame with poses, distances, and roles"""
     h, w = frame.shape[:2]
@@ -1620,22 +1710,40 @@ def draw_debug_frame(frame, camera, pose_model=None, fps=0.0):
                     camera.cashier_zone_width, camera.cashier_zone_height]
     zx, zy, zw, zh = cashier_zone
     
-    # Draw cashier zone with label
-    cv2.rectangle(frame, (zx, zy), (zx + zw, zy + zh), (0, 255, 255), 3)
-    cv2.rectangle(frame, (zx, zy - 30), (zx + 150, zy), (0, 255, 255), -1)
-    cv2.putText(frame, "CASHIER ZONE", (zx + 5, zy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+    # Draw cashier zone (POLYGON ONLY - no rectangle fallback)
+    if camera.cashier_zone_polygon:
+        try:
+            cashier_polygon = json.loads(camera.cashier_zone_polygon)
+            if len(cashier_polygon) >= 3:
+                # Draw polygon
+                points = np.array(cashier_polygon, np.int32)
+                points = points.reshape((-1, 1, 2))
+                cv2.polylines(frame, [points], True, (0, 255, 255), 3)
+                # Label at first point
+                label_x, label_y = int(cashier_polygon[0][0]), int(cashier_polygon[0][1])
+                cv2.rectangle(frame, (label_x, label_y - 30), (label_x + 150, label_y), (0, 255, 255), -1)
+                cv2.putText(frame, "CASHIER ZONE", (label_x + 5, label_y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        except Exception as e:
+            pass  # No fallback to rectangle
+    # No rectangle fallback - polygon only mode
     
-    # Draw cash drawer zone (for two-step detection) if enabled
+    # Draw cash drawer zone (POLYGON ONLY) if enabled
     if camera.cash_drawer_zone_enabled:
-        cdx = camera.cash_drawer_zone_x
-        cdy = camera.cash_drawer_zone_y
-        cdw = camera.cash_drawer_zone_width
-        cdh = camera.cash_drawer_zone_height
-        
-        # Draw cash drawer zone with green color
-        cv2.rectangle(frame, (cdx, cdy), (cdx + cdw, cdy + cdh), (0, 255, 0), 3)
-        cv2.rectangle(frame, (cdx, cdy - 30), (cdx + 180, cdy), (0, 255, 0), -1)
-        cv2.putText(frame, "CASH DRAWER", (cdx + 5, cdy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        if camera.cash_drawer_zone_polygon:
+            try:
+                drawer_polygon = json.loads(camera.cash_drawer_zone_polygon)
+                if len(drawer_polygon) >= 3:
+                    # Draw polygon
+                    points = np.array(drawer_polygon, np.int32)
+                    points = points.reshape((-1, 1, 2))
+                    cv2.polylines(frame, [points], True, (0, 255, 0), 3)
+                    # Label at first point
+                    label_x, label_y = int(drawer_polygon[0][0]), int(drawer_polygon[0][1])
+                    cv2.rectangle(frame, (label_x, label_y - 30), (label_x + 180, label_y), (0, 255, 0), -1)
+                    cv2.putText(frame, "CASH DRAWER", (label_x + 5, label_y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+            except Exception as e:
+                pass  # No fallback to rectangle
+        # No rectangle fallback - polygon only mode
     
     # Get pose model if not provided
     if pose_model is None:
@@ -1667,10 +1775,18 @@ def draw_debug_frame(frame, camera, pose_model=None, fps=0.0):
                     x1, y1, x2, y2 = map(int, box)
                     person_conf = float(conf)  # Person detection confidence
                     
-                    # Determine if person is in cashier zone
+                    # Determine if person is in cashier zone (POLYGON-ONLY MODE)
                     person_center = ((x1 + x2) // 2, (y1 + y2) // 2)
-                    in_zone = (zx <= person_center[0] <= zx + zw and 
-                               zy <= person_center[1] <= zy + zh)
+                    
+                    # Check against polygon if exists
+                    in_zone = False
+                    if camera.cashier_zone_polygon:
+                        try:
+                            cashier_poly = json.loads(camera.cashier_zone_polygon)
+                            if len(cashier_poly) >= 3:
+                                in_zone = point_in_polygon(person_center, cashier_poly)
+                        except:
+                            pass
                     
                     # Label as Cashier or Client with confidence
                     role = "CASHIER" if in_zone else "CLIENT"
@@ -3764,3 +3880,341 @@ def api_test_process(request):
         import traceback
         traceback.print_exc()
         return JsonResponse({'error': str(e)}, status=500)
+
+
+# ==================== GEMINI LOGS & PROMPTS API ====================
+
+@login_required
+def api_gemini_logs(request, camera_id):
+    """Get Gemini validation logs for a camera"""
+    from .models import GeminiLog
+    
+    user = request.user
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    if not user.is_admin() and camera.branch not in get_user_branches(user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    # Get filter parameters
+    limit = int(request.GET.get('limit', 50))
+    event_type = request.GET.get('type', '')
+    validated_only = request.GET.get('validated', '').lower() == 'true'
+    rejected_only = request.GET.get('rejected', '').lower() == 'true'
+    
+    logs = GeminiLog.objects.filter(camera=camera)
+    
+    if event_type:
+        logs = logs.filter(event_type=event_type)
+    if validated_only:
+        logs = logs.filter(is_validated=True)
+    if rejected_only:
+        logs = logs.filter(is_validated=False)
+    
+    logs = logs.order_by('-created_at')[:limit]
+    
+    data = [{
+        'id': log.id,
+        'event_type': log.event_type,
+        'is_validated': log.is_validated,
+        'confidence': log.confidence,
+        'reason': log.reason,
+        'prompt_used': log.prompt_used[:200] + '...' if len(log.prompt_used) > 200 else log.prompt_used,
+        'response_raw': log.response_raw,
+        'image_path': f'/media/{log.image_path}' if log.image_path else None,
+        'processing_time_ms': log.processing_time_ms,
+        'created_at': log.created_at.isoformat(),
+    } for log in logs]
+    
+    return JsonResponse({
+        'logs': data,
+        'total': GeminiLog.objects.filter(camera=camera).count(),
+        'validated_count': GeminiLog.objects.filter(camera=camera, is_validated=True).count(),
+        'rejected_count': GeminiLog.objects.filter(camera=camera, is_validated=False).count(),
+    })
+
+
+@login_required
+def api_gemini_log_detail(request, log_id):
+    """Get detailed info for a specific Gemini log"""
+    from .models import GeminiLog
+    
+    user = request.user
+    log = get_object_or_404(GeminiLog, id=log_id)
+    
+    if not user.is_admin() and log.camera.branch not in get_user_branches(user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    return JsonResponse({
+        'id': log.id,
+        'camera_id': log.camera.id,
+        'camera_name': log.camera.name,
+        'event_type': log.event_type,
+        'is_validated': log.is_validated,
+        'confidence': log.confidence,
+        'reason': log.reason,
+        'prompt_used': log.prompt_used,
+        'response_raw': log.response_raw,
+        'image_path': f'/media/{log.image_path}' if log.image_path else None,
+        'processing_time_ms': log.processing_time_ms,
+        'created_at': log.created_at.isoformat(),
+    })
+
+
+@login_required
+def api_gemini_prompts(request, camera_id):
+    """Get or update Gemini prompts for a camera"""
+    user = request.user
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    if not user.is_admin() and camera.branch not in get_user_branches(user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    if request.method == 'GET':
+        # Get default prompts from GeminiValidator
+        if GEMINI_AVAILABLE:
+            from detectors.gemini_validator import GeminiValidator
+            default_prompts = GeminiValidator.PROMPTS
+        else:
+            default_prompts = {'cash': '', 'violence': '', 'fire': ''}
+        
+        return JsonResponse({
+            'prompts': {
+                'cash': camera.gemini_cash_prompt or '',
+                'violence': camera.gemini_violence_prompt or '',
+                'fire': camera.gemini_fire_prompt or '',
+            },
+            'defaults': default_prompts,
+            'using_custom': {
+                'cash': bool(camera.gemini_cash_prompt),
+                'violence': bool(camera.gemini_violence_prompt),
+                'fire': bool(camera.gemini_fire_prompt),
+            }
+        })
+    
+    elif request.method == 'POST':
+        data = json.loads(request.body)
+        
+        if 'cash' in data:
+            camera.gemini_cash_prompt = data['cash'] or None
+        if 'violence' in data:
+            camera.gemini_violence_prompt = data['violence'] or None
+        if 'fire' in data:
+            camera.gemini_fire_prompt = data['fire'] or None
+        
+        camera.save()
+        
+        return JsonResponse({
+            'success': True,
+            'prompts': {
+                'cash': camera.gemini_cash_prompt or '',
+                'violence': camera.gemini_violence_prompt or '',
+                'fire': camera.gemini_fire_prompt or '',
+            }
+        })
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+@login_required
+def api_gemini_reset_prompts(request, camera_id):
+    """Reset Gemini prompts to defaults for a camera"""
+    user = request.user
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    if not user.is_admin() and camera.branch not in get_user_branches(user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    if request.method == 'POST':
+        camera.gemini_cash_prompt = None
+        camera.gemini_violence_prompt = None
+        camera.gemini_fire_prompt = None
+        camera.save()
+        
+        return JsonResponse({'success': True, 'message': 'Prompts reset to defaults'})
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+@login_required
+def api_polygon_zones(request, camera_id):
+    """Get or update polygon zones for a camera"""
+    user = request.user
+    camera = get_object_or_404(Camera, id=camera_id)
+    
+    if not user.is_admin() and camera.branch not in get_user_branches(user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    if request.method == 'GET':
+        return JsonResponse({
+            'use_polygon_zones': camera.use_polygon_zones,
+            'cashier_zone_polygon': camera.get_cashier_zone_polygon_points() if camera.use_polygon_zones else None,
+            'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points() if camera.use_polygon_zones else None,
+            'cashier_zone_enabled': camera.cashier_zone_enabled,
+            'cash_drawer_zone_enabled': camera.cash_drawer_zone_enabled,
+        })
+    
+    elif request.method == 'POST':
+        data = json.loads(request.body)
+        
+        if 'use_polygon_zones' in data:
+            camera.use_polygon_zones = bool(data['use_polygon_zones'])
+        
+        if 'cashier_zone_polygon' in data:
+            points = data['cashier_zone_polygon']
+            if points and len(points) >= 3:
+                camera.cashier_zone_polygon = json.dumps(points)
+                camera.cashier_zone_enabled = data.get('cashier_zone_enabled', True)
+            else:
+                camera.cashier_zone_polygon = None
+        
+        if 'cash_drawer_zone_polygon' in data:
+            points = data['cash_drawer_zone_polygon']
+            if points and len(points) >= 3:
+                camera.cash_drawer_zone_polygon = json.dumps(points)
+                camera.cash_drawer_zone_enabled = data.get('cash_drawer_zone_enabled', True)
+            else:
+                camera.cash_drawer_zone_polygon = None
+        
+        camera.save()
+        
+        return JsonResponse({
+            'success': True,
+            'use_polygon_zones': camera.use_polygon_zones,
+            'cashier_zone_polygon': camera.get_cashier_zone_polygon_points() if camera.use_polygon_zones else None,
+            'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points() if camera.use_polygon_zones else None,
+        })
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+# ==================== GLOBAL GEMINI API ENDPOINTS ====================
+
+@login_required
+def api_gemini_global_prompts(request):
+    """Get or update global Gemini prompts (stored in first camera as template)"""
+    user = request.user
+    if not user.is_admin():
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    # Default prompts
+    default_prompts = {
+        'cash': """Analyze this CCTV image for a cash transaction. Look for:
+1. A customer handing something to a cashier
+2. Money or payment being exchanged
+3. Cash register or drawer interaction
+
+Respond with JSON: {"is_valid": true/false, "confidence": 0.0-1.0, "reason": "explanation"}""",
+        
+        'violence': """Analyze this CCTV image for violence or altercation. Look for:
+1. Physical contact between people (hitting, pushing, grabbing)
+2. Aggressive body language or postures
+3. People in distress or defensive positions
+
+Respond with JSON: {"is_valid": true/false, "confidence": 0.0-1.0, "reason": "explanation"}""",
+        
+        'fire': """Analyze this CCTV image for fire or smoke. Look for:
+1. Visible flames or fire
+2. Smoke or haze in the image
+3. Unusual lighting that could indicate fire
+
+Respond with JSON: {"is_valid": true/false, "confidence": 0.0-1.0, "reason": "explanation"}"""
+    }
+    
+    if request.method == 'GET':
+        # Get prompts from the first camera that has them, or use defaults
+        first_camera = Camera.objects.first()
+        
+        if first_camera:
+            prompts = {
+                'cash': first_camera.gemini_cash_prompt or default_prompts['cash'],
+                'violence': first_camera.gemini_violence_prompt or default_prompts['violence'],
+                'fire': first_camera.gemini_fire_prompt or default_prompts['fire'],
+            }
+        else:
+            prompts = default_prompts
+        
+        return JsonResponse({
+            'prompts': prompts,
+            'defaults': default_prompts
+        })
+    
+    elif request.method == 'POST':
+        data = json.loads(request.body)
+        
+        # Update all cameras with the new prompts
+        cameras = Camera.objects.all()
+        updated = 0
+        for camera in cameras:
+            # Always update, even if value is same as default
+            camera.gemini_cash_prompt = data.get('cash') or None
+            camera.gemini_violence_prompt = data.get('violence') or None
+            camera.gemini_fire_prompt = data.get('fire') or None
+            camera.save()
+            updated += 1
+        
+        return JsonResponse({
+            'success': True,
+            'message': f'Prompts updated for {updated} cameras'
+        })
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+@login_required
+def api_gemini_all_logs(request):
+    """Get all Gemini logs across all cameras"""
+    user = request.user
+    if not user.is_admin():
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    from .models import GeminiLog
+    from django.db.models import Avg
+    
+    # Get filters
+    camera_id = request.GET.get('camera')
+    event_type = request.GET.get('type')
+    validated = request.GET.get('validated')
+    rejected = request.GET.get('rejected')
+    limit = int(request.GET.get('limit', 50))
+    
+    # Build query
+    logs = GeminiLog.objects.all().select_related('camera')
+    
+    if camera_id:
+        logs = logs.filter(camera_id=camera_id)
+    if event_type:
+        logs = logs.filter(event_type=event_type)
+    if validated:
+        logs = logs.filter(is_validated=True)
+    if rejected:
+        logs = logs.filter(is_validated=False)
+    
+    logs = logs.order_by('-created_at')[:limit]
+    
+    # Calculate stats
+    all_logs = GeminiLog.objects.all()
+    if camera_id:
+        all_logs = all_logs.filter(camera_id=camera_id)
+    if event_type:
+        all_logs = all_logs.filter(event_type=event_type)
+    
+    avg_time = all_logs.aggregate(avg=Avg('processing_time_ms'))['avg'] or 0
+    
+    return JsonResponse({
+        'logs': [{
+            'id': log.id,
+            'camera_id': log.camera_id,
+            'camera_name': log.camera.name if log.camera else 'Unknown',
+            'event_type': log.event_type,
+            'is_validated': log.is_validated,
+            'confidence': log.confidence,
+            'reason': log.reason,
+            'processing_time_ms': log.processing_time_ms,
+            'image_path': log.image_path,
+            'created_at': log.created_at.isoformat(),
+        } for log in logs],
+        'total': all_logs.count(),
+        'validated_count': all_logs.filter(is_validated=True).count(),
+        'rejected_count': all_logs.filter(is_validated=False).count(),
+        'avg_processing_time': round(avg_time, 0),
+    })
