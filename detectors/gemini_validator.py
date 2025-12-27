@@ -236,13 +236,17 @@ Respond in JSON format ONLY:
                         confidence: float, reason: str, prompt: str, 
                         response_raw: str, image_path: str, processing_time_ms: int):
         """Log validation result to database"""
+        print(f"[GeminiValidator] _log_validation called: camera_id={camera_id}, event_type={event_type}")
         try:
-            import django
-            django.setup()  # Ensure Django is initialized
+            # Django should already be set up in worker processes
+            # import django
+            # django.setup()  # Ensure Django is initialized
             from cctv.models import GeminiLog, Camera
             
+            print(f"[GeminiValidator] Attempting to get Camera {camera_id}")
             camera = Camera.objects.get(id=camera_id) if camera_id else None
             if camera:
+                print(f"[GeminiValidator] Creating GeminiLog entry...")
                 log = GeminiLog.objects.create(
                     camera=camera,
                     event_type=event_type,
@@ -254,10 +258,12 @@ Respond in JSON format ONLY:
                     image_path=image_path or '',
                     processing_time_ms=processing_time_ms
                 )
-                print(f"[GeminiValidator] Logged validation ID {log.id} for camera {camera_id}")
+                print(f"[GeminiValidator] ✅ Successfully logged validation ID {log.id} for camera {camera_id}, event_type={event_type}, is_validated={is_valid}")
+            else:
+                print(f"[GeminiValidator] ❌ No camera found with id={camera_id}")
         except Exception as e:
             import traceback
-            print(f"[GeminiValidator] Failed to log validation: {e}")
+            print(f"[GeminiValidator] ❌ Failed to log validation: {e}")
             traceback.print_exc()
     
     def _call_gemini_api(self, image_bytes: bytes, prompt: str) -> dict:
