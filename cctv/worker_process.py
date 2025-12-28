@@ -382,6 +382,7 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
                                 gemini_api_key = getattr(settings, 'GEMINI_API_KEY', '')
                                 if gemini_api_key:
                                     # Create validator with camera_id for logging
+                                    print(f"[Worker-{camera_id}] DEBUG: Creating validator with camera.id={camera.id if camera else 'camera is None'}")
                                     validator = GeminiValidator(api_key=gemini_api_key, camera_id=camera.id)
                                     
                                     # Set custom prompts if defined for this camera
@@ -395,8 +396,13 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
                                     if custom_prompts:
                                         validator.set_custom_prompts(custom_prompts)
                                     
-                                    gemini_validated, gemini_confidence, gemini_reason = validator.validate_event(frame, event_type)
-                                    print(f"[Worker-{camera_id}] Gemini validation: {event_type} = {gemini_validated} ({gemini_reason})")
+                                    gemini_validated, gemini_confidence, gemini_reason, corrected_event_type = validator.validate_event(frame, event_type)
+                                    print(f"[Worker-{camera_id}] Gemini validation: {event_type} = {gemini_validated}, corrected_type={corrected_event_type} ({gemini_reason})")
+                                    
+                                    # Use corrected event type if Gemini detected something different
+                                    if corrected_event_type != event_type:
+                                        print(f"[Worker-{camera_id}] Event type corrected: {event_type} → {corrected_event_type}")
+                                        event_type = corrected_event_type
                                     
                                     if not gemini_validated:
                                         print(f"[Worker-{camera_id}] Event rejected by Gemini: {event_type} - {gemini_reason}")

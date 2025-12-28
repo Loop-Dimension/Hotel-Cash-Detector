@@ -37,7 +37,7 @@ from django.utils import timezone
 from django.db.models import Count, Q
 from django.conf import settings
 
-from .models import User, Region, Branch, Camera, Event, VideoRecord, BranchAccount
+from .models import User, Region, Branch, Camera, Event, VideoRecord, BranchAccount, GeminiLog
 from .translations import get_translation, t
 
 # Add root directory to path for detector imports
@@ -852,6 +852,10 @@ def api_home_stats(request):
     online_cameras = Camera.objects.filter(branch__in=user_branches, status='online').count()
     pending_review = Event.objects.filter(branch__in=user_branches, status='pending').count()
     
+    # Gemini AI validation stats
+    gemini_logs_total = GeminiLog.objects.filter(camera__branch__in=user_branches).count()
+    gemini_logs_today = GeminiLog.objects.filter(camera__branch__in=user_branches, created_at__date=today).count()
+    
     # Branch list with stats
     branches = []
     for branch in user_branches:
@@ -878,6 +882,8 @@ def api_home_stats(request):
         'today_events': today_events,
         'online_cameras': online_cameras,
         'pending_review': pending_review,
+        'gemini_logs_total': gemini_logs_total,
+        'gemini_logs_today': gemini_logs_today,
         'branches': branches,
     })
 
@@ -3055,9 +3061,27 @@ class BackgroundCameraWorker:
                         try:
                             gemini_api_key = getattr(settings, 'GEMINI_API_KEY', '')
                             if gemini_api_key:
-                                validator = GeminiValidator(api_key=gemini_api_key)
-                                gemini_validated, gemini_confidence, gemini_reason = validator.validate_event(frame, event_type)
-                                print(f"[Detection] Gemini validation: {event_type} = {gemini_validated} ({gemini_reason})")
+                                # Create validator with camera_id for logging
+                                validator = GeminiValidator(api_key=gemini_api_key, camera_id=camera.id)
+                                
+                                # Set custom prompts if defined for this camera
+                                custom_prompts = {}
+                                if camera.gemini_cash_prompt:
+                                    custom_prompts['cash'] = camera.gemini_cash_prompt
+                                if camera.gemini_violence_prompt:
+                                    custom_prompts['violence'] = camera.gemini_violence_prompt
+                                if camera.gemini_fire_prompt:
+                                    custom_prompts['fire'] = camera.gemini_fire_prompt
+                                if custom_prompts:
+                                    validator.set_custom_prompts(custom_prompts)
+                                
+                                gemini_validated, gemini_confidence, gemini_reason, corrected_event_type = validator.validate_event(frame, event_type)
+                                print(f"[Detection] Gemini validation: {event_type} = {gemini_validated}, corrected_type={corrected_event_type} ({gemini_reason})")
+                                
+                                # Use corrected event type if Gemini detected something different
+                                if corrected_event_type != event_type:
+                                    print(f"[Detection] Event type corrected: {event_type} → {corrected_event_type}")
+                                    event_type = corrected_event_type
                                 
                                 if not gemini_validated:
                                     print(f"[Detection] Event rejected by Gemini: {event_type} - {gemini_reason}")
@@ -3313,6 +3337,9 @@ def get_background_worker_status(request):
         for camera_id, worker in list(background_workers.items()):
             camera = Camera.objects.filter(id=camera_id).first()
             
+            # Get Gemini logs count for this camera
+            gemini_logs_count = GeminiLog.objects.filter(camera_id=camera_id).count() if camera else 0
+            
             statuses[camera_id] = {
                 'camera_id': worker.camera_code if hasattr(worker, 'camera_code') else (camera.camera_id if camera else f'cam-{camera_id}'),
                 'camera_name': camera.name if camera else 'Unknown',
@@ -3324,12 +3351,14 @@ def get_background_worker_status(request):
                 'events_detected': worker.events_detected,
                 'frames_processed': worker.frames_processed,
                 'start_time': worker.start_time.isoformat() if worker.start_time else None,
+                'gemini_logs': gemini_logs_count,
             }
     
     # Also include cameras without workers
     all_cameras = Camera.objects.all()
     for camera in all_cameras:
         if camera.id not in statuses:
+            gemini_logs_count = GeminiLog.objects.filter(camera_id=camera.id).count()
             statuses[camera.id] = {
                 'camera_id': camera.camera_id,
                 'camera_name': camera.name,
@@ -3341,6 +3370,7 @@ def get_background_worker_status(request):
                 'events_detected': 0,
                 'frames_processed': 0,
                 'start_time': None,
+                'gemini_logs': gemini_logs_count,
             }
     
     return JsonResponse({'workers': statuses})
@@ -4097,50 +4127,86 @@ def api_gemini_global_prompts(request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     # Default unified prompt that handles all event types
-    default_unified_prompt = """Analyze this CCTV image for the event type: {event_type}
+    default_unified_prompt = """You are an AI security analyst reviewing CCTV footage. Analyze this image for: {event_type}
+
+YOUR TASK:
+1. Look at the image carefully
+2. Determine what event (if any) is actually happening
+3. Respond with what you SEE, not what you're told to find
 
 EVENT TYPE DEFINITIONS:
 ======================
 
-CASH TRANSACTION (event_type = "cash"):
-Look for these signs:
-- A cashier behind a counter/register
-- A customer in front of the counter
-- Hands exchanging money, cards, or items
-- Cash register or POS terminal visible
-- Hand reaching into cash drawer
+CASH TRANSACTION (event_type = "cash")
+VALID if you see:
+   - Cashier AND customer clearly visible
+   - Hand reaching INTO open cash drawer
+   - Money/card exchange happening
+   - Transaction is COMPLETING (not just starting)
+   - Cash register or POS terminal visible
 
-VIOLENCE/ALTERCATION (event_type = "violence"):
-Look for these signs:
-- People in fighting poses (raised fists, defensive stances)
-- Physical contact between people (punching, pushing, grabbing)
-- Aggressive body language
-- People on the ground from being pushed/hit
-- Multiple people aggressively surrounding one person
+REJECT if:
+   - Only one person visible
+   - Drawer is closed
+   - Just hands touching (use "potential_cash" instead)
+   - No clear money exchange
 
-DO NOT flag as violence:
-- Normal standing or walking
-- Friendly interaction or handshakes
-- People simply close together
+POTENTIAL CASH (event_type = "potential_cash")
+VALID if you see (LENIENT - accept early stage):
+   - Customer approaching cashier counter
+   - Hands close together or touching
+   - Hand gesture suggesting payment intent
+   - Person holding payment item (card/cash)
+   - NO need to see cash drawer open yet
 
-FIRE/SMOKE (event_type = "fire"):
-Look for these signs:
-- Visible flames (orange/red/yellow colors)
-- Smoke (white, gray, or black)
-- Unusual lighting that could indicate fire
+REJECT if:
+   - Empty counter with no people
+   - Person just walking by (not approaching counter)
+   - Clear non-payment activity
 
-DO NOT flag as fire:
-- Normal lighting or red/orange objects
-- Steam from cooking
-- Sunlight reflections
+VIOLENCE/ALTERCATION (event_type = "violence")
+VALID if you see:
+   - People in fighting poses (fists raised, defensive stance)
+   - Physical aggression (punching, pushing, grabbing)
+   - Person on ground from being attacked
+   - Multiple people surrounding one person aggressively
+   - Clear hostile body language
 
-RESPONSE FORMAT:
-Respond in JSON format ONLY:
+REJECT if:
+   - Normal standing/walking
+   - Friendly handshake or conversation
+   - People just standing close together
+   - Normal interaction
+
+FIRE/SMOKE (event_type = "fire")
+VALID if you see:
+   - Visible flames (orange/red/yellow fire)
+   - Smoke clouds (white, gray, or black)
+   - Unusual bright lighting from fire
+   - Objects actively burning
+
+REJECT if:
+   - Normal lighting or sunset colors
+   - Red/orange objects (not fire)
+   - Steam from cooking
+   - Screen reflections
+
+RESPONSE FORMAT (JSON ONLY):
 {
     "is_valid": true/false,
+    "event_type_detected": "cash" | "potential_cash" | "violence" | "fire" | "none",
     "confidence": 0.0-1.0,
-    "reason": "brief explanation of why this is or is not a valid detection"
-}"""
+    "reason": "brief 1-sentence explanation"
+}
+
+IMPORTANT RULES:
+1. is_valid = true ONLY if you SEE the event clearly
+2. event_type_detected = what you ACTUALLY see (can differ from {event_type})
+3. If YOLO says "violence" but you see "cash", set event_type_detected = "cash"
+4. If you see NOTHING suspicious, set is_valid = false, event_type_detected = "none"
+5. Be LENIENT for "potential_cash" (early detection)
+6. Be STRICT for "cash" (must see drawer open + exchange)
+"""
     
     if request.method == 'GET':
         # Get unified prompt from the first camera that has it, or use default
@@ -4198,7 +4264,8 @@ def api_gemini_all_logs(request):
     event_type = request.GET.get('type')
     validated = request.GET.get('validated')
     rejected = request.GET.get('rejected')
-    limit = int(request.GET.get('limit', 50))
+    page = int(request.GET.get('page', 1))
+    per_page = int(request.GET.get('per_page', 50))
     
     # Build query
     logs = GeminiLog.objects.all().select_related('camera')
@@ -4212,7 +4279,13 @@ def api_gemini_all_logs(request):
     if rejected:
         logs = logs.filter(is_validated=False)
     
-    logs = logs.order_by('-created_at')[:limit]
+    logs = logs.order_by('-created_at')
+    
+    # Pagination
+    from django.core.paginator import Paginator
+    paginator = Paginator(logs, per_page)
+    page_obj = paginator.get_page(page)
+    logs = page_obj.object_list
     
     # Calculate stats
     all_logs = GeminiLog.objects.all()
@@ -4236,8 +4309,44 @@ def api_gemini_all_logs(request):
             'image_path': f'/media/{log.image_path}' if log.image_path else None,
             'created_at': log.created_at.isoformat(),
         } for log in logs],
+        'pagination': {
+            'page': page,
+            'per_page': per_page,
+            'total_pages': paginator.num_pages,
+            'has_next': page_obj.has_next(),
+            'has_previous': page_obj.has_previous(),
+        },
         'total': all_logs.count(),
         'validated_count': all_logs.filter(is_validated=True).count(),
         'rejected_count': all_logs.filter(is_validated=False).count(),
         'avg_processing_time': round(avg_time, 0),
     })
+
+@login_required
+def api_gemini_bulk_delete(request):
+    """Bulk delete Gemini logs"""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+    
+    user = request.user
+    if not user.is_admin():
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    import json
+    from .models import GeminiLog
+    
+    try:
+        data = json.loads(request.body)
+        log_ids = data.get('log_ids', [])
+        
+        if not log_ids:
+            return JsonResponse({'error': 'No logs selected'}, status=400)
+        
+        deleted_count = GeminiLog.objects.filter(id__in=log_ids).delete()[0]
+        
+        return JsonResponse({
+            'success': True,
+            'deleted_count': deleted_count
+        })
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)

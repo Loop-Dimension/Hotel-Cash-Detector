@@ -105,6 +105,7 @@ urlpatterns = [
     # Gemini AI API (Global)
     path('api/gemini/global-prompts/', views.api_gemini_global_prompts, name='api_gemini_global_prompts'),
     path('api/gemini/all-logs/', views.api_gemini_all_logs, name='api_gemini_all_logs'),
+    path('api/gemini/bulk-delete/', views.api_gemini_bulk_delete, name='api_gemini_bulk_delete'),
     
     # Polygon Zones API
     path('api/cameras/<int:camera_id>/polygon-zones/', views.api_polygon_zones, name='api_polygon_zones'),

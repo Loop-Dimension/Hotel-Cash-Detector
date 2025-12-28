@@ -35,6 +35,7 @@
         <select id="eventTypeFilter">
             <option value="">All</option>
             <option value="cash" {% if filters.type == "cash" %}selected{% endif %}>{{ t.event_cash }}</option>
+            <option value="potential_cash" {% if filters.type == "potential_cash" %}selected{% endif %}>잠재 현금</option>
             <option value="violence" {% if filters.type == "violence" %}selected{% endif %}>{{ t.event_violence }}</option>
             <option value="fire" {% if filters.type == "fire" %}selected{% endif %}>{{ t.event_fire }}</option>
         </select>
@@ -68,11 +69,12 @@
                     </div>
                     <span class="event-type-badge {{ event.event_type }}">
                         {% if event.event_type == 'cash' %}{{ t.event_cash }}
+                        {% elif event.event_type == 'potential_cash' %}잠재 현금
                         {% elif event.event_type == 'violence' %}{{ t.event_violence }}
                         {% elif event.event_type == 'fire' %}{{ t.event_fire }}
                         {% endif %}
                     </span>
-                    <span>{{ event.created_at|date:"H:i" }}</span>
+                    <span>{{ event.created_at|date:"Y-m-d H:i" }}</span>
                     <span class="status-pill status-{{ event.status }}">
                         {% if event.status == 'confirmed' %}{{ t.status_confirmed }}
                         {% elif event.status == 'reviewing' %}{{ t.status_reviewing }}

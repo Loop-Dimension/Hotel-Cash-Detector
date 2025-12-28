@@ -136,47 +136,82 @@
         color: #9a3412;
     }
     
-    .log-modal {
+    /* NEW MODAL STYLES */
+    .log-modal-backdrop {
         display: none;
         position: fixed;
         top: 0;
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0,0,0,0.6);
-        z-index: 1000;
-        justify-content: center;
-        align-items: center;
-        padding: 20px;
+        background: rgba(0,0,0,0.7);
+        z-index: 9998;
     }
     
-    .log-modal-content {
-        background: #fff;
-        border-radius: 16px;
-        max-width: 900px;
-        width: 100%;
+    .log-modal-backdrop.show {
+        display: block !important;
+    }
+    
+    .log-modal-new {
+        display: none;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        z-index: 9999;
+        width: 90%;
+        max-width: 800px;
         max-height: 90vh;
         overflow-y: auto;
-        padding: 32px;
+    }
+    
+    .log-modal-new.show {
+        display: block !important;
+    }
+    
+    .log-modal-body {
+        padding: 24px;
+        overflow-y: auto;
+        max-height: calc(90vh - 80px);
     }
     
     .log-modal-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 24px;
+        padding: 20px 24px;
+        border-bottom: 1px solid var(--gray-200);
     }
     
     .log-modal-header h2 {
         margin: 0;
+        font-size: 20px;
+        font-weight: 600;
     }
     
-    .close-btn {
+    .close-btn-new {
         background: none;
         border: none;
-        font-size: 28px;
+        font-size: 32px;
         cursor: pointer;
         color: var(--text-secondary);
+        line-height: 1;
+        padding: 0;
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 4px;
+        transition: all 0.2s;
+    }
+    
+    .close-btn-new:hover {
+        background: var(--gray-100);
+        color: var(--text-primary);
     }
     
     .detail-grid {
@@ -232,6 +267,38 @@
         margin-bottom: 16px;
     }
     
+    .pagination-controls {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 12px;
+        margin-top: 24px;
+        padding: 20px;
+    }
+    
+    .pagination-controls button {
+        padding: 8px 16px;
+        border: 1px solid var(--gray-300);
+        background: white;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+    }
+    
+    .pagination-controls button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    
+    .pagination-controls button:hover:not(:disabled) {
+        background: var(--gray-50);
+    }
+    
+    .pagination-info {
+        font-size: 14px;
+        color: var(--text-secondary);
+    }
+    
     @media (max-width: 768px) {
         .stats-grid {
             grid-template-columns: repeat(2, 1fr);
@@ -250,6 +317,7 @@
         <p class="text-muted">View all AI validation events across all cameras</p>
     </div>
     <div class="page-actions">
+        <button class="btn btn-danger" id="bulkDeleteBtn" onclick="bulkDelete()" style="display:none;">🗑️ Delete Selected</button>
         <button class="btn btn-secondary" onclick="loadLogs()">↻ Refresh</button>
     </div>
 </div>
@@ -271,6 +339,7 @@
             <select id="filterType" onchange="loadLogs()">
                 <option value="">All Types</option>
                 <option value="cash">Cash</option>
+                <option value="potential_cash">Potential Cash</option>
                 <option value="violence">Violence</option>
                 <option value="fire">Fire</option>
             </select>
@@ -310,6 +379,7 @@
         <table>
             <thead>
                 <tr>
+                    <th><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"></th>
                     <th>Time</th>
                     <th>Camera</th>
                     <th>Event Type</th>
@@ -321,36 +391,42 @@
                 </tr>
             </thead>
             <tbody id="logsTableBody">
-                <tr><td colspan="8" class="empty-state">
+                <tr><td colspan="9" class="empty-state">
                     <div class="icon">📋</div>
                     <div>Loading logs...</div>
                 </td></tr>
             </tbody>
         </table>
     </div>
+    
+    <!-- Pagination -->
+    <div id="paginationControls" class="pagination-controls"></div>
 </div>
 
-<!-- Log Detail Modal -->
-<div id="logModal" class="log-modal" onclick="if(event.target===this) closeModal()">
-    <div class="log-modal-content">
-        <div class="log-modal-header">
-            <h2>📋 Validation Details</h2>
-            <button class="close-btn" onclick="closeModal()">&times;</button>
-        </div>
-        <div id="logModalContent">
-            <!-- Content loaded dynamically -->
-        </div>
+<!-- Log Detail Modal - Completely rewritten -->
+<div id="modalBackdrop" class="log-modal-backdrop" onclick="closeModalNew()"></div>
+<div id="logModal" class="log-modal-new">
+    <div class="log-modal-header">
+        <h2>📋 Validation Details</h2>
+        <button class="close-btn-new" onclick="closeModalNew()">&times;</button>
+    </div>
+    <div id="logModalContent" class="log-modal-body">
+        <!-- Content loaded dynamically -->
     </div>
 </div>
 
 <script>
-    async function loadLogs() {
+    let currentPage = 1;
+    let selectedLogs = new Set();
+    
+    async function loadLogs(page = 1) {
         try {
+            currentPage = page;
             const camera = document.getElementById('filterCamera').value;
             const type = document.getElementById('filterType').value;
             const status = document.getElementById('filterStatus').value;
             
-            let url = '/api/gemini/all-logs/?limit=100';
+            let url = `/api/gemini/all-logs/?page=${page}&per_page=50`;
             if (camera) url += `&camera=${camera}`;
             if (type) url += `&type=${type}`;
             if (status === 'validated') url += '&validated=true';
@@ -369,40 +445,114 @@
             const tbody = document.getElementById('logsTableBody');
             
             if (!data.logs || data.logs.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="8" class="empty-state">
+                tbody.innerHTML = `<tr><td colspan="9" class="empty-state">
                     <div class="icon">📋</div>
                     <div>No validation logs found</div>
                 </td></tr>`;
+                updatePagination(data.pagination);
                 return;
             }
             
             tbody.innerHTML = data.logs.map(log => `
-                <tr onclick="showLogDetail(${log.id})">
-                    <td>${new Date(log.created_at).toLocaleString()}</td>
-                    <td>${log.camera_name || 'Unknown'}</td>
-                    <td><span class="badge badge-${log.event_type}">${log.event_type.toUpperCase()}</span></td>
-                    <td>
+                <tr>
+                    <td onclick="event.stopPropagation();">
+                        <input type="checkbox" class="log-checkbox" value="${log.id}" onchange="updateBulkDeleteBtn()">
+                    </td>
+                    <td onclick="showLogDetail(${log.id})">${new Date(log.created_at).toLocaleString()}</td>
+                    <td onclick="showLogDetail(${log.id})">${log.camera_name || 'Unknown'}</td>
+                    <td onclick="showLogDetail(${log.id})"><span class="badge badge-${log.event_type}">${log.event_type.toUpperCase()}</span></td>
+                    <td onclick="showLogDetail(${log.id})">
                         <span class="badge ${log.is_validated ? 'badge-validated' : 'badge-rejected'}">
                             ${log.is_validated ? '✓ Validated' : '✗ Rejected'}
                         </span>
                     </td>
-                    <td>${(log.confidence * 100).toFixed(0)}%</td>
-                    <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    <td onclick="showLogDetail(${log.id})">${(log.confidence * 100).toFixed(0)}%</td>
+                    <td onclick="showLogDetail(${log.id})" style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                         ${log.reason}
                     </td>
-                    <td>${log.processing_time_ms}ms</td>
-                    <td>
-                        ${log.image_path ? `<a href="${log.image_path}" target="_blank" onclick="event.stopPropagation();">📷</a>` : '-'}
+                    <td onclick="showLogDetail(${log.id})">${log.processing_time_ms}ms</td>
+                    <td onclick="event.stopPropagation();">
+                        ${log.image_path ? `<a href="${log.image_path}" target="_blank">📷</a>` : '-'}
                     </td>
                 </tr>
             `).join('');
             
+            updatePagination(data.pagination);
+            
         } catch (error) {
             console.error('Failed to load logs:', error);
-            document.getElementById('logsTableBody').innerHTML = `<tr><td colspan="8" class="empty-state">
+            document.getElementById('logsTableBody').innerHTML = `<tr><td colspan="9" class="empty-state">
                 <div class="icon">❌</div>
                 <div>Failed to load logs</div>
             </td></tr>`;
+        }
+    }
+    
+    function updatePagination(pagination) {
+        if (!pagination) return;
+        
+        const controls = document.getElementById('paginationControls');
+        controls.innerHTML = `
+            <button onclick="loadLogs(1)" ${pagination.page === 1 ? 'disabled' : ''}>« First</button>
+            <button onclick="loadLogs(${pagination.page - 1})" ${!pagination.has_previous ? 'disabled' : ''}>‹ Previous</button>
+            <span class="pagination-info">Page ${pagination.page} of ${pagination.total_pages}</span>
+            <button onclick="loadLogs(${pagination.page + 1})" ${!pagination.has_next ? 'disabled' : ''}>Next ›</button>
+            <button onclick="loadLogs(${pagination.total_pages})" ${pagination.page === pagination.total_pages ? 'disabled' : ''}>Last »</button>
+        `;
+    }
+    
+    function toggleSelectAll() {
+        const selectAll = document.getElementById('selectAll');
+        const checkboxes = document.querySelectorAll('.log-checkbox');
+        checkboxes.forEach(cb => cb.checked = selectAll.checked);
+        updateBulkDeleteBtn();
+    }
+    
+    function updateBulkDeleteBtn() {
+        const checkboxes = document.querySelectorAll('.log-checkbox:checked');
+        const bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
+        if (checkboxes.length > 0) {
+            bulkDeleteBtn.style.display = 'inline-block';
+            bulkDeleteBtn.textContent = `🗑️ Delete Selected (${checkboxes.length})`;
+        } else {
+            bulkDeleteBtn.style.display = 'none';
+        }
+    }
+    
+    async function bulkDelete() {
+        const checkboxes = document.querySelectorAll('.log-checkbox:checked');
+        const logIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+        
+        if (logIds.length === 0) {
+            alert('No logs selected');
+            return;
+        }
+        
+        if (!confirm(`Are you sure you want to delete ${logIds.length} logs?`)) {
+            return;
+        }
+        
+        try {
+            const response = await fetch('/api/gemini/bulk-delete/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify({ log_ids: logIds })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                alert(`Successfully deleted ${data.deleted_count} logs`);
+                loadLogs(currentPage);
+                document.getElementById('selectAll').checked = false;
+            } else {
+                alert('Failed to delete logs: ' + data.error);
+            }
+        } catch (error) {
+            alert('Failed to delete logs: ' + error.message);
         }
     }
     
@@ -449,17 +599,49 @@
                 </div>
             `;
             
-            document.getElementById('logModal').style.display = 'flex';
+            openModalNew();
         } catch (error) {
             alert('Failed to load log detail');
         }
     }
     
-    function closeModal() {
-        document.getElementById('logModal').style.display = 'none';
+    function openModalNew() {
+        document.getElementById('modalBackdrop').classList.add('show');
+        document.getElementById('logModal').classList.add('show');
+        document.body.style.overflow = 'hidden';
+    }
+    
+    function closeModalNew() {
+        document.getElementById('modalBackdrop').classList.remove('show');
+        document.getElementById('logModal').classList.remove('show');
+        document.body.style.overflow = '';
+    }
+    
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
     }
     
     // Load logs on page load
-    document.addEventListener('DOMContentLoaded', loadLogs);
+    document.addEventListener('DOMContentLoaded', function() {
+        loadLogs();
+        
+        // Close with ESC key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeModalNew();
+            }
+        });
+    });
 </script>
 {% endblock %}

@@ -28,6 +28,11 @@
         <span class="stat-label">{{ t.pending_review }}</span>
         <span class="stat-value" id="statPending">-</span>
     </div>
+    <div class="stat-card purple" onclick="window.location.href='{% url 'cctv:gemini_logs' %}'" style="cursor: pointer;">
+        <span class="stat-label">🤖 Gemini AI Logs</span>
+        <span class="stat-value" id="statGeminiLogs">-</span>
+        <span class="stat-label" style="font-size: 12px; opacity: 0.7; margin-top: 4px;" id="statGeminiToday">-</span>
+    </div>
 </div>
 
 <!-- Branch List -->
@@ -70,7 +75,12 @@
 <!-- Background Detection Service Status (Admin Only) -->
 <div class="panel" style="margin-top: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h2>🔄 {{ t.detection_service|default:"Detection Service" }}</h2>
+        <div>
+            <h2>🔄 {{ t.detection_service|default:"Detection Service" }}</h2>
+            <div style="font-size: 14px; color: #666; margin-top: 4px;">
+                🤖 Gemini Validations: <strong id="serviceGeminiTotal">-</strong> total | Today: <strong id="serviceGeminiToday">-</strong>
+            </div>
+        </div>
         <div style="display: flex; gap: 10px;">
             <button onclick="startAllWorkers()" class="btn btn-primary btn-sm">▶️ Start All</button>
             <button onclick="stopAllWorkers()" class="btn btn-secondary btn-sm">⏹️ Stop All</button>
@@ -98,6 +108,14 @@
             document.getElementById('statEvents').textContent = data.today_events || 0;
             document.getElementById('statCameras').textContent = data.online_cameras || 0;
             document.getElementById('statPending').textContent = data.pending_review || 0;
+            document.getElementById('statGeminiLogs').textContent = data.gemini_logs_total || 0;
+            document.getElementById('statGeminiToday').textContent = `Today: ${data.gemini_logs_today || 0}`;
+            
+            // Update detection service Gemini stats
+            if (document.getElementById('serviceGeminiTotal')) {
+                document.getElementById('serviceGeminiTotal').textContent = data.gemini_logs_total || 0;
+                document.getElementById('serviceGeminiToday').textContent = data.gemini_logs_today || 0;
+            }
             
             // Render branch list
             renderBranchList(data.branches || []);
@@ -135,9 +153,11 @@
                             <div style="color: var(--gray-400);">⏱️ Uptime: ${w.uptime}</div>
                             <div style="color: var(--gray-400);">📊 Frames: ${w.frames_processed?.toLocaleString() || 0}</div>
                             <div style="color: ${w.events_detected > 0 ? '#22c55e' : 'var(--gray-400)'}; font-weight: ${w.events_detected > 0 ? '600' : '400'};">🎯 Events: ${w.events_detected || 0}</div>
+                            <div style="color: ${w.gemini_logs > 0 ? '#9333ea' : 'var(--gray-400)'}; font-weight: ${w.gemini_logs > 0 ? '600' : '400'};">🤖 Logs: ${w.gemini_logs || 0}</div>
                             ${w.last_error ? `<div style="color: #f59e0b; margin-top: 4px;">⚠️ ${w.last_error}</div>` : ''}
                         ` : `
                             <div style="color: #ef4444;">${w.last_error || 'Not running'}</div>
+                            <div style="color: var(--gray-400); margin-top: 4px;">🤖 Logs: ${w.gemini_logs || 0}</div>
                         `}
                     </div>
                 </div>

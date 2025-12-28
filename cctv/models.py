@@ -271,6 +271,7 @@ class Event(models.Model):
     """Detection events"""
     TYPE_CHOICES = [
         ('cash', '현금'),
+        ('potential_cash', '잠재 현금'),
         ('fire', '화재'),
         ('violence', '난동'),
     ]

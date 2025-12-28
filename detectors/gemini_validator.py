@@ -35,50 +35,86 @@ class GeminiValidator:
     MODEL_NAME = "gemini-2.5-flash-lite"
     
     # Default unified prompt for all event types
-    DEFAULT_UNIFIED_PROMPT = """Analyze this CCTV image for the event type: {event_type}
+    DEFAULT_UNIFIED_PROMPT = """You are an AI security analyst reviewing CCTV footage. Analyze this image for: {event_type}
+
+YOUR TASK:
+1. Look at the image carefully
+2. Determine what event (if any) is actually happening
+3. Respond with what you SEE, not what you're told to find
 
 EVENT TYPE DEFINITIONS:
 ======================
 
-CASH TRANSACTION (event_type = "cash"):
-Look for these signs:
-- A cashier behind a counter/register
-- A customer in front of the counter
-- Hands exchanging money, cards, or items
-- Cash register or POS terminal visible
-- Hand reaching into cash drawer
+CASH TRANSACTION (event_type = "cash")
+VALID if you see:
+   - Cashier AND customer clearly visible
+   - Hand reaching INTO open cash drawer
+   - Money/card exchange happening
+   - Transaction is COMPLETING (not just starting)
+   - Cash register or POS terminal visible
 
-VIOLENCE/ALTERCATION (event_type = "violence"):
-Look for these signs:
-- People in fighting poses (raised fists, defensive stances)
-- Physical contact between people (punching, pushing, grabbing)
-- Aggressive body language
-- People on the ground from being pushed/hit
-- Multiple people aggressively surrounding one person
+REJECT if:
+   - Only one person visible
+   - Drawer is closed
+   - Just hands touching (use "potential_cash" instead)
+   - No clear money exchange
 
-DO NOT flag as violence:
-- Normal standing or walking
-- Friendly interaction or handshakes
-- People simply close together
+POTENTIAL CASH (event_type = "potential_cash")
+VALID if you see (LENIENT - accept early stage):
+   - Customer approaching cashier counter
+   - Hands close together or touching
+   - Hand gesture suggesting payment intent
+   - Person holding payment item (card/cash)
+   - NO need to see cash drawer open yet
 
-FIRE/SMOKE (event_type = "fire"):
-Look for these signs:
-- Visible flames (orange/red/yellow colors)
-- Smoke (white, gray, or black)
-- Unusual lighting that could indicate fire
+REJECT if:
+   - Empty counter with no people
+   - Person just walking by (not approaching counter)
+   - Clear non-payment activity
 
-DO NOT flag as fire:
-- Normal lighting or red/orange objects
-- Steam from cooking
-- Sunlight reflections
+VIOLENCE/ALTERCATION (event_type = "violence")
+VALID if you see:
+   - People in fighting poses (fists raised, defensive stance)
+   - Physical aggression (punching, pushing, grabbing)
+   - Person on ground from being attacked
+   - Multiple people surrounding one person aggressively
+   - Clear hostile body language
 
-RESPONSE FORMAT:
-Respond in JSON format ONLY:
+REJECT if:
+   - Normal standing/walking
+   - Friendly handshake or conversation
+   - People just standing close together
+   - Normal interaction
+
+FIRE/SMOKE (event_type = "fire")
+VALID if you see:
+   - Visible flames (orange/red/yellow fire)
+   - Smoke clouds (white, gray, or black)
+   - Unusual bright lighting from fire
+   - Objects actively burning
+
+REJECT if:
+   - Normal lighting or sunset colors
+   - Red/orange objects (not fire)
+   - Steam from cooking
+   - Screen reflections
+
+RESPONSE FORMAT (JSON ONLY):
 {
     "is_valid": true/false,
+    "event_type_detected": "cash" | "potential_cash" | "violence" | "fire" | "none",
     "confidence": 0.0-1.0,
-    "reason": "brief explanation of why this is or is not a valid detection"
-}"""
+    "reason": "brief 1-sentence explanation"
+}
+
+IMPORTANT RULES:
+1. is_valid = true ONLY if you SEE the event clearly
+2. event_type_detected = what you ACTUALLY see (can differ from {event_type})
+3. If YOLO says "violence" but you see "cash", set event_type_detected = "cash"
+4. If you see NOTHING suspicious, set is_valid = false, event_type_detected = "none"
+5. Be LENIENT for "potential_cash" (early detection)
+6. Be STRICT for "cash" (must see drawer open + exchange)
+"""
     
     # Legacy prompts (for backward compatibility)
     PROMPTS = {
@@ -325,7 +361,7 @@ Respond in JSON format ONLY:
             print(f"[GeminiValidator] API error: {e}")
             return {"error": str(e)}
     
-    def validate_event(self, frame, event_type: str, save_image: bool = True) -> Tuple[bool, float, str]:
+    def validate_event(self, frame, event_type: str, save_image: bool = True) -> Tuple[bool, float, str, str]:
         """
         Validate a detection event using Gemini AI.
         
@@ -335,9 +371,11 @@ Respond in JSON format ONLY:
             save_image: Whether to save the validation image for logging
             
         Returns:
-            Tuple of (is_valid, confidence, reason)
+            Tuple of (is_valid, confidence, reason, corrected_event_type)
             - is_valid: True if Gemini confirms the event
             - confidence: Gemini's confidence score (0.0-1.0)
+            - reason: Gemini's explanation
+            - corrected_event_type: The actual event type Gemini detected (may differ from input)
             - reason: Explanation from Gemini
         """
         start_time = time.time()
@@ -375,20 +413,33 @@ Respond in JSON format ONLY:
             if 'error' in result:
                 # On API error, allow the event (don't block on API issues)
                 print(f"[GeminiValidator] API error, allowing event: {result['error']}")
-                return True, 1.0, f"API error: {result['error']}"
+                return True, 1.0, f"API error: {result['error']}", event_type
             
-            # Parse result based on event type
-            if event_type == 'cash':
-                is_valid = result.get('is_cash_transaction', False)
-            elif event_type == 'violence':
-                is_valid = result.get('is_violence', False)
-            elif event_type == 'fire':
-                is_valid = result.get('is_fire', False)
-            else:
-                is_valid = False
-            
+            # Get Gemini's validation result
+            is_valid = result.get('is_valid', False)
             confidence = result.get('confidence', 0.0)
             reason = result.get('reason', 'No reason provided')
+            
+            # Check if Gemini detected a DIFFERENT event type (correction)
+            detected_type = result.get('event_type_detected', event_type)
+            corrected_event_type = event_type  # Default to original
+            
+            # If Gemini says it's valid but detects a different type, use that type
+            if is_valid and detected_type != 'none' and detected_type != event_type:
+                # Gemini corrected the event type
+                corrected_event_type = detected_type
+                reason = f"✅ Corrected: {event_type.upper()} → {corrected_event_type.upper()}. {reason}"
+            elif is_valid and detected_type == event_type:
+                # Gemini confirmed the original detection
+                pass  # corrected_event_type stays as event_type
+            elif not is_valid:
+                # Gemini rejected the detection
+                # Keep original event_type but mark as invalid
+                pass
+            
+            # Special handling for potential_cash - more lenient
+            if event_type == 'potential_cash' and confidence > 0.3:
+                is_valid = True
             
             # Calculate processing time
             processing_time_ms = int((time.time() - start_time) * 1000)
@@ -406,20 +457,23 @@ Respond in JSON format ONLY:
             }
             
             # Log to database
+            print(f"[GeminiValidator] DEBUG: camera_id={self.camera_id}, will_log={bool(self.camera_id)}")
             if self.camera_id:
                 self._log_validation(
                     self.camera_id, event_type, is_valid, confidence, 
                     reason, prompt, response_raw, image_path, processing_time_ms
                 )
+            else:
+                print(f"[GeminiValidator] ⚠️ Skipping database log - no camera_id set!")
             
-            print(f"[GeminiValidator] {event_type}: valid={is_valid}, conf={confidence:.2f}, reason={reason}")
+            print(f"[GeminiValidator] {event_type}: valid={is_valid}, conf={confidence:.2f}, corrected={corrected_event_type}, reason={reason[:100]}")
             
-            return is_valid, confidence, reason
+            return is_valid, confidence, reason, corrected_event_type
             
         except Exception as e:
             print(f"[GeminiValidator] Exception: {e}")
             # On error, allow the event (don't block on validation errors)
-            return True, 1.0, f"Validation error: {e}"
+            return True, 1.0, f"Validation error: {e}", event_type
     
     def validate_cash_transaction(self, frame) -> Tuple[bool, float, str]:
         """Convenience method for cash transaction validation."""

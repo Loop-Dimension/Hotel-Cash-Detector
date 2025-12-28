@@ -60,7 +60,7 @@ class CashTransactionDetector(BaseDetector):
         self.min_cash_confidence = config.get('min_cash_confidence', 0.70)
         
         # Hand tracking duration (frames to track after touch)
-        self.hand_tracking_duration = config.get('hand_tracking_duration', 90)  # ~3 seconds at 30fps
+        self.hand_tracking_duration = config.get('hand_tracking_duration', 600)  # ~20 seconds at 30fps
         
         # Debug info storage
         self.last_detection_debug = {}
@@ -518,6 +518,23 @@ class CashTransactionDetector(BaseDetector):
                     self.touch_frame = self.frame_count
                     
                     print(f"[CashDetect] 🤝 Hand touch detected! dist={best_event['distance']:.0f}px, tracking cashier for {self.hand_tracking_duration} frames")
+                    
+                    # 🆕 CREATE POTENTIAL_CASH DETECTION on hand touch
+                    cashier_person = people_hands[best_event['cashier_idx']]
+                    potential_detection = self._create_detection(
+                        frame,
+                        best_event,
+                        cashier_person,
+                        best_event['touch_point'],
+                        "hand_touch"
+                    )
+                    if potential_detection:
+                        # Change event type to potential_cash
+                        potential_detection.event_type = 'potential_cash'
+                        potential_detection.metadata['detection_stage'] = 'hand_touch'
+                        potential_detection.metadata['confidence'] = 0.7  # Lower confidence for potential
+                        detections.append(potential_detection)
+                        print(f"[CashDetect] 💰 POTENTIAL CASH detected on hand touch!")
                     
                     self.last_detection_debug = {
                         'people': debug_people,

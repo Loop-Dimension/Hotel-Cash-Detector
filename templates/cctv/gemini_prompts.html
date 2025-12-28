@@ -208,11 +208,15 @@
     }
     
     function resetPrompt() {
-        if (!confirm('Reset prompt to default?')) return;
+        if (!confirm('Reset prompt to default? This will save immediately.')) return;
+        
         document.getElementById('unifiedPrompt').value = defaultPrompt;
+        
+        // Auto-save after reset
+        savePrompt(true);
     }
     
-    async function savePrompt() {
+    async function savePrompt(isReset = false) {
         try {
             const response = await fetch('/api/gemini/global-prompts/', {
                 method: 'POST',
@@ -227,13 +231,19 @@
             
             if (response.ok) {
                 const data = await response.json();
-                alert('Prompt saved successfully! ' + (data.message || ''));
+                if (isReset) {
+                    alert('✅ Prompt reset to default and saved! ' + (data.message || ''));
+                } else {
+                    alert('✅ Prompt saved successfully! ' + (data.message || ''));
+                }
+                // Reload to get fresh data
+                loadPrompt();
             } else {
-                alert('Failed to save prompt');
+                alert('❌ Failed to save prompt');
             }
         } catch (error) {
             console.error('Failed to save prompt:', error);
-            alert('Failed to save prompt');
+            alert('❌ Failed to save prompt');
         }
     }
     
