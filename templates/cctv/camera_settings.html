@@ -593,7 +593,7 @@
                             <span class="slider-value" id="handDistanceValue" style="color: #3b82f6; background: var(--gray-700); padding: 4px 12px; border-radius: 6px;">{{ camera.hand_touch_distance|default:100 }}px</span>
                         </div>
                         <input type="range" class="slider-input" id="handTouchDistance" 
-                               min="30" max="300" step="10" value="{{ camera.hand_touch_distance|default:100 }}"
+                               min="30" max="600" step="10" value="{{ camera.hand_touch_distance|default:100 }}"
                                oninput="updateSliderValue('handDistance')">
                     </div>
                     
@@ -627,7 +627,7 @@
                     <div class="toggle-group" style="background: var(--gray-700); border: 1px solid var(--green-600);">
                         <div class="toggle-info">
                             <span class="toggle-label" style="color: #fff;">Enable Debug Overlay</span>
-                            <span class="toggle-desc" style="color: var(--gray-400);">Show all zones and detection features on live video</span>
+                            <span class="toggle-desc" style="color: var(--gray-400);">Show all zones and detection features on live video (UI only)</span>
                         </div>
                         <label class="toggle-switch">
                             <input type="checkbox" id="debugOverlayEnabled" onchange="toggleDebugMode()">
@@ -771,18 +771,6 @@
         
         showToast(`Now drawing: ${zoneType === 'cashier' ? 'Cashier Zone (Yellow)' : 'Cash Drawer Zone (Green)'}. Click points to create polygon.`, 'info');
     }
-    let currentZone = {
-        x: {{ camera.cashier_zone_x }},
-        y: {{ camera.cashier_zone_y }},
-        width: {{ camera.cashier_zone_width }},
-        height: {{ camera.cashier_zone_height }}
-    };
-    let cashDrawerZone = {
-        x: {{ camera.cash_drawer_zone_x|default:50 }},
-        y: {{ camera.cash_drawer_zone_y|default:200 }},
-        width: {{ camera.cash_drawer_zone_width|default:150 }},
-        height: {{ camera.cash_drawer_zone_height|default:100 }}
-    };
     
     // Load polygon data from database if available
     {% if camera.cashier_zone_polygon %}

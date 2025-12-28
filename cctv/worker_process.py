@@ -211,8 +211,23 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
         shared_state['status'] = 'error'
         return
     
-    # Create detector
-    zone = camera.get_cashier_zone()
+    # Get polygon zones
+    cashier_polygon = camera.get_cashier_zone_polygon_points()
+    cash_drawer_polygon = camera.get_cash_drawer_zone_polygon_points() if hasattr(camera, 'get_cash_drawer_zone_polygon_points') else None
+    
+    # Debug: Show what polygon data was loaded from database
+    import sys
+    print(f"\n{'='*60}", flush=True)
+    print(f"[Worker-{camera_id}] POLYGON DEBUG INFO", flush=True)
+    print(f"{'='*60}", flush=True)
+    print(f"Camera ID: {camera_id}", flush=True)
+    print(f"Camera Name: {camera.name}", flush=True)
+    print(f"cashier_zone_polygon from DB: {camera.cashier_zone_polygon}", flush=True)
+    print(f"Parsed polygon points: {cashier_polygon}", flush=True)
+    if cashier_polygon:
+        print(f"Number of points: {len(cashier_polygon)}", flush=True)
+    print(f"{'='*60}\n", flush=True)
+    
     detector_config = {
         'models_dir': str(settings.BASE_DIR / 'models'),
         # GPU/CPU setting from environment
@@ -222,12 +237,8 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
         'violence_pose_model': settings.DETECTION_CONFIG.get('VIOLENCE_POSE_MODEL', 'yolov8n-pose.pt'),
         'fire_yolo_model': settings.DETECTION_CONFIG.get('FIRE_YOLO_MODEL', 'yolov8n.pt'),
         'fire_model': settings.DETECTION_CONFIG.get('FIRE_MODEL', 'fire_smoke_yolov8.pt'),
-        'cashier_zone': [zone['x'], zone['y'], zone['width'], zone['height']],
-        'use_polygon_zones': True,  # POLYGON-ONLY MODE
-        'cashier_zone_polygon': camera.get_cashier_zone_polygon_points(),
-        'cash_drawer_zone': [camera.cash_drawer_zone_x, camera.cash_drawer_zone_y, 
-                             camera.cash_drawer_zone_width, camera.cash_drawer_zone_height],
-        'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points() if hasattr(camera, 'get_cash_drawer_zone_polygon_points') else None,
+        'cashier_zone_polygon': cashier_polygon,
+        'cash_drawer_zone_polygon': cash_drawer_polygon,
         'hand_touch_distance': camera.hand_touch_distance,
         'pose_confidence': 0.5,
         'min_transaction_frames': 1,
@@ -381,20 +392,15 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
                             try:
                                 gemini_api_key = getattr(settings, 'GEMINI_API_KEY', '')
                                 if gemini_api_key:
-                                    # Create validator with camera_id for logging
-                                    print(f"[Worker-{camera_id}] DEBUG: Creating validator with camera.id={camera.id if camera else 'camera is None'}")
+                                    from cctv.models import GeminiPrompts
+                                    
+                                    # Create validator with camera_id for logging and global prompts
                                     validator = GeminiValidator(api_key=gemini_api_key, camera_id=camera.id)
                                     
-                                    # Set custom prompts if defined for this camera
-                                    custom_prompts = {}
-                                    if camera.gemini_cash_prompt:
-                                        custom_prompts['cash'] = camera.gemini_cash_prompt
-                                    if camera.gemini_violence_prompt:
-                                        custom_prompts['violence'] = camera.gemini_violence_prompt
-                                    if camera.gemini_fire_prompt:
-                                        custom_prompts['fire'] = camera.gemini_fire_prompt
-                                    if custom_prompts:
-                                        validator.set_custom_prompts(custom_prompts)
+                                    # Get global prompts from GeminiPrompts model
+                                    global_prompts = GeminiPrompts.get_prompts()
+                                    if global_prompts.get('unified'):
+                                        validator.set_custom_prompts({'unified': global_prompts['unified']})
                                     
                                     gemini_validated, gemini_confidence, gemini_reason, corrected_event_type = validator.validate_event(frame, event_type)
                                     print(f"[Worker-{camera_id}] Gemini validation: {event_type} = {gemini_validated}, corrected_type={corrected_event_type} ({gemini_reason})")

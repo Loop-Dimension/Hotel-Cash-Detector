@@ -43,10 +43,8 @@ class UnifiedDetector:
         
         # Cashier zone settings
         self.cashier_zone_enabled = self.config.get('cashier_zone_enabled', True)
-        # Show zone overlay on video (UI only - hidden by default, shown in debug mode)
+        # Show zone overlay on video (UI only)
         self.show_zone_overlay = self.config.get('show_zone_overlay', False)
-        # Show pose overlay with hand positions and distances (disabled by default, shown in debug mode)
-        self.show_pose_overlay = self.config.get('show_pose_overlay', False)
         
         # GPU/CPU setting - passed to all sub-detectors
         use_gpu = self.config.get('use_gpu', 'auto')
@@ -57,12 +55,14 @@ class UnifiedDetector:
             'pose_model': cash_pose_model,  # Use full pose model for accurate hand tracking
             'yolo_model': cash_pose_model,  # Fallback to pose model
             'use_gpu': use_gpu,
-            'cashier_zone': self.config.get('cashier_zone', [100, 100, 400, 300]),
+            'cashier_zone_polygon': self.config.get('cashier_zone_polygon'),
+            'cashier_zone_enabled': self.config.get('cashier_zone_enabled', True),
+            'cash_drawer_zone_polygon': self.config.get('cash_drawer_zone_polygon'),
+            'cash_drawer_zone_enabled': self.config.get('cash_drawer_zone_enabled', True),
             'hand_touch_distance': self.config.get('hand_touch_distance', 100),
             'pose_confidence': self.config.get('pose_confidence', 0.5),
             'min_transaction_frames': self.config.get('min_transaction_frames', 1),
             'cash_confidence': self.config.get('cash_confidence', 0.5),
-            'show_pose_overlay': self.config.get('show_pose_overlay', False),
         })
         
         self.violence_detector = ViolenceDetector({
@@ -143,10 +143,13 @@ class UnifiedDetector:
         print("=" * 50 + "\n")
         return True  # Always return True to allow processing
     
-    def set_cashier_zone(self, zone: List[int]):
-        """Update the cashier zone for cash detection and violence exclusion"""
-        self.cash_detector.set_cashier_zone(zone)
-        self.violence_detector.set_cashier_zone(zone)  # Exclude cashier zone from violence
+    def set_cashier_zone_polygon(self, polygon: List):
+        """Update the cashier zone polygon for cash detection"""
+        self.cash_detector.set_cashier_zone_polygon(polygon)
+    
+    def set_cash_drawer_zone_polygon(self, polygon: List):
+        """Update the cash drawer zone polygon"""
+        self.cash_detector.set_cash_drawer_zone_polygon(polygon)
     
     def toggle_debug(self, enabled: bool = None):
         """Toggle debug mode - shows extra detection info on frame"""
@@ -244,13 +247,9 @@ class UnifiedDetector:
     
     def draw_overlays(self, frame: np.ndarray, detections: List[Detection]) -> np.ndarray:
         """Draw all detection overlays on frame"""
-        # Draw cashier zone only if show_zone_overlay is enabled (hidden by default)
+        # Draw cashier zone only if show_zone_overlay is enabled
         if self.detect_cash and self.show_zone_overlay:
             frame = self.cash_detector.draw_cashier_zone(frame)
-        
-        # Draw pose overlay with hand positions and distances (enabled by default)
-        if self.detect_cash and self.show_pose_overlay:
-            frame = self.cash_detector.draw_pose_overlay(frame)
         
         # Draw detections
         for det in detections:

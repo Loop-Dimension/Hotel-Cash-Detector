@@ -20,57 +20,49 @@ from google import genai
 from google.genai import types
 
 
-class GeminiValidator:
-    """
-    Validates detection events using Google Gemini Vision API.
-    
-    This acts as a filter layer - only events confirmed by Gemini are stored.
-    Supports custom prompts per camera and logging of all validations.
-    """
-    
-    # Gemini API - use gemini-2.5-flash-lite (cheapest, FREE standard tier)
-    # Best for: high volume, cost-efficient image validation
-    # Pricing: FREE (standard) | $0.10/1M input + $0.40/1M output (paid)
-    # https://ai.google.dev/gemini-api/docs/pricing
-    MODEL_NAME = "gemini-2.5-flash-lite"
-    
-    # Default unified prompt for all event types
-    DEFAULT_UNIFIED_PROMPT = """You are an AI security analyst reviewing CCTV footage. Analyze this image for: {event_type}
+# ============================================================================
+# GLOBAL GEMINI PROMPT - Edit this to change AI validation behavior
+# ============================================================================
+DEFAULT_UNIFIED_PROMPT = """You are an AI security analyst reviewing CCTV footage. Analyze this image for: {event_type}
 
 YOUR TASK:
 1. Look at the image carefully
 2. Determine what event (if any) is actually happening
-3. Respond with what you SEE, not what you're told to find
+3. Classify into ONE of 3 categories: CASH, VIOLENCE, or FIRE
+4. Respond with what you SEE, not what you're told to find
+
+IMPORTANT: The system detects "potential_cash" as early warning, but YOU must classify ANY payment-related activity as "cash".
 
 EVENT TYPE DEFINITIONS:
 ======================
 
-CASH TRANSACTION (event_type = "cash")
-VALID if you see:
-   - Cashier AND customer clearly visible
-   - Hand reaching INTO open cash drawer
-   - Money/card exchange happening
-   - Transaction is COMPLETING (not just starting)
-   - Cash register or POS terminal visible
+CASH / PAYMENT TRANSACTIONS (Classify as: "cash")
+CRITICAL RULE: Must see CASHIER + CUSTOMER + PAYMENT ITEMS
 
-REJECT if:
-   - Only one person visible
-   - Drawer is closed
-   - Just hands touching (use "potential_cash" instead)
-   - No clear money exchange
+VALID if ALL conditions met:
+   ✓ Person(s) behind counter (cashier area)
+   ✓ Person(s) in front of counter (customer area)
+   ✓ PAYMENT ITEMS visible: cash bills, coins, credit/debit cards, mobile payment
+   ✓ Transaction happening: hands exchanging PAYMENT items, opening cash drawer
+   
+   EXAMPLES - ALL VALID:
+   - Cashier receiving cash bills or coins from customer
+   - Customer handing credit card / debit card / visa / payment card to cashier
+   - Cashier opening cash drawer while handling money
+   - Coins or bills visible on counter during transaction
+   - Customer using mobile payment (phone near terminal)
+   - Hand holding cash/card reaching to cashier
+   - ANY payment with visible cash, coins, or cards
 
-POTENTIAL CASH (event_type = "potential_cash")
-VALID if you see (LENIENT - accept early stage):
-   - Customer approaching cashier counter
-   - Hands close together or touching
-   - Hand gesture suggesting payment intent
-   - Person holding payment item (card/cash)
-   - NO need to see cash drawer open yet
+REJECT immediately if:
+   ✗ Empty counter with no people
+   ✗ Person walking by without stopping/interacting
+   ✗ No PAYMENT ITEMS visible (no cash, cards, coins)
+   ✗ Exchanging NON-PAYMENT items (keys, envelopes, documents, packages, food)
+   ✗ Just talking or standing (no payment visible)
+   ✗ Giving room keys, letters, or other hotel items (NOT payment)
 
-REJECT if:
-   - Empty counter with no people
-   - Person just walking by (not approaching counter)
-   - Clear non-payment activity
+REMEMBER: ONLY classify as "cash" if you see ACTUAL PAYMENT ITEMS (cash, coins, cards)
 
 VIOLENCE/ALTERCATION (event_type = "violence")
 VALID if you see:
@@ -102,19 +94,36 @@ REJECT if:
 RESPONSE FORMAT (JSON ONLY):
 {
     "is_valid": true/false,
-    "event_type_detected": "cash" | "potential_cash" | "violence" | "fire" | "none",
+    "event_type_detected": "cash" | "violence" | "fire" | "none",
     "confidence": 0.0-1.0,
     "reason": "brief 1-sentence explanation"
 }
 
 IMPORTANT RULES:
 1. is_valid = true ONLY if you SEE the event clearly
-2. event_type_detected = what you ACTUALLY see (can differ from {event_type})
-3. If YOLO says "violence" but you see "cash", set event_type_detected = "cash"
-4. If you see NOTHING suspicious, set is_valid = false, event_type_detected = "none"
-5. Be LENIENT for "potential_cash" (early detection)
-6. Be STRICT for "cash" (must see drawer open + exchange)
+2. event_type_detected = MUST be one of: "cash", "violence", "fire", or "none"
+3. If YOLO says "potential_cash", classify as "cash" if you see ANY payment activity
+4. If YOLO says "violence" but you see payment, set event_type_detected = "cash"
+5. If you see NOTHING suspicious, set is_valid = false, event_type_detected = "none"
+6. Be LENIENT for payment detection - accept early stage transactions
+7. NEVER return "potential_cash" - always use "cash" for any payment activity
 """
+# ============================================================================
+
+
+class GeminiValidator:
+    """
+    Validates detection events using Google Gemini Vision API.
+    
+    This acts as a filter layer - only events confirmed by Gemini are stored.
+    Supports custom prompts per camera and logging of all validations.
+    """
+    
+    # Gemini API - use gemini-2.5-flash-lite (cheapest, FREE standard tier)
+    # Best for: high volume, cost-efficient image validation
+    # Pricing: FREE (standard) | $0.10/1M input + $0.40/1M output (paid)
+    # https://ai.google.dev/gemini-api/docs/pricing
+    MODEL_NAME = "gemini-2.5-flash-lite"
     
     # Legacy prompts (for backward compatibility)
     PROMPTS = {
@@ -239,8 +248,8 @@ Respond in JSON format ONLY:
         if self.custom_prompts.get(event_type):
             return self.custom_prompts.get(event_type)
         
-        # Default: use built-in unified prompt
-        return self.DEFAULT_UNIFIED_PROMPT.replace('{event_type}', event_type)
+        # Default: use global unified prompt
+        return DEFAULT_UNIFIED_PROMPT.replace('{event_type}', event_type)
     
     def _encode_image(self, frame):
         """Convert OpenCV frame to bytes for Gemini API."""
@@ -427,8 +436,10 @@ Respond in JSON format ONLY:
             # If Gemini says it's valid but detects a different type, use that type
             if is_valid and detected_type != 'none' and detected_type != event_type:
                 # Gemini corrected the event type
+                # Example: YOLO says "potential_cash" → Gemini says "cash"
+                # Example: YOLO says "violence" → Gemini says "cash"
                 corrected_event_type = detected_type
-                reason = f"✅ Corrected: {event_type.upper()} → {corrected_event_type.upper()}. {reason}"
+                reason = f"Corrected: {event_type.upper()} → {corrected_event_type.upper()}. {reason}"
             elif is_valid and detected_type == event_type:
                 # Gemini confirmed the original detection
                 pass  # corrected_event_type stays as event_type
@@ -436,10 +447,6 @@ Respond in JSON format ONLY:
                 # Gemini rejected the detection
                 # Keep original event_type but mark as invalid
                 pass
-            
-            # Special handling for potential_cash - more lenient
-            if event_type == 'potential_cash' and confidence > 0.3:
-                is_valid = True
             
             # Calculate processing time
             processing_time_ms = int((time.time() - start_time) * 1000)

@@ -98,32 +98,16 @@ class Camera(models.Model):
     rtsp_url = models.CharField(max_length=500)  # RTSP stream URL
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='online')
     
-    # Cashier zone for cash detection [x, y, width, height] - independent per camera
-    cashier_zone_x = models.IntegerField(default=0)
-    cashier_zone_y = models.IntegerField(default=0)
-    cashier_zone_width = models.IntegerField(default=640)
-    cashier_zone_height = models.IntegerField(default=480)
+    # Detection zone toggles
     cashier_zone_enabled = models.BooleanField(default=False)
-    
-    # Cash Drawer/Register/Safe zone - where cashier puts money after receiving
-    cash_drawer_zone_x = models.IntegerField(default=0)
-    cash_drawer_zone_y = models.IntegerField(default=0)
-    cash_drawer_zone_width = models.IntegerField(default=200)
-    cash_drawer_zone_height = models.IntegerField(default=150)
     cash_drawer_zone_enabled = models.BooleanField(default=False)
     
     # Hand tracking duration (frames) - how long to track cashier's hand after touch
     hand_tracking_duration = models.IntegerField(default=90)  # ~3 seconds at 30fps
     
-    # Polygon zone support (free-form shapes instead of rectangles)
-    use_polygon_zones = models.BooleanField(default=False, help_text='Use polygon zones instead of rectangular zones')
+    # Polygon zones (always enabled for precise detection)
     cashier_zone_polygon = models.TextField(blank=True, null=True, help_text='JSON array of polygon points [[x1,y1],[x2,y2],...] for cashier zone')
     cash_drawer_zone_polygon = models.TextField(blank=True, null=True, help_text='JSON array of polygon points [[x1,y1],[x2,y2],...] for cash drawer zone')
-    
-    # Custom Gemini prompts per camera
-    gemini_cash_prompt = models.TextField(blank=True, null=True, help_text='Custom Gemini prompt for cash detection validation')
-    gemini_violence_prompt = models.TextField(blank=True, null=True, help_text='Custom Gemini prompt for violence detection validation')
-    gemini_fire_prompt = models.TextField(blank=True, null=True, help_text='Custom Gemini prompt for fire detection validation')
     
     # Independent confidence thresholds per camera
     cash_confidence = models.FloatField(default=0.5)
@@ -156,44 +140,6 @@ class Camera(models.Model):
     def __str__(self):
         return f"{self.camera_id} - {self.name}"
     
-    def get_cashier_zone(self):
-        """Get cashier zone as dict"""
-        return {
-            'x': self.cashier_zone_x,
-            'y': self.cashier_zone_y,
-            'width': self.cashier_zone_width,
-            'height': self.cashier_zone_height,
-            'enabled': self.cashier_zone_enabled
-        }
-    
-    def set_cashier_zone(self, x, y, width, height, enabled=True):
-        """Set cashier zone from coordinates"""
-        self.cashier_zone_x = int(x)
-        self.cashier_zone_y = int(y)
-        self.cashier_zone_width = int(width)
-        self.cashier_zone_height = int(height)
-        self.cashier_zone_enabled = enabled
-        self.save()
-    
-    def get_cash_drawer_zone(self):
-        """Get cash drawer zone as dict"""
-        return {
-            'x': self.cash_drawer_zone_x,
-            'y': self.cash_drawer_zone_y,
-            'width': self.cash_drawer_zone_width,
-            'height': self.cash_drawer_zone_height,
-            'enabled': self.cash_drawer_zone_enabled
-        }
-    
-    def set_cash_drawer_zone(self, x, y, width, height, enabled=True):
-        """Set cash drawer zone from coordinates"""
-        self.cash_drawer_zone_x = int(x)
-        self.cash_drawer_zone_y = int(y)
-        self.cash_drawer_zone_width = int(width)
-        self.cash_drawer_zone_height = int(height)
-        self.cash_drawer_zone_enabled = enabled
-        self.save()
-    
     def get_cashier_zone_polygon_points(self):
         """Get cashier zone as polygon points list"""
         import json
@@ -210,7 +156,6 @@ class Camera(models.Model):
         import json
         self.cashier_zone_polygon = json.dumps(points)
         self.cashier_zone_enabled = enabled
-        self.use_polygon_zones = True
         self.save()
     
     def get_cash_drawer_zone_polygon_points(self):
@@ -229,17 +174,7 @@ class Camera(models.Model):
         import json
         self.cash_drawer_zone_polygon = json.dumps(points)
         self.cash_drawer_zone_enabled = enabled
-        self.use_polygon_zones = True
         self.save()
-    
-    def get_gemini_prompts(self):
-        """Get custom Gemini prompts (or defaults)"""
-        from detectors.gemini_validator import GeminiValidator
-        return {
-            'cash': self.gemini_cash_prompt or GeminiValidator.PROMPTS.get('cash', ''),
-            'violence': self.gemini_violence_prompt or GeminiValidator.PROMPTS.get('violence', ''),
-            'fire': self.gemini_fire_prompt or GeminiValidator.PROMPTS.get('fire', ''),
-        }
     
     def get_confidence_thresholds(self):
         """Get all confidence thresholds"""
@@ -258,12 +193,9 @@ class Camera(models.Model):
             'cash_confidence': self.cash_confidence,
             'violence_confidence': self.violence_confidence,
             'fire_confidence': self.fire_confidence,
-            'cashier_zone': self.get_cashier_zone(),
-            'cash_drawer_zone': self.get_cash_drawer_zone(),
             'hand_tracking_duration': self.hand_tracking_duration,
-            'use_polygon_zones': self.use_polygon_zones,
-            'cashier_zone_polygon': self.get_cashier_zone_polygon_points() if self.use_polygon_zones else None,
-            'cash_drawer_zone_polygon': self.get_cash_drawer_zone_polygon_points() if self.use_polygon_zones else None,
+            'cashier_zone_polygon': self.get_cashier_zone_polygon_points(),
+            'cash_drawer_zone_polygon': self.get_cash_drawer_zone_polygon_points(),
         }
 
 
@@ -317,6 +249,54 @@ class Event(models.Model):
     
     def get_bbox(self):
         return [self.bbox_x1, self.bbox_y1, self.bbox_x2, self.bbox_y2]
+
+
+class GeminiPrompts(models.Model):
+    """Global Gemini AI prompts for all cameras"""
+    unified_prompt = models.TextField(
+        blank=True, 
+        null=True,
+        help_text='Unified prompt for all detection types (cash, violence, fire)'
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'gemini_prompts'
+        verbose_name = 'Gemini AI Prompt'
+        verbose_name_plural = 'Gemini AI Prompts'
+    
+    def __str__(self):
+        return f"Gemini Prompts (Updated: {self.updated_at})"
+    
+    @classmethod
+    def get_prompts(cls):
+        """Get global prompts or create default"""
+        from detectors.gemini_validator import DEFAULT_UNIFIED_PROMPT
+        instance, created = cls.objects.get_or_create(pk=1)
+        
+        # Return unified prompt or default
+        unified = instance.unified_prompt or DEFAULT_UNIFIED_PROMPT
+        return {
+            'unified': unified,
+            'cash': unified,
+            'violence': unified,
+            'fire': unified,
+        }
+    
+    @classmethod
+    def get_default_prompt(cls):
+        """Get the default unified prompt"""
+        from detectors.gemini_validator import DEFAULT_UNIFIED_PROMPT
+        return DEFAULT_UNIFIED_PROMPT
+    
+    @classmethod
+    def set_unified_prompt(cls, prompt: str):
+        """Set unified prompt for all detection types"""
+        instance, created = cls.objects.get_or_create(pk=1)
+        instance.unified_prompt = prompt if prompt else None
+        instance.save()
+        return instance
 
 
 class VideoRecord(models.Model):

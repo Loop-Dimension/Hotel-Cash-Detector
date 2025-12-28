@@ -172,7 +172,7 @@ DETECTION_CONFIG = {
     
     # Default detection thresholds (can be overridden per camera)
     'CONFIDENCE_THRESHOLD': float(os.getenv('CASH_DETECTION_CONFIDENCE', '0.5')),
-    'POSE_CONFIDENCE': 0.5,
+    'POSE_CONFIDENCE': 0.2,
     'HAND_TOUCH_DISTANCE': 80,
     'MIN_TRANSACTION_FRAMES': 1,
     

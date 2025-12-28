@@ -53,10 +53,11 @@ except ImportError as e:
 
 # Try to import Gemini validator
 try:
-    from detectors.gemini_validator import GeminiValidator
+    from detectors.gemini_validator import GeminiValidator, DEFAULT_UNIFIED_PROMPT
     GEMINI_AVAILABLE = True
 except ImportError as e:
     GEMINI_AVAILABLE = False
+    DEFAULT_UNIFIED_PROMPT = ""
     print(f"Warning: Gemini validator not available - {e}")
 
 import threading
@@ -644,8 +645,11 @@ def api_camera_detail(request, camera_id):
             'location': camera.location,
             'status': camera.status,
             'rtsp_url': camera.rtsp_url,
-            # Cashier zone settings
-            'cashier_zone': camera.get_cashier_zone(),
+            # Polygon zone settings
+            'cashier_zone_polygon': camera.get_cashier_zone_polygon_points(),
+            'cashier_zone_enabled': camera.cashier_zone_enabled,
+            'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points(),
+            'cash_drawer_zone_enabled': camera.cash_drawer_zone_enabled,
             # Detection toggles
             'detect_cash': camera.detect_cash,
             'detect_violence': camera.detect_violence,
@@ -688,16 +692,7 @@ def api_camera_detail(request, camera_id):
         
         # Hand touch distance for cash detection
         if 'hand_touch_distance' in data:
-            camera.hand_touch_distance = max(30, min(300, int(data['hand_touch_distance'])))
-        
-        # Cashier zone
-        if 'cashier_zone' in data:
-            zone = data['cashier_zone']
-            camera.cashier_zone_x = int(zone.get('x', camera.cashier_zone_x))
-            camera.cashier_zone_y = int(zone.get('y', camera.cashier_zone_y))
-            camera.cashier_zone_width = int(zone.get('width', camera.cashier_zone_width))
-            camera.cashier_zone_height = int(zone.get('height', camera.cashier_zone_height))
-            camera.cashier_zone_enabled = zone.get('enabled', camera.cashier_zone_enabled)
+            camera.hand_touch_distance = max(30, min(600, int(data['hand_touch_distance'])))
         
         camera.save()
         return JsonResponse({'success': True, 'camera': camera.get_detection_settings()})
@@ -1071,7 +1066,7 @@ def api_reports(request):
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_set_cashier_zone(request, camera_id):
-    """Set cashier zone for a camera"""
+    """Set cashier zone polygon for a camera"""
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
@@ -1080,45 +1075,27 @@ def api_set_cashier_zone(request, camera_id):
     
     data = json.loads(request.body)
     
-    # Support both formats: dict or list
-    if 'zone' in data:
-        zone = data['zone']
-        if isinstance(zone, list) and len(zone) == 4:
-            camera.set_cashier_zone(zone[0], zone[1], zone[2], zone[3], True)
-        elif isinstance(zone, dict):
-            camera.set_cashier_zone(
-                zone.get('x', 0),
-                zone.get('y', 0),
-                zone.get('width', 640),
-                zone.get('height', 480),
-                zone.get('enabled', True)
-            )
-    else:
-        # Direct parameters
-        camera.set_cashier_zone(
-            data.get('x', camera.cashier_zone_x),
-            data.get('y', camera.cashier_zone_y),
-            data.get('width', camera.cashier_zone_width),
-            data.get('height', camera.cashier_zone_height),
-            data.get('enabled', True)
-        )
-    
-    # Save polygon data if provided
+    # Save polygon data
     if 'polygon' in data and data['polygon']:
         camera.cashier_zone_polygon = json.dumps(data['polygon'])
+        camera.cashier_zone_enabled = data.get('enabled', True)
         camera.save()
     elif 'polygon' in data and data['polygon'] is None:
         camera.cashier_zone_polygon = None
         camera.save()
     
-    return JsonResponse({'success': True, 'cashier_zone': camera.get_cashier_zone()})
+    return JsonResponse({
+        'success': True, 
+        'cashier_zone_polygon': camera.get_cashier_zone_polygon_points(),
+        'cashier_zone_enabled': camera.cashier_zone_enabled
+    })
 
 
 @login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_set_cash_drawer_zone(request, camera_id):
-    """Set cash drawer zone for a camera (for two-step cash detection)"""
+    """Set cash drawer zone polygon for a camera"""
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
@@ -1127,38 +1104,20 @@ def api_set_cash_drawer_zone(request, camera_id):
     
     data = json.loads(request.body)
     
-    # Support both formats: dict or list
-    if 'zone' in data:
-        zone = data['zone']
-        if isinstance(zone, list) and len(zone) == 4:
-            camera.set_cash_drawer_zone(zone[0], zone[1], zone[2], zone[3], True)
-        elif isinstance(zone, dict):
-            camera.set_cash_drawer_zone(
-                zone.get('x', 50),
-                zone.get('y', 200),
-                zone.get('width', 150),
-                zone.get('height', 100),
-                zone.get('enabled', True)
-            )
-    else:
-        # Direct parameters
-        camera.set_cash_drawer_zone(
-            data.get('x', camera.cash_drawer_zone_x),
-            data.get('y', camera.cash_drawer_zone_y),
-            data.get('width', camera.cash_drawer_zone_width),
-            data.get('height', camera.cash_drawer_zone_height),
-            data.get('enabled', True)
-        )
-    
-    # Save polygon data if provided
+    # Save polygon data
     if 'polygon' in data and data['polygon']:
         camera.cash_drawer_zone_polygon = json.dumps(data['polygon'])
+        camera.cash_drawer_zone_enabled = data.get('enabled', True)
         camera.save()
     elif 'polygon' in data and data['polygon'] is None:
         camera.cash_drawer_zone_polygon = None
         camera.save()
     
-    return JsonResponse({'success': True, 'cash_drawer_zone': camera.get_cash_drawer_zone()})
+    return JsonResponse({
+        'success': True, 
+        'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points(),
+        'cash_drawer_zone_enabled': camera.cash_drawer_zone_enabled
+    })
 
 
 @login_required
@@ -1194,47 +1153,21 @@ def api_camera_settings(request, camera_id):
     
     # Hand touch distance for cash detection
     if 'hand_touch_distance' in data:
-        camera.hand_touch_distance = max(30, min(300, int(data['hand_touch_distance'])))
+        camera.hand_touch_distance = max(30, min(600, int(data['hand_touch_distance'])))
     
     # Hand tracking duration for two-step cash detection
     if 'hand_tracking_duration' in data:
         camera.hand_tracking_duration = max(30, min(300, int(data['hand_tracking_duration'])))
     
-    # Cashier zone (rectangle)
-    if 'cashier_zone' in data:
-        zone = data['cashier_zone']
-        camera.cashier_zone_x = int(zone.get('x', camera.cashier_zone_x))
-        camera.cashier_zone_y = int(zone.get('y', camera.cashier_zone_y))
-        camera.cashier_zone_width = int(zone.get('width', camera.cashier_zone_width))
-        camera.cashier_zone_height = int(zone.get('height', camera.cashier_zone_height))
-        camera.cashier_zone_enabled = bool(zone.get('enabled', camera.cashier_zone_enabled))
-    
-    # Cash Drawer zone (for two-step cash detection)
-    if 'cash_drawer_zone' in data:
-        zone = data['cash_drawer_zone']
-        camera.cash_drawer_zone_x = int(zone.get('x', camera.cash_drawer_zone_x))
-        camera.cash_drawer_zone_y = int(zone.get('y', camera.cash_drawer_zone_y))
-        camera.cash_drawer_zone_width = int(zone.get('width', camera.cash_drawer_zone_width))
-        camera.cash_drawer_zone_height = int(zone.get('height', camera.cash_drawer_zone_height))
-        camera.cash_drawer_zone_enabled = bool(zone.get('enabled', camera.cash_drawer_zone_enabled))
-    
-    # Polygon zones (free-form shapes)
-    if 'use_polygon_zones' in data:
-        camera.use_polygon_zones = bool(data['use_polygon_zones'])
+    # Polygon zones (always enabled)
     if 'cashier_zone_polygon' in data:
         import json as json_module
         camera.cashier_zone_polygon = json_module.dumps(data['cashier_zone_polygon']) if data['cashier_zone_polygon'] else None
+        camera.cashier_zone_enabled = bool(data.get('cashier_zone_enabled', True))
     if 'cash_drawer_zone_polygon' in data:
         import json as json_module
         camera.cash_drawer_zone_polygon = json_module.dumps(data['cash_drawer_zone_polygon']) if data['cash_drawer_zone_polygon'] else None
-    
-    # Custom Gemini prompts
-    if 'gemini_cash_prompt' in data:
-        camera.gemini_cash_prompt = data['gemini_cash_prompt'] or None
-    if 'gemini_violence_prompt' in data:
-        camera.gemini_violence_prompt = data['gemini_violence_prompt'] or None
-    if 'gemini_fire_prompt' in data:
-        camera.gemini_fire_prompt = data['gemini_fire_prompt'] or None
+        camera.cash_drawer_zone_enabled = bool(data.get('cash_drawer_zone_enabled', True))
     
     camera.save()
     
@@ -1393,6 +1326,16 @@ def get_detector_for_camera(camera):
     cache_key = f"{camera.id}_{camera.updated_at.timestamp()}"
     
     if camera.id not in camera_detectors or camera_detectors.get(f'{camera.id}_key') != cache_key:
+        # Debug: Print polygon data being loaded
+        polygon_points = camera.get_cashier_zone_polygon_points()
+        print(f"\n{'='*60}")
+        print(f"[get_detector_for_camera] Camera {camera.id} - {camera.name}")
+        print(f"cashier_zone_polygon field: {camera.cashier_zone_polygon}")
+        print(f"Parsed polygon points: {polygon_points}")
+        if polygon_points:
+            print(f"Number of polygon points: {len(polygon_points)}")
+        print(f"{'='*60}\n")
+        
         # Use camera-specific confidence thresholds
         config = {
             'models_dir': str(settings.DETECTION_CONFIG['MODELS_DIR']),
@@ -1403,13 +1346,11 @@ def get_detector_for_camera(camera):
             'violence_pose_model': settings.DETECTION_CONFIG.get('VIOLENCE_POSE_MODEL', 'yolov8n-pose.pt'),
             'fire_yolo_model': settings.DETECTION_CONFIG.get('FIRE_YOLO_MODEL', 'yolov8n.pt'),
             'fire_model': settings.DETECTION_CONFIG.get('FIRE_MODEL', 'fire_smoke_yolov8.pt'),
-            'cashier_zone': [
-                camera.cashier_zone_x,
-                camera.cashier_zone_y,
-                camera.cashier_zone_width,
-                camera.cashier_zone_height
-            ],
+            # Polygon zones for detection
+            'cashier_zone_polygon': polygon_points,
             'cashier_zone_enabled': camera.cashier_zone_enabled,
+            'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points(),
+            'cash_drawer_zone_enabled': camera.cash_drawer_zone_enabled,
             # Hide zone overlay by default (UI only - backend detection still works)
             'show_zone_overlay': False,
             # Camera-specific confidence thresholds
@@ -1711,12 +1652,10 @@ def draw_debug_frame(frame, camera, pose_model=None, fps=0.0):
         cv2.rectangle(frame, (5, h - text_h - 15), (text_w + 20, h - 5), (0, 0, 0), -1)
         cv2.putText(frame, fps_text, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
     
-    # Get cashier zone
-    cashier_zone = [camera.cashier_zone_x, camera.cashier_zone_y, 
-                    camera.cashier_zone_width, camera.cashier_zone_height]
-    zx, zy, zw, zh = cashier_zone
+    # Get cashier zone polygon points for person detection
+    cashier_zone_polygon = camera.get_cashier_zone_polygon_points()
     
-    # Draw cashier zone (POLYGON ONLY - no rectangle fallback)
+    # Draw cashier zone (POLYGON ONLY)
     if camera.cashier_zone_polygon:
         try:
             cashier_polygon = json.loads(camera.cashier_zone_polygon)
@@ -2525,7 +2464,16 @@ class BackgroundCameraWorker:
         if not DETECTOR_AVAILABLE:
             return None
         
-        zone = camera.get_cashier_zone()
+        # Debug: Print polygon data being loaded
+        polygon_points = camera.get_cashier_zone_polygon_points()
+        print(f"\n{'='*60}")
+        print(f"[BackgroundWorker.create_detector] Camera {camera.id} - {camera.name}")
+        print(f"cashier_zone_polygon field: {camera.cashier_zone_polygon}")
+        print(f"Parsed polygon points: {polygon_points}")
+        if polygon_points:
+            print(f"Number of polygon points: {len(polygon_points)}")
+        print(f"{'='*60}\n")
+        
         config = {
             'models_dir': str(self.models_dir),
             # GPU/CPU setting from environment
@@ -2535,8 +2483,12 @@ class BackgroundCameraWorker:
             'violence_pose_model': settings.DETECTION_CONFIG.get('VIOLENCE_POSE_MODEL', 'yolov8n-pose.pt'),
             'fire_yolo_model': settings.DETECTION_CONFIG.get('FIRE_YOLO_MODEL', 'yolov8n.pt'),
             'fire_model': settings.DETECTION_CONFIG.get('FIRE_MODEL', 'fire_smoke_yolov8.pt'),
+            # Polygon zones for detection
+            'cashier_zone_polygon': polygon_points,
+            'cashier_zone_enabled': camera.cashier_zone_enabled,
+            'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points(),
+            'cash_drawer_zone_enabled': camera.cash_drawer_zone_enabled,
             # Detection settings
-            'cashier_zone': [zone['x'], zone['y'], zone['width'], zone['height']],
             'hand_touch_distance': camera.hand_touch_distance,
             'pose_confidence': 0.5,
             'min_transaction_frames': 1,  # Immediate cash detection
@@ -3061,19 +3013,8 @@ class BackgroundCameraWorker:
                         try:
                             gemini_api_key = getattr(settings, 'GEMINI_API_KEY', '')
                             if gemini_api_key:
-                                # Create validator with camera_id for logging
+                                # Create validator with camera_id for logging (uses global prompts)
                                 validator = GeminiValidator(api_key=gemini_api_key, camera_id=camera.id)
-                                
-                                # Set custom prompts if defined for this camera
-                                custom_prompts = {}
-                                if camera.gemini_cash_prompt:
-                                    custom_prompts['cash'] = camera.gemini_cash_prompt
-                                if camera.gemini_violence_prompt:
-                                    custom_prompts['violence'] = camera.gemini_violence_prompt
-                                if camera.gemini_fire_prompt:
-                                    custom_prompts['fire'] = camera.gemini_fire_prompt
-                                if custom_prompts:
-                                    validator.set_custom_prompts(custom_prompts)
                                 
                                 gemini_validated, gemini_confidence, gemini_reason, corrected_event_type = validator.validate_event(frame, event_type)
                                 print(f"[Detection] Gemini validation: {event_type} = {gemini_validated}, corrected_type={corrected_event_type} ({gemini_reason})")
@@ -3992,12 +3933,14 @@ def api_gemini_log_detail(request, log_id):
 
 @login_required
 def api_gemini_prompts(request, camera_id):
-    """Get or update Gemini prompts for a camera"""
+    """Get or set Gemini prompts (now global)"""
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
     if not user.is_admin() and camera.branch not in get_user_branches(user):
         return JsonResponse({'error': 'Permission denied'}, status=403)
+    
+    from .models import GeminiPrompts
     
     if request.method == 'GET':
         # Get default prompts from GeminiValidator
@@ -4007,60 +3950,39 @@ def api_gemini_prompts(request, camera_id):
         else:
             default_prompts = {'cash': '', 'violence': '', 'fire': ''}
         
+        prompts = GeminiPrompts.get_prompts()
+        
         return JsonResponse({
-            'prompts': {
-                'cash': camera.gemini_cash_prompt or '',
-                'violence': camera.gemini_violence_prompt or '',
-                'fire': camera.gemini_fire_prompt or '',
-            },
+            'prompts': prompts,
             'defaults': default_prompts,
             'using_custom': {
-                'cash': bool(camera.gemini_cash_prompt),
-                'violence': bool(camera.gemini_violence_prompt),
-                'fire': bool(camera.gemini_fire_prompt),
+                'unified': bool(prompts.get('unified'))
             }
         })
     
     elif request.method == 'POST':
-        data = json.loads(request.body)
-        
-        if 'cash' in data:
-            camera.gemini_cash_prompt = data['cash'] or None
-        if 'violence' in data:
-            camera.gemini_violence_prompt = data['violence'] or None
-        if 'fire' in data:
-            camera.gemini_fire_prompt = data['fire'] or None
-        
-        camera.save()
-        
+        # Redirect to global prompts endpoint
         return JsonResponse({
-            'success': True,
-            'prompts': {
-                'cash': camera.gemini_cash_prompt or '',
-                'violence': camera.gemini_violence_prompt or '',
-                'fire': camera.gemini_fire_prompt or '',
-            }
-        })
+            'success': False,
+            'message': 'Please use /api/gemini/global-prompts/ to update prompts'
+        }, status=400)
     
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
 @login_required
 def api_gemini_reset_prompts(request, camera_id):
-    """Reset Gemini prompts to defaults for a camera"""
+    """Reset Gemini prompts to defaults (now affects global prompts)"""
     user = request.user
-    camera = get_object_or_404(Camera, id=camera_id)
     
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin():
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     if request.method == 'POST':
-        camera.gemini_cash_prompt = None
-        camera.gemini_violence_prompt = None
-        camera.gemini_fire_prompt = None
-        camera.save()
+        from .models import GeminiPrompts
+        GeminiPrompts.set_unified_prompt('')
         
-        return JsonResponse({'success': True, 'message': 'Prompts reset to defaults'})
+        return JsonResponse({'success': True, 'message': 'Global prompts reset to defaults'})
     
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
@@ -4076,18 +3998,14 @@ def api_polygon_zones(request, camera_id):
     
     if request.method == 'GET':
         return JsonResponse({
-            'use_polygon_zones': camera.use_polygon_zones,
-            'cashier_zone_polygon': camera.get_cashier_zone_polygon_points() if camera.use_polygon_zones else None,
-            'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points() if camera.use_polygon_zones else None,
+            'cashier_zone_polygon': camera.get_cashier_zone_polygon_points(),
+            'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points(),
             'cashier_zone_enabled': camera.cashier_zone_enabled,
             'cash_drawer_zone_enabled': camera.cash_drawer_zone_enabled,
         })
     
     elif request.method == 'POST':
         data = json.loads(request.body)
-        
-        if 'use_polygon_zones' in data:
-            camera.use_polygon_zones = bool(data['use_polygon_zones'])
         
         if 'cashier_zone_polygon' in data:
             points = data['cashier_zone_polygon']
@@ -4109,9 +4027,8 @@ def api_polygon_zones(request, camera_id):
         
         return JsonResponse({
             'success': True,
-            'use_polygon_zones': camera.use_polygon_zones,
-            'cashier_zone_polygon': camera.get_cashier_zone_polygon_points() if camera.use_polygon_zones else None,
-            'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points() if camera.use_polygon_zones else None,
+            'cashier_zone_polygon': camera.get_cashier_zone_polygon_points(),
+            'cash_drawer_zone_polygon': camera.get_cash_drawer_zone_polygon_points(),
         })
     
     return JsonResponse({'error': 'Method not allowed'}, status=405)
@@ -4126,103 +4043,24 @@ def api_gemini_global_prompts(request):
     if not user.is_admin():
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
-    # Default unified prompt that handles all event types
-    default_unified_prompt = """You are an AI security analyst reviewing CCTV footage. Analyze this image for: {event_type}
-
-YOUR TASK:
-1. Look at the image carefully
-2. Determine what event (if any) is actually happening
-3. Respond with what you SEE, not what you're told to find
-
-EVENT TYPE DEFINITIONS:
-======================
-
-CASH TRANSACTION (event_type = "cash")
-VALID if you see:
-   - Cashier AND customer clearly visible
-   - Hand reaching INTO open cash drawer
-   - Money/card exchange happening
-   - Transaction is COMPLETING (not just starting)
-   - Cash register or POS terminal visible
-
-REJECT if:
-   - Only one person visible
-   - Drawer is closed
-   - Just hands touching (use "potential_cash" instead)
-   - No clear money exchange
-
-POTENTIAL CASH (event_type = "potential_cash")
-VALID if you see (LENIENT - accept early stage):
-   - Customer approaching cashier counter
-   - Hands close together or touching
-   - Hand gesture suggesting payment intent
-   - Person holding payment item (card/cash)
-   - NO need to see cash drawer open yet
-
-REJECT if:
-   - Empty counter with no people
-   - Person just walking by (not approaching counter)
-   - Clear non-payment activity
-
-VIOLENCE/ALTERCATION (event_type = "violence")
-VALID if you see:
-   - People in fighting poses (fists raised, defensive stance)
-   - Physical aggression (punching, pushing, grabbing)
-   - Person on ground from being attacked
-   - Multiple people surrounding one person aggressively
-   - Clear hostile body language
-
-REJECT if:
-   - Normal standing/walking
-   - Friendly handshake or conversation
-   - People just standing close together
-   - Normal interaction
-
-FIRE/SMOKE (event_type = "fire")
-VALID if you see:
-   - Visible flames (orange/red/yellow fire)
-   - Smoke clouds (white, gray, or black)
-   - Unusual bright lighting from fire
-   - Objects actively burning
-
-REJECT if:
-   - Normal lighting or sunset colors
-   - Red/orange objects (not fire)
-   - Steam from cooking
-   - Screen reflections
-
-RESPONSE FORMAT (JSON ONLY):
-{
-    "is_valid": true/false,
-    "event_type_detected": "cash" | "potential_cash" | "violence" | "fire" | "none",
-    "confidence": 0.0-1.0,
-    "reason": "brief 1-sentence explanation"
-}
-
-IMPORTANT RULES:
-1. is_valid = true ONLY if you SEE the event clearly
-2. event_type_detected = what you ACTUALLY see (can differ from {event_type})
-3. If YOLO says "violence" but you see "cash", set event_type_detected = "cash"
-4. If you see NOTHING suspicious, set is_valid = false, event_type_detected = "none"
-5. Be LENIENT for "potential_cash" (early detection)
-6. Be STRICT for "cash" (must see drawer open + exchange)
-"""
+    from .models import GeminiPrompts
     
     if request.method == 'GET':
-        # Get unified prompt from the first camera that has it, or use default
-        first_camera = Camera.objects.first()
+        # Get default prompts from GeminiValidator
+        if GEMINI_AVAILABLE:
+            from detectors.gemini_validator import GeminiValidator
+            DEFAULT_UNIFIED_PROMPT = GeminiValidator.PROMPTS.get('unified', '')
+        else:
+            DEFAULT_UNIFIED_PROMPT = ''
         
-        unified_prompt = default_unified_prompt
-        if first_camera and first_camera.gemini_cash_prompt:
-            # Use stored unified prompt (stored in cash_prompt field for compatibility)
-            unified_prompt = first_camera.gemini_cash_prompt
+        prompts = GeminiPrompts.get_prompts()
         
         return JsonResponse({
             'prompts': {
-                'unified': unified_prompt
+                'unified': prompts.get('unified', '')
             },
             'defaults': {
-                'unified': default_unified_prompt
+                'unified': DEFAULT_UNIFIED_PROMPT
             }
         })
     
@@ -4230,20 +4068,12 @@ IMPORTANT RULES:
         data = json.loads(request.body)
         unified_prompt = data.get('unified', '')
         
-        # Update all cameras with the unified prompt (stored in cash_prompt for compatibility)
-        cameras = Camera.objects.all()
-        updated = 0
-        for camera in cameras:
-            # Store unified prompt in cash_prompt field, clear others
-            camera.gemini_cash_prompt = unified_prompt or None
-            camera.gemini_violence_prompt = None  # Not used anymore
-            camera.gemini_fire_prompt = None  # Not used anymore
-            camera.save()
-            updated += 1
+        # Update global prompts
+        GeminiPrompts.set_unified_prompt(unified_prompt)
         
         return JsonResponse({
             'success': True,
-            'message': f'Unified prompt updated for {updated} cameras'
+            'message': 'Global unified prompt updated'
         })
     
     return JsonResponse({'error': 'Method not allowed'}, status=405)

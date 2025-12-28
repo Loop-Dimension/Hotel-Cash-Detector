@@ -3,7 +3,7 @@ Django Admin configuration for CCTV app
 """
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Region, Branch, Camera, Event, VideoRecord, BranchAccount
+from .models import User, Region, Branch, Camera, Event, VideoRecord, BranchAccount, GeminiPrompts
 
 
 @admin.register(User)
@@ -34,7 +34,7 @@ class BranchAdmin(admin.ModelAdmin):
 
 @admin.register(Camera)
 class CameraAdmin(admin.ModelAdmin):
-    list_display = ['camera_id', 'name', 'branch', 'status', 'location', 'detect_cash', 'detect_violence', 'detect_fire']
+    list_display = ['camera_id', 'name', 'branch', 'status', 'location', 'detect_cash', 'detect_violence', 'detect_fire', 'cashier_zone_enabled']
     list_filter = ['branch', 'status', 'detect_cash', 'detect_violence', 'detect_fire']
     search_fields = ['camera_id', 'name']
     list_editable = ['status', 'detect_cash', 'detect_violence', 'detect_fire']
@@ -46,16 +46,21 @@ class CameraAdmin(admin.ModelAdmin):
             'fields': ('detect_cash', 'detect_violence', 'detect_fire')
         }),
         ('Confidence Thresholds', {
-            'fields': ('cash_confidence', 'violence_confidence', 'fire_confidence'),
+            'fields': ('cash_confidence', 'violence_confidence', 'fire_confidence', 'pose_confidence'),
             'description': 'Set confidence threshold (0.0 - 1.0) for each detection type'
         }),
-        ('Cashier Zone', {
-            'fields': ('cashier_zone_enabled', 'cashier_zone_x', 'cashier_zone_y', 'cashier_zone_width', 'cashier_zone_height'),
-            'classes': ('collapse',)
+        ('Hand Detection Settings', {
+            'fields': ('hand_touch_distance', 'hand_tracking_duration'),
+            'description': 'Distance threshold for hand proximity detection and tracking duration'
         }),
-        ('Custom Models', {
+        ('Polygon Zones', {
+            'fields': ('cashier_zone_enabled', 'cashier_zone_polygon', 'cash_drawer_zone_polygon'),
+            'description': 'Define detection zones using polygon points [[x1,y1], [x2,y2], ...]'
+        }),
+        ('Custom Models (Optional)', {
             'fields': ('custom_yolo_model', 'custom_pose_model', 'custom_fire_model'),
-            'classes': ('collapse',)
+            'classes': ('collapse',),
+            'description': 'Override global model settings for this camera'
         }),
     )
 
@@ -107,3 +112,29 @@ class BranchAccountAdmin(admin.ModelAdmin):
     list_display = ['name', 'email', 'branch', 'role']
     list_filter = ['branch', 'role']
     search_fields = ['name', 'email']
+
+
+@admin.register(GeminiPrompts)
+class GeminiPromptsAdmin(admin.ModelAdmin):
+    list_display = ['id', 'updated_at', 'created_at']
+    readonly_fields = ['created_at', 'updated_at']
+    
+    fieldsets = (
+        ('Global Gemini AI Prompts', {
+            'fields': ('unified_prompt',),
+            'description': 'Configure the unified prompt used for all detection types (cash, violence, fire) across all cameras'
+        }),
+        ('Metadata', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def has_add_permission(self, request):
+        # Only allow one instance
+        return not GeminiPrompts.objects.exists()
+    
+    def has_delete_permission(self, request, obj=None):
+        # Don't allow deletion
+        return False
+

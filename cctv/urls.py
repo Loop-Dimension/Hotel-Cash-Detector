@@ -21,11 +21,6 @@ urlpatterns = [
     path('video/logs/', views.video_logs, name='video_logs'),
     path('video/full/', views.video_full, name='video_full'),
     
-    # Test Detection
-    path('test/', views.test_detection, name='test_detection'),
-    path('api/test/upload/', views.api_test_upload, name='api_test_upload'),
-    path('api/test/process/', views.api_test_process, name='api_test_process'),
-    
     # Gemini AI Pages (Global)
     path('gemini/prompts/', views.gemini_prompts_page, name='gemini_prompts'),
     path('gemini/logs/', views.gemini_logs_page, name='gemini_logs'),
