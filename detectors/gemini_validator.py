@@ -7,7 +7,7 @@ before events are stored in the database.
 
 Usage:
     validator = GeminiValidator(api_key="your-api-key")
-    is_valid, confidence, reason = validator.validate_event(frame, "cash")
+    is_valid, confidence, reason, corrected_event_type = validator.validate_event(frame, "cash")
 """
 
 import cv2
@@ -37,33 +37,32 @@ EVENT TYPE DEFINITIONS:
 ======================
 
 CASH / PAYMENT TRANSACTIONS (Classify as: "cash")
-CRITICAL RULE: Must see CASHIER + CUSTOMER + ACTUAL MONEY (CASH BILLS or COINS ONLY)
+CRITICAL RULE: Must see CASHIER + CUSTOMER + PAYMENT ITEMS
 
 VALID if ALL conditions met:
-   ✓ Person(s) behind counter (cashier area)
-   ✓ Person(s) in front of counter (customer area)
-   ✓ ACTUAL MONEY visible: CASH BILLS (paper money/banknotes) OR COINS ONLY
-   ✓ Transaction happening: hands exchanging money, opening cash drawer with money visible
+   1. Person(s) behind counter (cashier area)
+   2. Person(s) in front of counter (customer area)
+   3. PAYMENT ITEMS visible: cash bills, coins, credit/debit cards, mobile payment
+   4. Transaction happening: hands exchanging PAYMENT items, opening cash drawer
    
    EXAMPLES - ALL VALID:
    - Cashier receiving cash bills or coins from customer
-   - Cashier opening cash drawer with visible money/bills inside
-   - Hand holding paper money (banknotes) reaching to cashier
-   - Coins being exchanged between cashier and customer
-   - Stack of bills visible on counter during transaction
+   - Customer handing credit card / debit card / visa / payment card to cashier
+   - Cashier opening cash drawer while handling money
+   - Coins or bills visible on counter during transaction
+   - Customer using mobile payment (phone near terminal)
+   - Hand holding cash/card reaching to cashier
+   - ANY payment with visible cash, coins, or cards
 
 REJECT immediately if:
-   ✗ Empty counter with no people
-   ✗ Person walking by without stopping/interacting
-   ✗ NO MONEY visible (no cash bills, no coins)
-   ✗ Cards, credit cards, debit cards (NOT cash)
-   ✗ Mobile phones, QR codes (digital payment - NOT cash)
-   ✗ Exchanging NON-MONEY items (keys, envelopes, plain papers, documents, packages, food, receipts, tickets)
-   ✗ Just talking or standing (no actual money visible)
-   ✗ Giving room keys, letters, or other hotel items (NOT money)
-   ✗ Plain white paper, documents, or receipts (NOT money unless you clearly see it's cash bills)
+   1. Empty counter with no people
+   2. Person walking by without stopping/interacting
+   3. No PAYMENT ITEMS visible (no cash, cards, coins)
+   4. Exchanging NON-PAYMENT items (keys, envelopes, documents, packages, food)
+   5. Just talking or standing (no payment visible)
+   6. Giving room keys, letters, or other hotel items (NOT payment)
 
-REMEMBER: ONLY classify as "cash" if you see ACTUAL PHYSICAL MONEY - cash bills (paper banknotes) or coins. Credit cards, phones, or other papers are NOT cash.
+REMEMBER: ONLY classify as "cash" if you see ACTUAL PAYMENT ITEMS (cash, coins, cards)
 
 VIOLENCE/ALTERCATION (event_type = "violence")
 VALID if you see:
@@ -278,15 +277,21 @@ Respond in JSON format ONLY:
             print(f"[GeminiValidator] Failed to save validation image: {e}")
             return None
     
-    def _log_validation(self, camera_id: int, event_type: str, is_valid: bool, 
-                        confidence: float, reason: str, prompt: str, 
-                        response_raw: str, image_path: str, processing_time_ms: int):
+    def _log_validation(
+        self,
+        camera_id: int,
+        event_type: str,
+        is_valid: bool, 
+        confidence: float,
+        reason: str,
+        prompt: str,
+        response_raw: str,
+        image_path: str,
+        processing_time_ms: int
+    ):
         """Log validation result to database"""
         print(f"[GeminiValidator] _log_validation called: camera_id={camera_id}, event_type={event_type}")
         try:
-            # Django should already be set up in worker processes
-            # import django
-            # django.setup()  # Ensure Django is initialized
             from cctv.models import GeminiLog, Camera
             
             print(f"[GeminiValidator] Attempting to get Camera {camera_id}")
@@ -304,7 +309,10 @@ Respond in JSON format ONLY:
                     image_path=image_path or '',
                     processing_time_ms=processing_time_ms
                 )
-                print(f"[GeminiValidator] ✅ Successfully logged validation ID {log.id} for camera {camera_id}, event_type={event_type}, is_validated={is_valid}")
+                print(
+                    f"[GeminiValidator] ✅ Successfully logged validation ID {log.id} "
+                    f"for camera {camera_id}, event_type={event_type}, is_validated={is_valid}"
+                )
             else:
                 print(f"[GeminiValidator] ❌ No camera found with id={camera_id}")
         except Exception as e:
@@ -371,7 +379,9 @@ Respond in JSON format ONLY:
             print(f"[GeminiValidator] API error: {e}")
             return {"error": str(e)}
     
-    def validate_event(self, frame, event_type: str, save_image: bool = True) -> Tuple[bool, float, str, str]:
+    def validate_event(
+        self, frame, event_type: str, save_image: bool = True
+    ) -> Tuple[bool, float, str, str]:
         """
         Validate a detection event using Gemini AI.
         
@@ -386,7 +396,6 @@ Respond in JSON format ONLY:
             - confidence: Gemini's confidence score (0.0-1.0)
             - reason: Gemini's explanation
             - corrected_event_type: The actual event type Gemini detected (may differ from input)
-            - reason: Explanation from Gemini
         """
         start_time = time.time()
         image_path = None
@@ -395,17 +404,17 @@ Respond in JSON format ONLY:
         
         # If disabled or no API key, bypass validation
         if not self.enabled:
-            return True, 1.0, "Validation bypassed (no API key)"
+            return True, 1.0, "Validation bypassed (no API key)", event_type
         
         # Get prompt (custom or default)
         prompt = self.get_prompt(event_type)
         if not prompt:
             print(f"[GeminiValidator] Unknown event type: {event_type}")
-            return True, 1.0, f"Unknown event type: {event_type}"
+            return True, 1.0, f"Unknown event type: {event_type}", event_type
         
         # Check frame validity
         if frame is None or frame.size == 0:
-            return False, 0.0, "Invalid frame"
+            return False, 0.0, "Invalid frame", event_type
         
         try:
             # Save image for logging if enabled
@@ -434,13 +443,22 @@ Respond in JSON format ONLY:
             detected_type = result.get('event_type_detected', event_type)
             corrected_event_type = event_type  # Default to original
             
-            # If Gemini says it's valid but detects a different type, use that type
+            # === 핵심 정책 변경 ===
             if is_valid and detected_type != 'none' and detected_type != event_type:
-                # Gemini corrected the event type
-                # Example: YOLO says "potential_cash" → Gemini says "cash"
-                # Example: YOLO says "violence" → Gemini says "cash"
-                corrected_event_type = detected_type
-                reason = f"Corrected: {event_type.upper()} → {corrected_event_type.upper()}. {reason}"
+                # 규칙 1: violence → cash 로 교정되는 경우는 무시 (중복 cash 방지)
+                if event_type == "violence" and detected_type == "cash":
+                    is_valid = False
+                    corrected_event_type = event_type  # 여전히 violence
+                    reason = (
+                        "Gemini classified this VIOLENCE event as CASH, "
+                        "but to avoid duplicate CASH events from nearby frames, "
+                        "this VIOLENCE event is ignored. "
+                        + reason
+                    )
+                else:
+                    # 그 외 타입 변경은 기존처럼 교정 허용
+                    corrected_event_type = detected_type
+                    reason = f"Corrected: {event_type.upper()} → {corrected_event_type.upper()}. {reason}"
             elif is_valid and detected_type == event_type:
                 # Gemini confirmed the original detection
                 pass  # corrected_event_type stays as event_type
@@ -474,7 +492,11 @@ Respond in JSON format ONLY:
             else:
                 print(f"[GeminiValidator] ⚠️ Skipping database log - no camera_id set!")
             
-            print(f"[GeminiValidator] {event_type}: valid={is_valid}, conf={confidence:.2f}, corrected={corrected_event_type}, reason={reason[:100]}")
+            print(
+                f"[GeminiValidator] {event_type}: valid={is_valid}, "
+                f"conf={confidence:.2f}, corrected={corrected_event_type}, "
+                f"reason={reason[:100]}"
+            )
             
             return is_valid, confidence, reason, corrected_event_type
             
@@ -485,6 +507,7 @@ Respond in JSON format ONLY:
     
     def validate_cash_transaction(self, frame) -> Tuple[bool, float, str]:
         """Convenience method for cash transaction validation."""
+        # NOTE: 여기서는 4개를 리턴하지만, 호출 측에서 3개만 받으면 파이썬 언패킹으로 조절 가능
         return self.validate_event(frame, 'cash')
     
     def validate_violence(self, frame) -> Tuple[bool, float, str]:
@@ -520,7 +543,7 @@ def get_validator(api_key: str = None) -> GeminiValidator:
     return _validator_instance
 
 
-def validate_detection(frame, event_type: str, api_key: str = None) -> Tuple[bool, float, str]:
+def validate_detection(frame, event_type: str, api_key: str = None) -> Tuple[bool, float, str, str]:
     """
     Convenience function to validate a detection event.
     
@@ -530,7 +553,7 @@ def validate_detection(frame, event_type: str, api_key: str = None) -> Tuple[boo
         api_key: Optional API key
         
     Returns:
-        Tuple of (is_valid, confidence, reason)
+        Tuple of (is_valid, confidence, reason, corrected_event_type)
     """
     validator = get_validator(api_key)
     return validator.validate_event(frame, event_type)
