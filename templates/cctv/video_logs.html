@@ -182,18 +182,18 @@
                 // If video clip exists, show it
                 viewerBody.innerHTML = `
                     <div style="display:flex;flex-direction:column;height:100%;">
-                        <video src="${event.clip_path}" controls autoplay style="flex:1;width:100%;object-fit:contain;"></video>
+                        <video src="${event.clip_path}" controls autoplay style="flex:1;width:100%;object-fit:contain;cursor:pointer;" onclick="openFullscreenVideo(this)"></video>
                         <div style="padding:8px;background:#1a1a2e;text-align:center;font-size:12px;color:#888;">
-                            📹 Recorded clip from detection event
+                            📹 Recorded clip from detection event (Click video for fullscreen)
                         </div>
                     </div>`;
             } else if (event.thumbnail_path && event.thumbnail_path.length > 0) {
                 // Show thumbnail if available but no video
                 viewerBody.innerHTML = `
                     <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;">
-                        <img src="${event.thumbnail_path}" style="max-width:100%;max-height:80%;object-fit:contain;">
+                        <img src="${event.thumbnail_path}" style="max-width:100%;max-height:80%;object-fit:contain;cursor:pointer;" onclick="openFullscreenImage(this)">
                         <div style="padding:12px;text-align:center;color:#888;font-size:13px;">
-                            📷 Thumbnail from detection (no video clip recorded)
+                            📷 Thumbnail from detection (Click for fullscreen)
                         </div>
                     </div>`;
             } else {
@@ -336,6 +336,79 @@
         if (dateTo) params.append('to', dateTo);
         
         window.location.href = `{% url 'cctv:video_logs' %}?${params.toString()}`;
+    }
+    
+    // Fullscreen video viewer
+    function openFullscreenVideo(videoElement) {
+        if (!videoElement || !videoElement.src) return;
+        
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.95);z-index:10000;display:flex;align-items:center;justify-content:center;';
+        
+        const fullVideo = document.createElement('video');
+        fullVideo.src = videoElement.src;
+        fullVideo.controls = true;
+        fullVideo.autoplay = true;
+        fullVideo.style.cssText = 'max-width:95%;max-height:95%;object-fit:contain;';
+        
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '✕';
+        closeBtn.style.cssText = 'position:absolute;top:20px;right:20px;background:rgba(255,255,255,0.2);border:none;color:white;font-size:30px;width:50px;height:50px;border-radius:50%;cursor:pointer;transition:background 0.3s;z-index:10001;';
+        closeBtn.onmouseover = () => closeBtn.style.background = 'rgba(255,255,255,0.3)';
+        closeBtn.onmouseout = () => closeBtn.style.background = 'rgba(255,255,255,0.2)';
+        
+        const closeModal = () => document.body.removeChild(modal);
+        closeBtn.onclick = closeModal;
+        modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+        
+        modal.appendChild(fullVideo);
+        modal.appendChild(closeBtn);
+        document.body.appendChild(modal);
+        
+        // Close on ESC key
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+    }
+    
+    // Fullscreen image viewer
+    function openFullscreenImage(imgElement) {
+        if (!imgElement || !imgElement.src) return;
+        
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.95);z-index:10000;display:flex;align-items:center;justify-content:center;';
+        
+        const fullImg = document.createElement('img');
+        fullImg.src = imgElement.src;
+        fullImg.style.cssText = 'max-width:95%;max-height:95%;object-fit:contain;cursor:pointer;';
+        
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '✕';
+        closeBtn.style.cssText = 'position:absolute;top:20px;right:20px;background:rgba(255,255,255,0.2);border:none;color:white;font-size:30px;width:50px;height:50px;border-radius:50%;cursor:pointer;transition:background 0.3s;';
+        closeBtn.onmouseover = () => closeBtn.style.background = 'rgba(255,255,255,0.3)';
+        closeBtn.onmouseout = () => closeBtn.style.background = 'rgba(255,255,255,0.2)';
+        
+        const closeModal = () => document.body.removeChild(modal);
+        closeBtn.onclick = closeModal;
+        fullImg.onclick = closeModal;
+        modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+        
+        modal.appendChild(fullImg);
+        modal.appendChild(closeBtn);
+        document.body.appendChild(modal);
+        
+        // Close on ESC key
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
     }
 </script>
 {% endblock %}

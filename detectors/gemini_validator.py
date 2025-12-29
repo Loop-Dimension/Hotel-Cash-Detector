@@ -37,32 +37,33 @@ EVENT TYPE DEFINITIONS:
 ======================
 
 CASH / PAYMENT TRANSACTIONS (Classify as: "cash")
-CRITICAL RULE: Must see CASHIER + CUSTOMER + PAYMENT ITEMS
+CRITICAL RULE: Must see CASHIER + CUSTOMER + ACTUAL MONEY (CASH BILLS or COINS ONLY)
 
 VALID if ALL conditions met:
    ✓ Person(s) behind counter (cashier area)
    ✓ Person(s) in front of counter (customer area)
-   ✓ PAYMENT ITEMS visible: cash bills, coins, credit/debit cards, mobile payment
-   ✓ Transaction happening: hands exchanging PAYMENT items, opening cash drawer
+   ✓ ACTUAL MONEY visible: CASH BILLS (paper money/banknotes) OR COINS ONLY
+   ✓ Transaction happening: hands exchanging money, opening cash drawer with money visible
    
    EXAMPLES - ALL VALID:
    - Cashier receiving cash bills or coins from customer
-   - Customer handing credit card / debit card / visa / payment card to cashier
-   - Cashier opening cash drawer while handling money
-   - Coins or bills visible on counter during transaction
-   - Customer using mobile payment (phone near terminal)
-   - Hand holding cash/card reaching to cashier
-   - ANY payment with visible cash, coins, or cards
+   - Cashier opening cash drawer with visible money/bills inside
+   - Hand holding paper money (banknotes) reaching to cashier
+   - Coins being exchanged between cashier and customer
+   - Stack of bills visible on counter during transaction
 
 REJECT immediately if:
    ✗ Empty counter with no people
    ✗ Person walking by without stopping/interacting
-   ✗ No PAYMENT ITEMS visible (no cash, cards, coins)
-   ✗ Exchanging NON-PAYMENT items (keys, envelopes, documents, packages, food)
-   ✗ Just talking or standing (no payment visible)
-   ✗ Giving room keys, letters, or other hotel items (NOT payment)
+   ✗ NO MONEY visible (no cash bills, no coins)
+   ✗ Cards, credit cards, debit cards (NOT cash)
+   ✗ Mobile phones, QR codes (digital payment - NOT cash)
+   ✗ Exchanging NON-MONEY items (keys, envelopes, plain papers, documents, packages, food, receipts, tickets)
+   ✗ Just talking or standing (no actual money visible)
+   ✗ Giving room keys, letters, or other hotel items (NOT money)
+   ✗ Plain white paper, documents, or receipts (NOT money unless you clearly see it's cash bills)
 
-REMEMBER: ONLY classify as "cash" if you see ACTUAL PAYMENT ITEMS (cash, coins, cards)
+REMEMBER: ONLY classify as "cash" if you see ACTUAL PHYSICAL MONEY - cash bills (paper banknotes) or coins. Credit cards, phones, or other papers are NOT cash.
 
 VIOLENCE/ALTERCATION (event_type = "violence")
 VALID if you see:

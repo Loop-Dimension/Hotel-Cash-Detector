@@ -203,7 +203,11 @@
     let activeStreams = [];
     
     function startStream(element) {
-        if (element.classList.contains('streaming')) return;
+        if (element.classList.contains('streaming')) {
+            // Already streaming - open fullscreen
+            openFullscreen(element);
+            return;
+        }
         
         const feedUrl = element.dataset.feedUrl;
         const img = element.querySelector('.stream-img');
@@ -213,6 +217,43 @@
         img.style.display = 'block';
         
         activeStreams.push(img);
+    }
+    
+    function openFullscreen(element) {
+        const img = element.querySelector('.stream-img');
+        if (!img || !img.src) return;
+        
+        // Create fullscreen modal
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.95);z-index:10000;display:flex;align-items:center;justify-content:center;';
+        
+        const fullImg = document.createElement('img');
+        fullImg.src = img.src;
+        fullImg.style.cssText = 'max-width:95%;max-height:95%;object-fit:contain;cursor:pointer;';
+        
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '✕';
+        closeBtn.style.cssText = 'position:absolute;top:20px;right:20px;background:rgba(255,255,255,0.2);border:none;color:white;font-size:30px;width:50px;height:50px;border-radius:50%;cursor:pointer;transition:background 0.3s;';
+        closeBtn.onmouseover = () => closeBtn.style.background = 'rgba(255,255,255,0.3)';
+        closeBtn.onmouseout = () => closeBtn.style.background = 'rgba(255,255,255,0.2)';
+        
+        const closeModal = () => document.body.removeChild(modal);
+        closeBtn.onclick = closeModal;
+        fullImg.onclick = closeModal;
+        modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+        
+        modal.appendChild(fullImg);
+        modal.appendChild(closeBtn);
+        document.body.appendChild(modal);
+        
+        // Close on ESC key
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
     }
     
     function stopAllStreams() {

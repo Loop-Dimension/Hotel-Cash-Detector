@@ -2024,7 +2024,8 @@ def api_detection_debug_info(request, camera_id):
             'last_transaction_frame': getattr(detector.cash_detector, 'last_transaction_frame', 0),
             'cooldown': getattr(detector.cash_detector, 'transaction_cooldown', 45),
             'hand_touch_distance': getattr(detector.cash_detector, 'hand_touch_distance', 100),
-            'cashier_zone': detector.cash_detector.cashier_zone,
+            'cashier_zone_polygon': getattr(detector.cash_detector, 'cashier_zone_polygon', None),
+            'cash_drawer_zone_polygon': getattr(detector.cash_detector, 'cash_drawer_zone_polygon', None),
         },
         'violence_detection': {
             'enabled': detector.detect_violence,
@@ -2349,7 +2350,7 @@ class BackgroundCameraWorker:
         self.clip_save_thread = None  # Separate clip saving thread
         self.detector = None
         self.last_event_time = {}
-        self.event_cooldown = 15  # seconds between events (reduced from 30)
+        self.event_cooldown = 60  # seconds between events (reduced from 30)
         
         # RAW frame buffer (every 2nd frame) for smooth clips
         self.raw_frame_buffer = []

@@ -73,7 +73,9 @@ class CashTransactionDetector(BaseDetector):
         
         # Cooldown to prevent duplicate detections
         self.last_transaction_frame = -100
-        self.transaction_cooldown = 60  # frames between transactions (~2 seconds)
+        self.transaction_cooldown = 1800  # frames between transactions (60 seconds at 30fps)
+        self.last_potential_cash_frame = -1800  # Last POTENTIAL_CASH event frame
+        self.potential_cash_cooldown = 1800  # frames between POTENTIAL_CASH events (60 seconds at 30fps)
         
         # Frame counter
         self.frame_count = 0
@@ -470,6 +472,18 @@ class CashTransactionDetector(BaseDetector):
                 self.frames_since_touch += 1
                 self._log(f"[CashDetect] 🔍 TRACKING: Frame {self.frames_since_touch}/{self.hand_tracking_duration}, waiting for drawer deposit...")
                 
+                # CRITICAL: Verify we still have 1 cashier + 1 customer
+                # If both people moved into cashier zone, reset tracking
+                if len(customer_zone_people) == 0:
+                    self._log(f"[CashDetect] ❌ TRACKING CANCELLED: No customer detected (both people in cashier zone)")
+                    self._reset_tracking("No customer - both people are cashiers")
+                    return detections
+                
+                if len(cashier_zone_people) == 0:
+                    self._log(f"[CashDetect] ❌ TRACKING CANCELLED: No cashier detected")
+                    self._reset_tracking("No cashier detected")
+                    return detections
+                
                 # Check timeout
                 if self.frames_since_touch > self.hand_tracking_duration:
                     self._log(f"[CashDetect] ⏱️ TIMEOUT: No drawer deposit after {self.frames_since_touch} frames")
@@ -526,26 +540,34 @@ class CashTransactionDetector(BaseDetector):
                 for idx, event in enumerate(touch_events):
                     self._log(f"  Pair {idx+1}: distance={event['distance']:.1f}px, threshold={self.hand_touch_distance}px")
                 
-                # 🆕 CREATE POTENTIAL_CASH DETECTION on hand touch (always, no cooldown)
-                cashier_person = people_hands[best_event['cashier_idx']]
-                potential_detection = self._create_detection(
-                    frame,
-                    best_event,
-                    cashier_person,
-                    best_event.get('midpoint', (0, 0)),
-                    "hand_touch"
-                )
-                if potential_detection:
-                    # Change event type to potential_cash
-                    potential_detection.event_type = 'potential_cash'
-                    potential_detection.metadata['detection_stage'] = 'hand_touch'
-                    potential_detection.metadata['confidence'] = 0.7  # Lower confidence for potential
-                    detections.append(potential_detection)
-                    self._log(f"[CashDetect] 💰 POTENTIAL_CASH EVENT CREATED!")
-                    self._log(f"  - Distance: {best_event['distance']:.1f}px (threshold: {self.hand_touch_distance}px)")
-                    self._log(f"  - Cashier hand: {best_event.get('cashier_hand', 'unknown')}")
-                    self._log(f"  - Customer hand: {best_event.get('customer_hand', 'unknown')}")
-                    self._log(f"  - Confidence: {potential_detection.confidence:.2f}")
+                # 🆕 CREATE POTENTIAL_CASH DETECTION on hand touch (with 60-second cooldown)
+                # Check cooldown for POTENTIAL_CASH events
+                frames_since_last_potential = self.frame_count - self.last_potential_cash_frame
+                if frames_since_last_potential >= self.potential_cash_cooldown:
+                    cashier_person = people_hands[best_event['cashier_idx']]
+                    potential_detection = self._create_detection(
+                        frame,
+                        best_event,
+                        cashier_person,
+                        best_event.get('midpoint', (0, 0)),
+                        "hand_touch"
+                    )
+                    if potential_detection:
+                        # Change event type to potential_cash
+                        potential_detection.event_type = 'potential_cash'
+                        potential_detection.metadata['detection_stage'] = 'hand_touch'
+                        potential_detection.metadata['confidence'] = 0.7  # Lower confidence for potential
+                        detections.append(potential_detection)
+                        self.last_potential_cash_frame = self.frame_count  # Update cooldown tracker
+                        self._log(f"[CashDetect] 💰 POTENTIAL_CASH EVENT CREATED!")
+                        self._log(f"  - Distance: {best_event['distance']:.1f}px (threshold: {self.hand_touch_distance}px)")
+                        self._log(f"  - Cashier hand: {best_event.get('cashier_hand', 'unknown')}")
+                        self._log(f"  - Customer hand: {best_event.get('customer_hand', 'unknown')}")
+                        self._log(f"  - Confidence: {potential_detection.confidence:.2f}")
+                else:
+                    # In cooldown period
+                    frames_left = self.potential_cash_cooldown - frames_since_last_potential
+                    self._log(f"[CashDetect] ⏳ POTENTIAL_CASH COOLDOWN: {frames_left} frames left (~{frames_left/30:.1f}s)")
                 
                 # Start tracking only if not already tracking
                 if not self.tracking_cashier_hands:

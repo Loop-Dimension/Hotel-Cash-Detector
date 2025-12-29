@@ -289,7 +289,7 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
     
     # Event cooldown tracking
     last_event_time = {}
-    event_cooldown = 15  # seconds
+    event_cooldown = 60  # seconds between same event type (1 minute)
     
     frame_count = 0
     consecutive_failures = 0

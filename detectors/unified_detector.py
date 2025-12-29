@@ -253,6 +253,10 @@ class UnifiedDetector:
         
         # Draw detections
         for det in detections:
+            # Skip drawing bbox for CASH detections - zones show the areas better
+            if det.label == "CASH":
+                continue
+                
             if det.bbox:
                 x1, y1, x2, y2 = det.bbox
                 
