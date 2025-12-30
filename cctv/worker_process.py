@@ -285,7 +285,15 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
     
     # Frame buffer for clips
     frame_buffer = []
-    buffer_size = 450  # 30 seconds at 15fps
+    buffer_size = 150  # 10 seconds at 15fps
+    
+    # Separate buffer for Gemini validation (3 seconds)
+    gemini_buffer = []
+    gemini_buffer_size = 45  # 3 seconds at 15fps
+    
+    # Separate buffer for Gemini validation (3 seconds)
+    gemini_buffer = []
+    gemini_buffer_size = 45  # 3 seconds at 15fps
     
     # Event cooldown tracking
     last_event_time = {}
@@ -346,6 +354,11 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
             frame_buffer.append(frame.copy())
             if len(frame_buffer) > buffer_size:
                 frame_buffer.pop(0)
+            
+            # Also add to Gemini buffer (last 3 seconds)
+            gemini_buffer.append(frame.copy())
+            if len(gemini_buffer) > gemini_buffer_size:
+                gemini_buffer.pop(0)
         
         # Send frame for live viewing (every 4th frame to reduce queue pressure)
         if frame_count % 4 == 0:
@@ -393,6 +406,10 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
                                 gemini_api_key = getattr(settings, 'GEMINI_API_KEY', '')
                                 if gemini_api_key:
                                     from cctv.models import GeminiPrompts
+                                    import os
+                                    
+                                    # Check if video validation is enabled (default: False, use image)
+                                    use_video_validation = os.getenv('GEMINI_USE_VIDEO_VALIDATION', 'False').lower() == 'true'
                                     
                                     # Create validator with camera_id for logging and global prompts
                                     validator = GeminiValidator(api_key=gemini_api_key, camera_id=camera.id)
@@ -402,8 +419,27 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
                                     if global_prompts.get('unified'):
                                         validator.set_custom_prompts({'unified': global_prompts['unified']})
                                     
-                                    gemini_validated, gemini_confidence, gemini_reason, corrected_event_type = validator.validate_event(frame, event_type)
-                                    print(f"[Worker-{camera_id}] Gemini validation: {event_type} = {gemini_validated}, corrected_type={corrected_event_type} ({gemini_reason})")
+                                    # Choose validation method based on environment variable
+                                    if use_video_validation:
+                                        # VIDEO MODE: Create 3-second validation video
+                                        validation_video_path = _save_gemini_validation_clip(
+                                            gemini_buffer[-45:] if len(gemini_buffer) >= 45 else gemini_buffer,
+                                            camera, event_type
+                                        )
+                                        
+                                        if validation_video_path:
+                                            gemini_validated, gemini_confidence, gemini_reason, corrected_event_type = validator.validate_event_video(validation_video_path, event_type)
+                                            print(f"[Worker-{camera_id}] Gemini VIDEO validation: {event_type} = {gemini_validated}")
+                                        else:
+                                            # Fallback to image if video creation failed
+                                            gemini_validated, gemini_confidence, gemini_reason, corrected_event_type = validator.validate_event(frame, event_type)
+                                            print(f"[Worker-{camera_id}] Gemini IMAGE validation (fallback): {event_type} = {gemini_validated}")
+                                    else:
+                                        # IMAGE MODE: Use single frame validation (default)
+                                        gemini_validated, gemini_confidence, gemini_reason, corrected_event_type = validator.validate_event(frame, event_type)
+                                        print(f"[Worker-{camera_id}] Gemini IMAGE validation: {event_type} = {gemini_validated}")
+                                    
+                                    print(f"[Worker-{camera_id}] Result: corrected_type={corrected_event_type}, reason={gemini_reason}")
                                     
                                     # Use corrected event type if Gemini detected something different
                                     if corrected_event_type != event_type:
@@ -415,6 +451,8 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
                                         continue  # Skip saving this event
                             except Exception as e:
                                 print(f"[Worker-{camera_id}] Gemini validation error: {e}")
+                                import traceback
+                                traceback.print_exc()
                                 # On error, allow the event (don't block on validation errors)
                         
                         # Save event with clip (only if Gemini validated)
@@ -452,6 +490,56 @@ def _create_rtsp_capture(rtsp_url):
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 5)
     
     return cap
+
+
+def _save_gemini_validation_clip(frames, camera, event_type):
+    """Save 3-second video clip for Gemini validation"""
+    if not frames or len(frames) == 0:
+        return None
+    
+    import subprocess
+    import uuid
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    unique_id = uuid.uuid4().hex[:6]
+    
+    # Create validation_clips directory
+    validation_dir = Path(settings.MEDIA_ROOT) / 'validation_clips'
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"{camera.camera_id}_{event_type}_{timestamp}_{unique_id}.mp4"
+    temp_filename = f"temp_{filename}"
+    temp_path = validation_dir / temp_filename
+    final_path = validation_dir / filename
+    
+    # Create video
+    h, w = frames[0].shape[:2]
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(str(temp_path), fourcc, 15, (w, h))
+    
+    for frame in frames:
+        out.write(frame)
+    
+    out.release()
+    
+    # Convert to H.264
+    try:
+        subprocess.run([
+            'ffmpeg', '-y', '-i', str(temp_path),
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
+            '-pix_fmt', 'yuv420p', '-r', '15',
+            str(final_path)
+        ], capture_output=True, timeout=30, check=True)
+        
+        temp_path.unlink()
+        print(f"[Validation] Created 3s clip for Gemini: {filename}")
+        return str(final_path)
+        
+    except Exception as e:
+        print(f"[Validation] FFmpeg error creating validation clip: {e}")
+        if temp_path.exists():
+            temp_path.unlink()
+        return None
 
 
 def _save_clip(frames, camera, event_type):

@@ -483,6 +483,151 @@ Respond in JSON format ONLY:
             # On error, allow the event (don't block on validation errors)
             return True, 1.0, f"Validation error: {e}", event_type
     
+    def validate_event_video(self, video_path: str, event_type: str) -> Tuple[bool, float, str, str]:
+        """
+        Validate a detection event using a 3-second video clip instead of a single frame.
+        Provides better context for Gemini to analyze motion and behavior.
+        
+        Args:
+            video_path: Path to the 3-second validation video clip
+            event_type: Type of event to validate ('cash', 'violence', 'fire', 'potential_cash')
+            
+        Returns:
+            Tuple of (is_valid, confidence, reason, corrected_event_type)
+        """
+        if not self.enabled or not self.client:
+            return True, 1.0, "Validation disabled", event_type
+        
+        try:
+            import time
+            start_time = time.time()
+            
+            # Read video file
+            with open(video_path, 'rb') as f:
+                video_bytes = f.read()
+            
+            # Get appropriate prompt
+            prompt = self.get_prompt(event_type)
+            prompt = f"{prompt}\n\nAnalyze this 3-second video clip showing the detected event. Consider motion, behavior, and context over time."
+            
+            # Call Gemini API with video
+            result = self._call_gemini_api_video(video_bytes, prompt)
+            response_raw = str(result)
+            
+            # Parse response
+            if 'error' in result:
+                print(f"[GeminiValidator] Video API error: {result['error']}")
+                return True, 1.0, f"API error: {result['error']}", event_type
+            
+            # Check for unified response format
+            is_valid = result.get('is_detected', False)
+            confidence = result.get('confidence', 0.0)
+            reason = result.get('reason', 'No reason provided')
+            
+            # Check if Gemini detected a DIFFERENT event type (correction)
+            detected_type = result.get('event_type_detected', event_type)
+            corrected_event_type = event_type  # Default to original
+            
+            if is_valid and detected_type != 'none' and detected_type != event_type:
+                corrected_event_type = detected_type
+                reason = f"Corrected: {event_type.upper()} → {corrected_event_type.upper()}. {reason}"
+            
+            # Calculate processing time
+            processing_time_ms = int((time.time() - start_time) * 1000)
+            
+            # Store for debugging
+            self.last_validation_log = {
+                'event_type': event_type,
+                'is_valid': is_valid,
+                'confidence': confidence,
+                'reason': reason,
+                'prompt': prompt,
+                'response': result,
+                'video_path': video_path,
+                'processing_time_ms': processing_time_ms
+            }
+            
+            # Log to database (using video path instead of image path)
+            if self.camera_id:
+                self._log_validation(
+                    self.camera_id, event_type, is_valid, confidence, 
+                    reason, prompt, response_raw, video_path, processing_time_ms
+                )
+            
+            print(f"[GeminiValidator] VIDEO {event_type}: valid={is_valid}, conf={confidence:.2f}, corrected={corrected_event_type}, reason={reason[:100]}")
+            
+            return is_valid, confidence, reason, corrected_event_type
+            
+        except Exception as e:
+            print(f"[GeminiValidator] Video validation exception: {e}")
+            import traceback
+            traceback.print_exc()
+            # On error, allow the event (don't block on validation errors)
+            return True, 1.0, f"Video validation error: {e}", event_type
+    
+    def _call_gemini_api_video(self, video_bytes: bytes, prompt: str) -> dict:
+        """
+        Call Gemini API with video and prompt using official SDK.
+        
+        Returns:
+            dict: Parsed JSON response or error dict
+        """
+        if not self.client:
+            return {"error": "Client not initialized"}
+        
+        try:
+            response = self.client.models.generate_content(
+                model=self.MODEL_NAME,
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_text(text=prompt),
+                            types.Part.from_bytes(
+                                data=video_bytes,
+                                mime_type="video/mp4"
+                            )
+                        ]
+                    )
+                ],
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    top_k=1,
+                    top_p=1.0,
+                    max_output_tokens=500,
+                    response_mime_type="application/json"
+                )
+            )
+            
+            # Extract text from response
+            if response.text:
+                text = response.text.strip()
+                
+                # Parse JSON from response (handle markdown code blocks if any)
+                if text.startswith('```json'):
+                    text = text[7:]
+                if text.startswith('```'):
+                    text = text[3:]
+                if text.endswith('```'):
+                    text = text[:-3]
+                text = text.strip()
+                
+                # Parse JSON
+                result = json.loads(text)
+                return result
+            else:
+                return {"error": "No response text"}
+                
+        except json.JSONDecodeError as e:
+            print(f"[GeminiValidator] JSON parse error for video: {e}")
+            print(f"Response text: {response.text if response else 'None'}")
+            return {"error": f"JSON parse error: {e}"}
+        except Exception as e:
+            print(f"[GeminiValidator] API video call error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"error": str(e)}
+    
     def validate_cash_transaction(self, frame) -> Tuple[bool, float, str]:
         """Convenience method for cash transaction validation."""
         return self.validate_event(frame, 'cash')

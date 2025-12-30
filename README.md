@@ -1108,7 +1108,7 @@ DETECTION_CONFIG = {
 
 ### 8.2 Environment Variables
 
-Create `.env` file in `django_app/`:
+Create `.env` file in project root (copy from `.env.example`):
 
 ```bash
 # Django Settings
@@ -1116,12 +1116,38 @@ SECRET_KEY=your-super-secret-key-here
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1,192.168.1.100
 
+# Gemini AI Configuration
+GEMINI_API_KEY=your-gemini-api-key-here
+GEMINI_VALIDATION_ENABLED=True
+
+# Gemini Validation Mode
+# False = Use single image frame (default, faster, less accurate)
+# True = Use 3-second video clip (slower, more accurate with motion context)
+GEMINI_USE_VIDEO_VALIDATION=False
+
+# Detection Logging
+ENABLE_DETECTION_LOGS=False
+
+# GPU Settings
+USE_GPU=auto
+
 # Detection Defaults
 CASH_DETECTION_CONFIDENCE=0.5
 VIOLENCE_DETECTION_CONFIDENCE=0.6
 FIRE_DETECTION_CONFIDENCE=0.5
 HAND_TOUCH_DISTANCE=100
 ```
+
+**Gemini Validation Modes:**
+
+| Mode | Setting | Speed | Accuracy | Use Case |
+|------|---------|-------|----------|----------|
+| **Image** | `GEMINI_USE_VIDEO_VALIDATION=False` | Fast (1-2s) | Good | Single frame context sufficient |
+| **Video** | `GEMINI_USE_VIDEO_VALIDATION=True` | Slower (3-5s) | Better | Motion/behavior analysis needed |
+
+- **Image Mode**: Sends single frame to Gemini AI for validation
+- **Video Mode**: Creates 3-second validation clip, sends to Gemini for better motion context
+- Validation clips stored in `media/validation_clips/` (only when video mode enabled)
 
 ### 8.3 Camera-Specific Settings
 
