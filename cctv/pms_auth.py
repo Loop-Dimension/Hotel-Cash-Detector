@@ -28,6 +28,8 @@ PMS_TO_CCTV_ROLE = {
     "client": "project_manager",
     "Project": "project_manager",
     "project": "project_manager",
+    "Kiosk": "project_manager",
+    "kiosk": "project_manager",
 }
 
 
