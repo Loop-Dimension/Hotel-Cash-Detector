@@ -142,6 +142,18 @@ LOGIN_URL = '/login/'
 LOGIN_REDIRECT_URL = '/'
 LOGOUT_REDIRECT_URL = '/login/'
 
+# =============================================================================
+# PMS CENTRALIZED AUTHENTICATION
+# =============================================================================
+# PMS is the central auth provider. CCTV validates tokens with PMS on each request.
+PMS_AUTH_URL = os.getenv('PMS_AUTH_URL', 'http://localhost:8000')
+
+# Authentication backends - try PMS first, then local (for fallback/development)
+AUTHENTICATION_BACKENDS = [
+    'cctv.pms_auth.PMSAuthBackend',  # PMS centralized auth
+    'django.contrib.auth.backends.ModelBackend',  # Local fallback
+]
+
 # Detection settings
 DETECTION_CONFIG = {
     # Models are now inside django_app/models/
