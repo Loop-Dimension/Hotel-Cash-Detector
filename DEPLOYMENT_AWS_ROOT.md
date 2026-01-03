@@ -238,7 +238,20 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-### 5.4 Enable and Start Service
+### 5.4 Create Required Directories
+
+**CRITICAL:** Create Ultralytics config directory before starting service:
+
+```bash
+# Create Ultralytics config directory for YOLO models
+mkdir -p /root/.config/Ultralytics
+chmod 755 /root/.config/Ultralytics
+
+# Verify it was created
+ls -la /root/.config/
+```
+
+### 5.5 Enable and Start Service
 ```bash
 systemctl daemon-reload
 systemctl enable hotel-cctv
@@ -248,6 +261,7 @@ systemctl enable hotel-cctv
 # 2. Database migrations completed: python manage.py migrate
 # 3. Static files collected: python manage.py collectstatic --noinput
 # 4. .env file exists with required settings
+# 5. Ultralytics config directory created
 
 systemctl start hotel-cctv
 
@@ -621,6 +635,38 @@ aws s3 cp /var/www/Hotel-Cash-Detector/db.sqlite3 s3://your-bucket/db-backup/db_
 
 ## Troubleshooting
 
+### Issue: Ultralytics Permission Denied Error
+```bash
+# Error message:
+# [ERROR] Failed to initialize ViolenceDetector: [Errno 13] Permission denied: '/root/.config/Ultralytics'
+# ❌ Failed to initialize CashTransactionDetector: [Errno 13] Permission denied: '/root/.config/Ultralytics'
+
+# This means Ultralytics (YOLO) cannot create its config directory
+
+# Solution 1: Create the directory with proper permissions (recommended)
+mkdir -p /root/.config/Ultralytics
+chmod 755 /root/.config/Ultralytics
+systemctl restart hotel-cctv
+
+# Solution 2: Use alternative directory
+# Edit service file
+nano /etc/systemd/system/hotel-cctv.service
+
+# Add under [Service] section:
+# Environment="YOLO_CONFIG_DIR=/var/www/Hotel-Cash-Detector/.config/Ultralytics"
+
+# Create the directory
+mkdir -p /var/www/Hotel-Cash-Detector/.config/Ultralytics
+chmod 755 /var/www/Hotel-Cash-Detector/.config/Ultralytics
+
+# Reload and restart
+systemctl daemon-reload
+systemctl restart hotel-cctv
+
+# Verify it's working (errors should be gone)
+journalctl -u hotel-cctv -f
+```
+
 ### Issue: PostgreSQL - remaining connection slots are reserved for roles with the SUPERUSER attribute
 ```bash
 # Error message:
@@ -915,3 +961,40 @@ chown -R hotel-cctv:hotel-cctv /var/www/Hotel-Cash-Detector
 **SSL Provider:** Let's Encrypt  
 **GPU:** Disabled (CPU-only)  
 **User:** root
+
+
+# Stop the service first
+systemctl stop hotel-cctv
+
+# Fix ownership of entire project (make root own everything)
+chown -R root:root /var/www/Hotel-Cash-Detector
+
+# Create all required directories
+mkdir -p /var/www/Hotel-Cash-Detector/media/{clips,thumbnails,json,validation_clips,test_results,uploads}
+mkdir -p /var/www/Hotel-Cash-Detector/staticfiles
+mkdir -p /root/.config/Ultralytics
+mkdir -p /var/log/gunicorn
+
+# Set proper permissions for media directories (read, write, execute)
+chmod -R 755 /var/www/Hotel-Cash-Detector/media
+chmod -R 755 /var/www/Hotel-Cash-Detector/staticfiles
+chmod 755 /root/.config/Ultralytics
+chmod 755 /var/log/gunicorn
+
+# Fix database permissions
+chmod 664 /var/www/Hotel-Cash-Detector/db.sqlite3
+
+# Verify permissions
+ls -la /var/www/Hotel-Cash-Detector/
+ls -la /var/www/Hotel-Cash-Detector/media/
+ls -la /root/.config/
+
+# Restart service
+systemctl daemon-reload
+systemctl start hotel-cctv
+
+# Check status
+systemctl status hotel-cctv
+
+# Watch logs to verify no more permission errors
+journalctl -u hotel-cctv -f

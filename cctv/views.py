@@ -4047,9 +4047,11 @@ def api_gemini_all_logs(request):
             'event_type': log.event_type,
             'is_validated': log.is_validated,
             'confidence': log.confidence,
-            'reason': log.reason,
+            'reason': log.reason or 'No reason provided',
             'processing_time_ms': log.processing_time_ms,
             'image_path': f'/media/{log.image_path}' if log.image_path else None,
+            'video_path': f'/media/{log.video_path}' if log.video_path else None,
+            'validation_type': log.validation_type or 'image',
             'created_at': log.created_at.isoformat(),
         } for log in logs],
         'pagination': {

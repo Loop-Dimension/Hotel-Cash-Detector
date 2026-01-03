@@ -136,6 +136,66 @@
         color: #9a3412;
     }
     
+    .badge-video {
+        background: #dbeafe;
+        color: #1e40af;
+    }
+    
+    .badge-image {
+        background: #e0e7ff;
+        color: #4338ca;
+    }
+    
+    /* Video Modal Styles */
+    .video-modal-backdrop {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.85);
+        z-index: 10000;
+        justify-content: center;
+        align-items: center;
+    }
+    
+    .video-modal-backdrop.show {
+        display: flex !important;
+    }
+    
+    .video-modal-content {
+        background: #000;
+        border-radius: 12px;
+        padding: 20px;
+        max-width: 90%;
+        max-height: 90%;
+        position: relative;
+    }
+    
+    .video-modal-content video {
+        max-width: 100%;
+        max-height: 70vh;
+        border-radius: 8px;
+    }
+    
+    .video-modal-close {
+        position: absolute;
+        top: -15px;
+        right: -15px;
+        background: #fff;
+        border: none;
+        border-radius: 50%;
+        width: 36px;
+        height: 36px;
+        font-size: 24px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+    }
+    
     /* NEW MODAL STYLES */
     .log-modal-backdrop {
         display: none;
@@ -383,11 +443,12 @@
                     <th>Time</th>
                     <th>Camera</th>
                     <th>Event Type</th>
+                    <th>Type</th>
                     <th>Status</th>
                     <th>Confidence</th>
                     <th>Reason</th>
                     <th>Processing</th>
-                    <th>Image</th>
+                    <th>Media</th>
                 </tr>
             </thead>
             <tbody id="logsTableBody">
@@ -412,6 +473,17 @@
     </div>
     <div id="logModalContent" class="log-modal-body">
         <!-- Content loaded dynamically -->
+    </div>
+</div>
+
+<!-- Video Player Modal -->
+<div id="videoModalBackdrop" class="video-modal-backdrop" onclick="closeVideoModal()">
+    <div class="video-modal-content" onclick="event.stopPropagation();">
+        <button class="video-modal-close" onclick="closeVideoModal()">&times;</button>
+        <video id="validationVideo" controls autoplay>
+            <source id="videoSource" src="" type="video/mp4">
+            Your browser does not support the video tag.
+        </video>
     </div>
 </div>
 
@@ -462,17 +534,24 @@
                     <td onclick="showLogDetail(${log.id})">${log.camera_name || 'Unknown'}</td>
                     <td onclick="showLogDetail(${log.id})"><span class="badge badge-${log.event_type}">${log.event_type.toUpperCase()}</span></td>
                     <td onclick="showLogDetail(${log.id})">
+                        <span class="badge ${log.validation_type === 'video' ? 'badge-video' : 'badge-image'}">
+                            ${log.validation_type === 'video' ? '🎥 Video' : '📷 Image'}
+                        </span>
+                    </td>
+                    <td onclick="showLogDetail(${log.id})">
                         <span class="badge ${log.is_validated ? 'badge-validated' : 'badge-rejected'}">
                             ${log.is_validated ? '✓ Validated' : '✗ Rejected'}
                         </span>
                     </td>
                     <td onclick="showLogDetail(${log.id})">${(log.confidence * 100).toFixed(0)}%</td>
                     <td onclick="showLogDetail(${log.id})" style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                        ${log.reason}
+                        ${log.reason || 'No reason provided'}
                     </td>
                     <td onclick="showLogDetail(${log.id})">${log.processing_time_ms}ms</td>
                     <td onclick="event.stopPropagation();">
-                        ${log.image_path ? `<a href="${log.image_path}" target="_blank">📷</a>` : '-'}
+                        ${log.validation_type === 'video' && log.video_path 
+                            ? `<a href="#" onclick="playVideo('${log.video_path}'); return false;">🎬 View</a>` 
+                            : (log.image_path ? `<a href="${log.image_path}" target="_blank">📷 View</a>` : '-')}
                     </td>
                 </tr>
             `).join('');
@@ -617,6 +696,28 @@
         document.body.style.overflow = '';
     }
     
+    function playVideo(videoPath) {
+        const videoElement = document.getElementById('validationVideo');
+        const sourceElement = document.getElementById('videoSource');
+        
+        sourceElement.src = videoPath;
+        videoElement.load();
+        
+        document.getElementById('videoModalBackdrop').classList.add('show');
+        document.body.style.overflow = 'hidden';
+        
+        videoElement.play();
+    }
+    
+    function closeVideoModal() {
+        const videoElement = document.getElementById('validationVideo');
+        videoElement.pause();
+        videoElement.currentTime = 0;
+        
+        document.getElementById('videoModalBackdrop').classList.remove('show');
+        document.body.style.overflow = '';
+    }
+    
     function getCookie(name) {
         let cookieValue = null;
         if (document.cookie && document.cookie !== '') {
@@ -640,6 +741,7 @@
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
                 closeModalNew();
+                closeVideoModal();
             }
         });
     });
