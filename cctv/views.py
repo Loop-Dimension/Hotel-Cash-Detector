@@ -58,6 +58,7 @@ try:
 except ImportError as e:
     GEMINI_AVAILABLE = False
     DEFAULT_UNIFIED_PROMPT = ""
+    print(f"Warning: Gemini validator not available - {e}")
 
 # Import shared utilities
 from .utils import (
@@ -69,7 +70,6 @@ from .utils import (
     safe_delete_file,
     convert_to_json_serializable as shared_convert_to_json_serializable,
 )
-print(f"Warning: Gemini validator not available - {e}")
 
 import threading
 import time
