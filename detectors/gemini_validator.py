@@ -551,8 +551,13 @@ Respond in JSON format ONLY:
                 print(f"[GeminiValidator] Video API error: {result['error']}")
                 return True, 1.0, f"API error: {result['error']}", event_type
             
-            # Check for unified response format
-            is_valid = result.get('is_detected', False)
+            # Check if response is empty
+            if not result:
+                print(f"[GeminiValidator] Empty response from Gemini API")
+                return True, 1.0, "Empty API response", event_type
+            
+            # Check for unified response format (support both is_valid and is_detected)
+            is_valid = result.get('is_valid', result.get('is_detected', False))
             confidence = result.get('confidence', 0.0)
             reason = result.get('reason', 'No reason provided')
             
@@ -581,10 +586,20 @@ Respond in JSON format ONLY:
             
             # Log to database (using video path instead of image path)
             if self.camera_id:
+                # Convert absolute path to relative path for storage
+                relative_video_path = video_path
+                try:
+                    from django.conf import settings
+                    media_root = str(settings.MEDIA_ROOT)
+                    if video_path.startswith(media_root):
+                        relative_video_path = video_path[len(media_root):].lstrip('/').lstrip('\\')
+                except Exception:
+                    pass
+                
                 self._log_validation(
                     self.camera_id, event_type, is_valid, confidence, 
                     reason, prompt, response_raw, None, processing_time_ms,
-                    validation_type='video', video_path=video_path
+                    validation_type='video', video_path=relative_video_path
                 )
             
             print(f"[GeminiValidator] VIDEO {event_type}: valid={is_valid}, conf={confidence:.2f}, corrected={corrected_event_type}, reason={reason[:100]}")
@@ -647,8 +662,10 @@ Respond in JSON format ONLY:
                 
                 # Parse JSON
                 result = json.loads(text)
+                print(f"[GeminiValidator] Video API response: {result}")
                 return result
             else:
+                print(f"[GeminiValidator] Video API returned no text. Full response: {response}")
                 return {"error": "No response text"}
                 
         except json.JSONDecodeError as e:

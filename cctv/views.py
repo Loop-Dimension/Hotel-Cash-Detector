@@ -4039,6 +4039,19 @@ def api_gemini_all_logs(request):
     
     avg_time = all_logs.aggregate(avg=Avg('processing_time_ms'))['avg'] or 0
     
+    def get_video_url(video_path):
+        """Convert video path to URL, handling both absolute and relative paths"""
+        if not video_path:
+            return None
+        # If it's an absolute path, extract relative part
+        if video_path.startswith('/var/www/') or video_path.startswith('C:') or video_path.startswith('D:'):
+            # Extract just the filename or relative path from validation_clips/
+            if 'validation_clips/' in video_path:
+                video_path = 'validation_clips/' + video_path.split('validation_clips/')[-1]
+            elif 'media/' in video_path:
+                video_path = video_path.split('media/')[-1]
+        return f'/media/{video_path}'
+    
     return JsonResponse({
         'logs': [{
             'id': log.id,
@@ -4050,7 +4063,7 @@ def api_gemini_all_logs(request):
             'reason': log.reason or 'No reason provided',
             'processing_time_ms': log.processing_time_ms,
             'image_path': f'/media/{log.image_path}' if log.image_path else None,
-            'video_path': f'/media/{log.video_path}' if log.video_path else None,
+            'video_path': get_video_url(log.video_path),
             'validation_type': log.validation_type or 'image',
             'created_at': log.created_at.isoformat(),
         } for log in logs],
