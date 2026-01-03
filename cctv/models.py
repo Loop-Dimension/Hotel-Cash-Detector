@@ -343,14 +343,21 @@ class BranchAccount(models.Model):
 
 class GeminiLog(models.Model):
     """Logs for Gemini AI validation events"""
+    VALIDATION_TYPE_CHOICES = [
+        ('image', 'Image (Screenshot)'),
+        ('video', 'Video (3 sec clip)'),
+    ]
+    
     camera = models.ForeignKey(Camera, on_delete=models.CASCADE, related_name='gemini_logs')
     event_type = models.CharField(max_length=20)  # cash, violence, fire
+    validation_type = models.CharField(max_length=10, choices=VALIDATION_TYPE_CHOICES, default='image', help_text='Whether validation was done via image or video')
     is_validated = models.BooleanField(default=False)
     confidence = models.FloatField(default=0.0)
     reason = models.TextField(blank=True)
     prompt_used = models.TextField(blank=True)
     response_raw = models.TextField(blank=True, help_text='Raw JSON response from Gemini')
     image_path = models.CharField(max_length=500, blank=True, null=True)
+    video_path = models.CharField(max_length=500, blank=True, null=True, help_text='Path to validation video clip if used')
     processing_time_ms = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     

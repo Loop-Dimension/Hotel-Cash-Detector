@@ -58,7 +58,18 @@ try:
 except ImportError as e:
     GEMINI_AVAILABLE = False
     DEFAULT_UNIFIED_PROMPT = ""
-    print(f"Warning: Gemini validator not available - {e}")
+
+# Import shared utilities
+from .utils import (
+    create_rtsp_capture,
+    save_clip as shared_save_clip,
+    save_validation_clip as shared_save_validation_clip,
+    save_event as shared_save_event,
+    validate_detection as shared_validate_detection,
+    safe_delete_file,
+    convert_to_json_serializable as shared_convert_to_json_serializable,
+)
+print(f"Warning: Gemini validator not available - {e}")
 
 import threading
 import time
@@ -2423,29 +2434,9 @@ class BackgroundCameraWorker:
     def _create_rtsp_capture(self, rtsp_url):
         """Create RTSP capture with optimized settings for stability.
         
-        Uses TCP transport to avoid RTP packet ordering issues (bad cseq errors).
-        Sets buffer sizes and timeouts for better stream handling.
+        Uses shared utility function from cctv/utils.py
         """
-        import os
-        
-        # Set FFmpeg options via environment for better RTSP handling
-        # - rtsp_transport=tcp: Use TCP instead of UDP to avoid packet loss
-        # - stimeout=60000000: 60 second socket timeout (in microseconds) - prevents premature timeout
-        # - max_delay=1000000: Max delay 1 second
-        # - fflags=nobuffer+discardcorrupt: Reduce buffering, discard corrupt frames
-        # - analyzeduration=2000000: Analyze for 2 seconds max
-        # - probesize=2000000: Probe size 2MB
-        # - buffer_size=4096000: 4MB buffer for network stability
-        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|stimeout;60000000|max_delay;1000000|fflags;nobuffer+discardcorrupt|analyzeduration;2000000|probesize;2000000|buffer_size;4096000'
-        
-        cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-        
-        # Set additional capture properties - balanced timeouts
-        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 30000)  # 30s connection timeout
-        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 15000)  # 15s read timeout 
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 5)  # Slightly larger buffer for stability
-        
-        return cap
+        return create_rtsp_capture(rtsp_url)
     
     def get_current_frame(self, with_overlay=True):
         """Get the current frame for live viewing (shared from background worker)
@@ -2509,21 +2500,11 @@ class BackgroundCameraWorker:
         return UnifiedDetector(config)
     
     def convert_to_json_serializable(self, obj):
-        """Convert numpy types and other non-serializable objects to JSON-compatible types"""
-        import numpy as np
+        """Convert numpy types and other non-serializable objects to JSON-compatible types.
         
-        if isinstance(obj, (np.integer, np.int32, np.int64)):
-            return int(obj)
-        elif isinstance(obj, (np.floating, np.float32, np.float64)):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, dict):
-            return {k: self.convert_to_json_serializable(v) for k, v in obj.items()}
-        elif isinstance(obj, (list, tuple)):
-            return [self.convert_to_json_serializable(item) for item in obj]
-        else:
-            return obj
+        Uses shared utility function from cctv/utils.py
+        """
+        return shared_convert_to_json_serializable(obj)
     
     def save_event(self, camera, event_type, confidence, frame_number, bbox=None, clip_path=None, thumbnail_path=None, metadata=None):
         """Save event to database with detection metadata as JSON file."""
@@ -2627,181 +2608,25 @@ class BackgroundCameraWorker:
             return None
     
     def save_gemini_validation_clip(self, frames, camera, detection_type):
-        """Save 3-second video clip for Gemini validation"""
-        if not frames or len(frames) == 0:
-            return None
+        """Save 3-second video clip for Gemini validation.
         
-        import cv2
-        import subprocess
-        import uuid
-        
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        unique_id = uuid.uuid4().hex[:6]
-        
-        # Create validation_clips directory
-        validation_dir = Path(settings.MEDIA_ROOT) / 'validation_clips'
-        validation_dir.mkdir(parents=True, exist_ok=True)
-        
-        filename = f"{camera.camera_id}_{detection_type}_{timestamp}_{unique_id}.mp4"
-        temp_filename = f"temp_{filename}"
-        temp_path = validation_dir / temp_filename
-        final_path = validation_dir / filename
-        
-        # Create video
-        h, w = frames[0].shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(str(temp_path), fourcc, 15, (w, h))
-        
-        for frame in frames:
-            out.write(frame)
-        
-        out.release()
-        
-        # Convert to H.264
-        try:
-            subprocess.run([
-                'ffmpeg', '-y', '-i', str(temp_path),
-                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
-                '-pix_fmt', 'yuv420p', '-r', '15',
-                str(final_path)
-            ], capture_output=True, timeout=30, check=True)
-            
-            temp_path.unlink()
-            print(f"[Validation] Created 3s clip for Gemini: {filename}")
-            return str(final_path)
-            
-        except Exception as e:
-            print(f"[Validation] FFmpeg error creating validation clip: {e}")
-            if temp_path.exists():
-                temp_path.unlink()
-            return None
+        Uses shared utility function from cctv/utils.py
+        """
+        return shared_save_validation_clip(frames, camera, detection_type)
     
     def save_clip(self, frames, camera, detection_type, fps=30):
         """Save video clip directly to media folder for web access.
         
-        Uses H.264 encoding via ffmpeg for browser compatibility.
+        Uses shared utility function from cctv/utils.py
         """
-        if not frames or len(frames) == 0:
-            print(f"[Clip] No frames to save")
-            return None
-        
-        import cv2
-        import subprocess
-        import uuid
-        
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        unique_id = uuid.uuid4().hex[:6]  # Add unique ID to prevent conflicts
-        
-        # Save to media/clips for web access
-        clip_dir = Path(settings.MEDIA_ROOT) / 'clips'
-        clip_dir.mkdir(parents=True, exist_ok=True)
-        
-        thumb_dir = Path(settings.MEDIA_ROOT) / 'thumbnails'
-        thumb_dir.mkdir(parents=True, exist_ok=True)
-        
-        temp_filename = f"{camera.camera_id}_{detection_type}_{timestamp}_{unique_id}_temp.avi"
-        final_filename = f"{camera.camera_id}_{detection_type}_{timestamp}.mp4"
-        
-        temp_path = clip_dir / temp_filename
-        final_path = clip_dir / final_filename
-        
-        height, width = frames[0].shape[:2]
-        
-        # Use MJPG codec for temp file (reliable, fast)
-        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        out = cv2.VideoWriter(str(temp_path), fourcc, fps, (width, height))
-        
-        if not out.isOpened():
-            print(f"[Clip] Failed to open video writer")
-            return None
-        
-        # Write frames with detection label
-        frame_count = 0
-        for frame in frames:
-            if frame is None:
-                continue
-            # Add detection type label
-            label = f"{detection_type.upper()} DETECTED"
-            cv2.rectangle(frame, (10, 10), (250, 45), (0, 0, 0), -1)
-            color = {'cash': (0, 255, 0), 'violence': (0, 0, 255), 'fire': (0, 165, 255)}.get(detection_type, (255, 255, 255))
-            cv2.putText(frame, label, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-            out.write(frame)
-            frame_count += 1
-        
-        out.release()
-        out = None  # Ensure handle is released
-        
-        print(f"[Clip] Wrote {frame_count} frames to temp file")
-        
-        # Convert to H.264 MP4 using ffmpeg
-        # Use global lock to prevent concurrent FFmpeg operations causing corruption
-        ffmpeg_path = settings.DETECTION_CONFIG.get('FFMPEG_PATH', 'ffmpeg')
-        with _ffmpeg_lock:
-          try:
-            result = subprocess.run([
-                ffmpeg_path, '-y', '-i', str(temp_path),
-                '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-                '-pix_fmt', 'yuv420p',
-                '-movflags', '+faststart',
-                '-r', str(fps),
-                str(final_path)
-            ], capture_output=True, timeout=180)
-            
-            # Clean up temp file with retry for Windows file locking
-            self._safe_delete(temp_path)
-            
-            if result.returncode == 0 and final_path.exists():
-                print(f"[Clip] Saved: {final_path} ({final_path.stat().st_size / 1024:.1f} KB)")
-            else:
-                print(f"[Clip] FFmpeg error: {result.stderr.decode()[:300]}")
-                return None
-                
-          except subprocess.TimeoutExpired:
-            print(f"[Clip] FFmpeg timeout")
-            self._safe_delete(temp_path)
-            return None
-          except FileNotFoundError:
-            print(f"[Clip] FFmpeg not found")
-            self._safe_delete(temp_path)
-            return None
-          except Exception as e:
-            print(f"[Clip] Error: {e}")
-            self._safe_delete(temp_path)
-            return None
-        
-        # Save thumbnail from last frame
-        thumb_filename = f"{camera.camera_id}_{detection_type}_{timestamp}.jpg"
-        thumb_path = thumb_dir / thumb_filename
-        
-        thumb_frame = frames[-1].copy()
-        label = f"{detection_type.upper()}"
-        color = {'cash': (0, 255, 0), 'violence': (0, 0, 255), 'fire': (0, 165, 255)}.get(detection_type, (255, 255, 255))
-        cv2.rectangle(thumb_frame, (10, 10), (150, 45), (0, 0, 0), -1)
-        cv2.putText(thumb_frame, label, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-        cv2.imwrite(str(thumb_path), thumb_frame)
-        
-        print(f"[Clip] Thumbnail: {thumb_path}")
-        
-        return f'/media/clips/{final_filename}', f'/media/thumbnails/{thumb_filename}'
+        return shared_save_clip(frames, camera, detection_type, fps=fps)
     
     def _safe_delete(self, file_path, retries=3, delay=0.5):
-        """Safely delete a file with retries for Windows file locking issues."""
-        import time as time_module
-        for attempt in range(retries):
-            try:
-                if file_path.exists():
-                    file_path.unlink()
-                return True
-            except PermissionError:
-                if attempt < retries - 1:
-                    time_module.sleep(delay)
-                else:
-                    # File will be deleted on next cleanup
-                    print(f"[Clip] Note: Temp file will be cleaned up later: {file_path.name}")
-                    return False
-            except Exception:
-                return False
-        return False
+        """Safely delete a file with retries for Windows file locking issues.
+        
+        Uses shared utility function from cctv/utils.py
+        """
+        return safe_delete_file(file_path, retries=retries, delay=delay)
     
     def _cleanup_temp_files(self):
         """Clean up any leftover temp files from previous runs."""
@@ -3204,6 +3029,8 @@ class BackgroundCameraWorker:
             
             # Verify frames are valid (not empty)
             valid_frames = [f for f in frames_to_save if f is not None and f.size > 0]
+            print(f"[ClipSaver] Valid frames: {len(valid_frames)}/{len(frames_to_save)}")
+            
             if len(valid_frames) < min_frames:
                 print(f"[ClipSaver] Not enough valid frames ({len(valid_frames)}/{min_frames}), skipping")
                 with self.pending_clip_lock:

@@ -287,26 +287,35 @@ Respond in JSON format ONLY:
         prompt: str,
         response_raw: str,
         image_path: str,
-        processing_time_ms: int
+        processing_time_ms: int,
+        validation_type: str = 'image',
+        video_path: str = None
     ):
-        """Log validation result to database"""
-        print(f"[GeminiValidator] _log_validation called: camera_id={camera_id}, event_type={event_type}")
+        """Log validation result to database
+        
+        Args:
+            validation_type: 'image' or 'video' - how the validation was performed
+            video_path: Path to validation video clip (if video validation)
+        """
+        print(f"[GeminiValidator] _log_validation called: camera_id={camera_id}, event_type={event_type}, type={validation_type}")
         try:
             from cctv.models import GeminiLog, Camera
             
             print(f"[GeminiValidator] Attempting to get Camera {camera_id}")
             camera = Camera.objects.get(id=camera_id) if camera_id else None
             if camera:
-                print(f"[GeminiValidator] Creating GeminiLog entry...")
+                print(f"[GeminiValidator] Creating GeminiLog entry ({validation_type})...")
                 log = GeminiLog.objects.create(
                     camera=camera,
                     event_type=event_type,
+                    validation_type=validation_type,
                     is_validated=is_valid,
                     confidence=confidence,
                     reason=reason,
                     prompt_used=prompt,
                     response_raw=response_raw,
                     image_path=image_path or '',
+                    video_path=video_path or '',
                     processing_time_ms=processing_time_ms
                 )
                 print(
@@ -487,7 +496,8 @@ Respond in JSON format ONLY:
             if self.camera_id:
                 self._log_validation(
                     self.camera_id, event_type, is_valid, confidence, 
-                    reason, prompt, response_raw, image_path, processing_time_ms
+                    reason, prompt, response_raw, image_path, processing_time_ms,
+                    validation_type='image'
                 )
             else:
                 print(f"[GeminiValidator] ⚠️ Skipping database log - no camera_id set!")
@@ -573,7 +583,8 @@ Respond in JSON format ONLY:
             if self.camera_id:
                 self._log_validation(
                     self.camera_id, event_type, is_valid, confidence, 
-                    reason, prompt, response_raw, video_path, processing_time_ms
+                    reason, prompt, response_raw, None, processing_time_ms,
+                    validation_type='video', video_path=video_path
                 )
             
             print(f"[GeminiValidator] VIDEO {event_type}: valid={is_valid}, conf={confidence:.2f}, corrected={corrected_event_type}, reason={reason[:100]}")

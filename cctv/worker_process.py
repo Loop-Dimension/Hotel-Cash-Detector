@@ -19,6 +19,16 @@ django.setup()
 from django.conf import settings
 from cctv.models import Camera, Event
 
+# Import shared utilities
+from cctv.utils import (
+    create_rtsp_capture,
+    save_clip,
+    save_validation_clip,
+    save_event,
+    validate_detection,
+    DEFAULT_EVENT_COOLDOWN,
+)
+
 # Import detectors
 try:
     from detectors import UnifiedDetector
@@ -254,9 +264,9 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
     
     detector = UnifiedDetector(detector_config)
     
-    # Connect to RTSP stream
+    # Connect to RTSP stream (using shared utility)
     shared_state['status'] = 'connecting'
-    cap = _create_rtsp_capture(camera.rtsp_url)
+    cap = create_rtsp_capture(camera.rtsp_url)
     
     max_retries = 5
     for attempt in range(max_retries):
@@ -269,7 +279,7 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
         print(f"[Worker-{camera_id}] Connection attempt {attempt + 1}/{max_retries}")
         time.sleep(5)
         cap.release()
-        cap = _create_rtsp_capture(camera.rtsp_url)
+        cap = create_rtsp_capture(camera.rtsp_url)
     
     if not cap.isOpened():
         shared_state['error'] = 'Cannot connect to stream'
@@ -334,7 +344,7 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
                 print(f"[Worker-{camera_id}] Stream lost, reconnecting...")
                 cap.release()
                 time.sleep(3)
-                cap = _create_rtsp_capture(camera.rtsp_url)
+                cap = create_rtsp_capture(camera.rtsp_url)
                 if cap.isOpened():
                     ret, test_frame = cap.read()
                     if ret and test_frame is not None:
@@ -455,15 +465,20 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
                                 traceback.print_exc()
                                 # On error, allow the event (don't block on validation errors)
                         
-                        # Save event with clip (only if Gemini validated)
-                        clip_path, thumb_path = _save_clip(
+                        # Save event with clip using shared utilities
+                        clip_path, thumb_path = save_clip(
                             frame_buffer[-150:] if len(frame_buffer) >= 150 else frame_buffer,
-                            camera, event_type
+                            camera, event_type, fps=15
                         )
                         
                         if clip_path:
-                            _save_event(camera, event_type, confidence, frame_count, bbox, clip_path, thumb_path, 
-                                       gemini_validated=gemini_validated, gemini_confidence=gemini_confidence, gemini_reason=gemini_reason)
+                            save_event(
+                                camera, event_type, confidence, frame_count, bbox, 
+                                clip_path, thumb_path,
+                                gemini_validated=gemini_validated, 
+                                gemini_confidence=gemini_confidence, 
+                                gemini_reason=gemini_reason
+                            )
                             shared_state['events_detected'] = shared_state.get('events_detected', 0) + 1
                             last_event_time[event_type] = now
                             print(f"[Worker-{camera_id}] Event saved: {event_type} (Gemini: {gemini_reason})")
@@ -480,191 +495,11 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
     print(f"[Worker-{camera_id}] Loop ended")
 
 
-def _create_rtsp_capture(rtsp_url):
-    """Create RTSP capture with optimized settings"""
-    os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|stimeout;60000000|max_delay;1000000|fflags;nobuffer+discardcorrupt'
-    
-    cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 30000)
-    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 15000)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 5)
-    
-    return cap
-
-
-def _save_gemini_validation_clip(frames, camera, event_type):
-    """Save 3-second video clip for Gemini validation"""
-    if not frames or len(frames) == 0:
-        return None
-    
-    import subprocess
-    import uuid
-    
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    unique_id = uuid.uuid4().hex[:6]
-    
-    # Create validation_clips directory
-    validation_dir = Path(settings.MEDIA_ROOT) / 'validation_clips'
-    validation_dir.mkdir(parents=True, exist_ok=True)
-    
-    filename = f"{camera.camera_id}_{event_type}_{timestamp}_{unique_id}.mp4"
-    temp_filename = f"temp_{filename}"
-    temp_path = validation_dir / temp_filename
-    final_path = validation_dir / filename
-    
-    # Create video
-    h, w = frames[0].shape[:2]
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(str(temp_path), fourcc, 15, (w, h))
-    
-    for frame in frames:
-        out.write(frame)
-    
-    out.release()
-    
-    # Convert to H.264
-    try:
-        subprocess.run([
-            'ffmpeg', '-y', '-i', str(temp_path),
-            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
-            '-pix_fmt', 'yuv420p', '-r', '15',
-            str(final_path)
-        ], capture_output=True, timeout=30, check=True)
-        
-        temp_path.unlink()
-        print(f"[Validation] Created 3s clip for Gemini: {filename}")
-        return str(final_path)
-        
-    except Exception as e:
-        print(f"[Validation] FFmpeg error creating validation clip: {e}")
-        if temp_path.exists():
-            temp_path.unlink()
-        return None
-
-
-def _save_clip(frames, camera, event_type):
-    """Save video clip"""
-    if not frames or len(frames) == 0:
-        return None, None
-    
-    import subprocess
-    import uuid
-    
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    unique_id = uuid.uuid4().hex[:6]
-    
-    clip_dir = Path(settings.MEDIA_ROOT) / 'clips'
-    clip_dir.mkdir(parents=True, exist_ok=True)
-    
-    thumb_dir = Path(settings.MEDIA_ROOT) / 'thumbnails'
-    thumb_dir.mkdir(parents=True, exist_ok=True)
-    
-    temp_filename = f"{camera.camera_id}_{event_type}_{timestamp}_{unique_id}_temp.avi"
-    final_filename = f"{camera.camera_id}_{event_type}_{timestamp}.mp4"
-    
-    temp_path = clip_dir / temp_filename
-    final_path = clip_dir / final_filename
-    
-    height, width = frames[0].shape[:2]
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    out = cv2.VideoWriter(str(temp_path), fourcc, 15, (width, height))
-    
-    if not out.isOpened():
-        return None, None
-    
-    for frame in frames:
-        if frame is None:
-            continue
-        label = f"{event_type.upper()} DETECTED"
-        color = {'cash': (0, 255, 0), 'violence': (0, 0, 255), 'fire': (0, 165, 255)}.get(event_type, (255, 255, 255))
-        cv2.rectangle(frame, (10, 10), (250, 45), (0, 0, 0), -1)
-        cv2.putText(frame, label, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-        out.write(frame)
-    
-    out.release()
-    
-    # Convert to H.264
-    try:
-        subprocess.run([
-            'ffmpeg', '-y', '-i', str(temp_path),
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-            '-pix_fmt', 'yuv420p', '-r', '15',
-            str(final_path)
-        ], capture_output=True, timeout=180, check=True)
-        
-        temp_path.unlink()
-        
-    except Exception as e:
-        print(f"[Clip] FFmpeg error: {e}")
-        if temp_path.exists():
-            temp_path.unlink()
-        return None, None
-    
-    # Save thumbnail
-    thumb_filename = f"{camera.camera_id}_{event_type}_{timestamp}.jpg"
-    thumb_path = thumb_dir / thumb_filename
-    
-    thumb_frame = frames[-1].copy()
-    label = f"{event_type.upper()}"
-    color = {'cash': (0, 255, 0), 'violence': (0, 0, 255), 'fire': (0, 165, 255)}.get(event_type, (255, 255, 255))
-    cv2.rectangle(thumb_frame, (10, 10), (150, 45), (0, 0, 0), -1)
-    cv2.putText(thumb_frame, label, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-    cv2.imwrite(str(thumb_path), thumb_frame)
-    
-    return f'/media/clips/{final_filename}', f'/media/thumbnails/{thumb_filename}'
-
-
-def _save_event(camera, event_type, confidence, frame_number, bbox, clip_path, thumbnail_path,
-                gemini_validated=True, gemini_confidence=1.0, gemini_reason=""):
-    """Save event to database with Gemini validation metadata"""
-    try:
-        import json
-        from datetime import datetime
-        
-        # Save JSON metadata file
-        json_dir = Path(settings.MEDIA_ROOT) / 'json'
-        json_dir.mkdir(parents=True, exist_ok=True)
-        
-        timestamp = datetime.now()
-        json_filename = f"{event_type}_{camera.camera_id}_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
-        json_path = json_dir / json_filename
-        
-        metadata = {
-            'timestamp': timestamp.isoformat(),
-            'event_type': event_type,
-            'camera_id': camera.camera_id,
-            'camera_name': camera.name,
-            'confidence': round(confidence, 3),
-            'frame_number': frame_number,
-            'bbox': list(bbox) if bbox else None,
-            'clip_path': clip_path,
-            'thumbnail_path': thumbnail_path,
-            'gemini_validation': {
-                'validated': gemini_validated,
-                'confidence': round(gemini_confidence, 3),
-                'reason': gemini_reason
-            }
-        }
-        
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(metadata, f, indent=2, ensure_ascii=False)
-        
-        json_relative_path = f"json/{json_filename}"
-        
-        Event.objects.create(
-            branch=camera.branch,
-            camera=camera,
-            event_type=event_type,
-            confidence=confidence,
-            frame_number=frame_number,
-            bbox_x1=bbox[0] if bbox else 0,
-            bbox_y1=bbox[1] if bbox else 0,
-            bbox_x2=bbox[2] if bbox else 0,
-            bbox_y2=bbox[3] if bbox else 0,
-            clip_path=clip_path,
-            thumbnail_path=thumbnail_path,
-            metadata=json_relative_path,
-        )
-        print(f"[DB] Event saved with Gemini validation: {event_type} - {gemini_reason}")
-    except Exception as e:
-        print(f"[DB] Error saving event: {e}")
+# ============================================================================
+# DEPRECATED: These functions have been moved to cctv/utils.py
+# The imports at the top of this file now use the shared utilities:
+#   - create_rtsp_capture (was _create_rtsp_capture)
+#   - save_clip (was _save_clip)  
+#   - save_validation_clip (was _save_gemini_validation_clip)
+#   - save_event (was _save_event)
+# ============================================================================
