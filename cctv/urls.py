@@ -104,4 +104,7 @@ urlpatterns = [
     
     # Polygon Zones API
     path('api/cameras/<int:camera_id>/polygon-zones/', views.api_polygon_zones, name='api_polygon_zones'),
+    
+    # Public API for PMS integration (no auth required)
+    path('api/public/regions/', views.api_public_regions, name='api_public_regions'),
 ]

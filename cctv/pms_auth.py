@@ -101,6 +101,11 @@ class PMSAuthBackend(BaseBackend):
             if not isinstance(allowed_systems, list):
                 allowed_systems = []
             
+            # Get allowed regions
+            allowed_regions = pms_user.get("allowed_regions", [])
+            if not isinstance(allowed_regions, list):
+                allowed_regions = []
+            
             # Check if user can access CCTV
             if "cctv" not in allowed_systems:
                 logger.warning(f"User {username} not allowed to access CCTV. Allowed: {allowed_systems}")
@@ -131,6 +136,7 @@ class PMSAuthBackend(BaseBackend):
                 request.session["pms_user_id"] = user_id
                 request.session["pms_role"] = pms_role
                 request.session["allowed_systems"] = [str(s) for s in allowed_systems]
+                request.session["allowed_regions"] = [str(r) for r in allowed_regions]
             
             logger.info(f"User {username} authenticated via PMS with role {cctv_role}")
             return user
@@ -217,6 +223,7 @@ def pms_login_required(view_func):
             pms_role = user_info.get("role", "")
             request.session["pms_role"] = str(pms_role)
             request.session["allowed_systems"] = list(user_info.get("allowed_systems", []))
+            request.session["allowed_regions"] = list(user_info.get("allowed_regions", []))
             
             # Update local user role if changed
             cctv_role = get_cctv_role(pms_role)
@@ -227,3 +234,50 @@ def pms_login_required(view_func):
         return view_func(request, *args, **kwargs)
     
     return wrapper
+
+
+def get_user_allowed_regions(request):
+    """
+    Get list of regions the current user can access.
+    Returns empty list for admin users (meaning all regions).
+    """
+    if not request.user.is_authenticated:
+        return []
+    
+    # Admin users can access all regions (empty list = all)
+    if request.user.is_admin():
+        return []
+    
+    return request.session.get("allowed_regions", [])
+
+
+def get_accessible_regions(request):
+    """
+    Get Region objects that the current user can access.
+    Returns all regions for admin users.
+    """
+    from cctv.models import Region
+    
+    allowed_region_codes = get_user_allowed_regions(request)
+    
+    # Empty list means admin - return all regions
+    if not allowed_region_codes:
+        return Region.objects.all()
+    
+    # Filter by region code
+    return Region.objects.filter(code__in=allowed_region_codes)
+
+
+def filter_branches_by_region(queryset, request):
+    """
+    Filter Branch queryset by user's allowed regions.
+    Admin users see all branches.
+    """
+    allowed_regions = get_user_allowed_regions(request)
+    
+    # Empty list means admin - no filtering
+    if not allowed_regions:
+        return queryset
+    
+    # Filter by region code
+    return queryset.filter(region__code__in=allowed_regions)

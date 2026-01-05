@@ -1,4 +1,4 @@
-"""
+﻿"""
 Views for Hotel CCTV Monitoring System
 
 PERMISSION MODEL:
@@ -14,8 +14,8 @@ PERMISSION MODEL:
   * Cannot create/edit/delete branches or regions
   
 Access Control Implementation:
-- get_user_branches(user): Returns all branches for admin, assigned branches for managers
-- Each view checks: user.is_admin() or branch in get_user_branches(user)
+- get_user_branches(user, request): Returns all branches for admin, assigned branches for managers
+- Each view checks: user.is_admin() or branch in get_user_branches(user, request)
 - API endpoints enforce same permission model
 - Frontend navigation shows different menu items based on role
 """
@@ -39,6 +39,7 @@ from django.conf import settings
 
 from .models import User, Region, Branch, Camera, Event, VideoRecord, BranchAccount, GeminiLog
 from .translations import get_translation, t
+from .pms_auth import pms_login_required, get_user_allowed_regions, filter_branches_by_region, get_accessible_regions
 
 # Add root directory to path for detector imports
 sys.path.insert(0, str(settings.BASE_DIR))
@@ -83,11 +84,18 @@ background_workers = {}  # camera_id -> BackgroundCameraWorker (threading)
 background_worker_lock = threading.Lock()
 
 
-def get_user_branches(user):
-    """Get branches accessible by the user"""
+def get_user_branches(user, request=None):
+    """Get branches accessible by the user based on role and allowed_regions"""
     if user.is_admin():
-        return Branch.objects.all()
-    return user.managed_branches.all()
+        branches = Branch.objects.all()
+    else:
+        branches = user.managed_branches.all()
+    
+    # Apply region filtering from PMS (if request available)
+    if request:
+        branches = filter_branches_by_region(branches, request)
+    
+    return branches
 
 
 # ==================== AUTHENTICATION ====================
@@ -108,7 +116,7 @@ def login_view(request):
             next_url = request.GET.get('next', '/')
             return redirect(next_url)
         else:
-            error = '아이디 또는 비밀번호가 올바르지 않습니다.'
+            error = 'ì•„ì´ë”” ë˜ëŠ” ë¹„ë°€ë²ˆí˜¸ê°€ ì˜¬ë°”ë¥´ì§€ ì•ŠìŠµë‹ˆë‹¤.'
     
     return render(request, 'cctv/login.html', {'error': error})
 
@@ -121,12 +129,12 @@ def logout_view(request):
 
 # ==================== MAIN PAGES ====================
 
-@login_required
+@pms_login_required
 def home(request):
     """Dashboard home page"""
     user = request.user
-    branches = get_user_branches(user)
-    regions = Region.objects.all()
+    branches = get_user_branches(user, request)
+    regions = get_accessible_regions(request)
     
     context = {
         'user': user,
@@ -137,7 +145,7 @@ def home(request):
     return render(request, 'cctv/home.html', context)
 
 
-@login_required
+@pms_login_required
 def monitor_all(request):
     """All branches monitoring page (Admin only)"""
     user = request.user
@@ -156,11 +164,11 @@ def monitor_all(request):
     return render(request, 'cctv/monitor_all.html', context)
 
 
-@login_required
+@pms_login_required
 def monitor_local(request, branch_id=None):
     """Local branch monitoring page"""
     user = request.user
-    user_branches = get_user_branches(user)
+    user_branches = get_user_branches(user, request)
     
     if branch_id:
         branch = get_object_or_404(Branch, id=branch_id)
@@ -170,7 +178,7 @@ def monitor_local(request, branch_id=None):
         branch = user_branches.first()
     
     cameras = branch.cameras.all() if branch else []
-    regions = Region.objects.all()
+    regions = get_accessible_regions(request)
     
     context = {
         'user': user,
@@ -183,12 +191,12 @@ def monitor_local(request, branch_id=None):
     return render(request, 'cctv/monitor_local.html', context)
 
 
-@login_required
+@pms_login_required
 def video_logs(request):
     """Event logs page"""
     user = request.user
-    user_branches = get_user_branches(user)
-    regions = Region.objects.all()
+    user_branches = get_user_branches(user, request)
+    regions = get_accessible_regions(request)
     
     # Get filter parameters
     date_from = request.GET.get('from', '')
@@ -252,11 +260,11 @@ def video_logs(request):
     return render(request, 'cctv/video_logs.html', context)
 
 
-@login_required
+@pms_login_required
 def video_full(request):
     """Full videos page"""
     user = request.user
-    user_branches = get_user_branches(user)
+    user_branches = get_user_branches(user, request)
     regions = Region.objects.all()
     
     # Get filter parameters
@@ -296,7 +304,7 @@ def video_full(request):
     return render(request, 'cctv/video_full.html', context)
 
 
-@login_required
+@pms_login_required
 def manage_branches(request):
     """Branch management page (Admin only)"""
     user = request.user
@@ -307,10 +315,10 @@ def manage_branches(request):
     regions = Region.objects.all()
     
     # Get filter parameters
-    region_filter = request.GET.get('region', '전체')
+    region_filter = request.GET.get('region', 'ì „ì²´')
     search_filter = request.GET.get('search', '')
     
-    if region_filter != '전체':
+    if region_filter != 'ì „ì²´':
         branches = branches.filter(region__name=region_filter)
     
     if search_filter:
@@ -329,13 +337,13 @@ def manage_branches(request):
     return render(request, 'cctv/manage_branches.html', context)
 
 
-@login_required
+@pms_login_required
 def manage_branch_detail(request, branch_id):
     """Branch detail management page"""
     user = request.user
     branch = get_object_or_404(Branch, id=branch_id)
     
-    if not user.is_admin() and branch not in get_user_branches(user):
+    if not user.is_admin() and branch not in get_user_branches(user, request):
         return redirect('cctv:home')
     
     # Get users (project managers) assigned to this branch
@@ -354,13 +362,13 @@ def manage_branch_detail(request, branch_id):
     return render(request, 'cctv/manage_branch_detail.html', context)
 
 
-@login_required
+@pms_login_required
 def camera_settings(request, camera_id):
     """Camera settings page - configure zone and detection thresholds"""
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return redirect('cctv:home')
     
     context = {
@@ -371,7 +379,7 @@ def camera_settings(request, camera_id):
     return render(request, 'cctv/camera_settings.html', context)
 
 
-@login_required
+@pms_login_required
 def reports(request):
     """Reports page (Admin only)"""
     user = request.user
@@ -390,7 +398,7 @@ def reports(request):
     return render(request, 'cctv/reports.html', context)
 
 
-@login_required
+@pms_login_required
 def test_detection(request):
     """Test detection page (Admin only)"""
     user = request.user
@@ -404,7 +412,7 @@ def test_detection(request):
     return render(request, 'cctv/test_detection.html', context)
 
 
-@login_required
+@pms_login_required
 def gemini_prompts_page(request):
     """Global Gemini Prompts page (Admin only)"""
     user = request.user
@@ -418,7 +426,7 @@ def gemini_prompts_page(request):
     return render(request, 'cctv/gemini_prompts.html', context)
 
 
-@login_required
+@pms_login_required
 def gemini_logs_page(request):
     """Global Gemini Logs page (Admin only)"""
     user = request.user
@@ -438,14 +446,14 @@ def gemini_logs_page(request):
 
 # ==================== API ENDPOINTS ====================
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET", "POST"])
 def api_branches(request):
     """API for branches"""
     user = request.user
     
     if request.method == 'GET':
-        branches = get_user_branches(user).select_related('region')
+        branches = get_user_branches(user, request).select_related('region')
         data = [{
             'id': b.id,
             'name': b.name,
@@ -486,14 +494,14 @@ def api_branches(request):
         })
 
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET", "PUT", "DELETE"])
 def api_branch_detail(request, branch_id):
     """API for single branch"""
     user = request.user
     branch = get_object_or_404(Branch, id=branch_id)
     
-    if not user.is_admin() and branch not in get_user_branches(user):
+    if not user.is_admin() and branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     if request.method == 'GET':
@@ -535,14 +543,14 @@ def api_branch_detail(request, branch_id):
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET", "POST"])
 def api_branch_cameras(request, branch_id):
     """API for branch cameras"""
     user = request.user
     branch = get_object_or_404(Branch, id=branch_id)
     
-    if not user.is_admin() and branch not in get_user_branches(user):
+    if not user.is_admin() and branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     if request.method == 'GET':
@@ -580,12 +588,12 @@ def api_branch_cameras(request, branch_id):
         })
 
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET", "POST"])
 def api_cameras(request):
     """API for all cameras"""
     user = request.user
-    user_branches = get_user_branches(user)
+    user_branches = get_user_branches(user, request)
     
     if request.method == 'GET':
         cameras = Camera.objects.filter(branch__in=user_branches).select_related('branch')
@@ -636,14 +644,14 @@ def api_cameras(request):
         })
 
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET", "PUT", "DELETE"])
 def api_camera_detail(request, camera_id):
     """API for single camera"""
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     if request.method == 'GET':
@@ -713,11 +721,11 @@ def api_camera_detail(request, camera_id):
         return JsonResponse({'success': True})
 
 
-@login_required
+@pms_login_required
 def api_events(request):
     """API for events"""
     user = request.user
-    user_branches = get_user_branches(user)
+    user_branches = get_user_branches(user, request)
     
     # Get filter parameters
     date_filter = request.GET.get('date')
@@ -760,14 +768,14 @@ def api_events(request):
     return JsonResponse({'events': data})
 
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET", "PUT", "DELETE"])
 def api_event_detail(request, event_id):
     """API for single event"""
     user = request.user
     event = get_object_or_404(Event, id=event_id)
     
-    if not user.is_admin() and event.branch not in get_user_branches(user):
+    if not user.is_admin() and event.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     if request.method == 'GET':
@@ -808,11 +816,11 @@ def api_event_detail(request, event_id):
         return JsonResponse({'success': True})
 
 
-@login_required
+@pms_login_required
 def api_videos(request):
     """API for video records"""
     user = request.user
-    user_branches = get_user_branches(user)
+    user_branches = get_user_branches(user, request)
     
     videos = VideoRecord.objects.filter(branch__in=user_branches).select_related('branch', 'camera', 'branch__region')
     
@@ -845,11 +853,11 @@ def api_videos(request):
     return JsonResponse({'videos': data})
 
 
-@login_required
+@pms_login_required
 def api_home_stats(request):
     """API for home page statistics"""
     user = request.user
-    user_branches = get_user_branches(user)
+    user_branches = get_user_branches(user, request)
     today = timezone.now().date()
     
     # Calculate overall stats
@@ -894,14 +902,14 @@ def api_home_stats(request):
     })
 
 
-@login_required
+@pms_login_required
 def api_report_stats(request):
     """API for report statistics"""
     user = request.user
     if not user.is_admin():
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
-    user_branches = get_user_branches(user)
+    user_branches = get_user_branches(user, request)
     today = timezone.now().date()
     month_start = today.replace(day=1)
     
@@ -921,9 +929,9 @@ def api_report_stats(request):
     total = sum(type_breakdown.values()) or 1
     
     pie_data = [
-        {'label': '현금', 'value': round(type_breakdown.get('cash', 0) / total * 100), 'color': '#1c1373'},
-        {'label': '화재', 'value': round(type_breakdown.get('fire', 0) / total * 100), 'color': '#f28c28'},
-        {'label': '난동', 'value': round(type_breakdown.get('violence', 0) / total * 100), 'color': '#3cb371'},
+        {'label': 'í˜„ê¸ˆ', 'value': round(type_breakdown.get('cash', 0) / total * 100), 'color': '#1c1373'},
+        {'label': 'í™”ìž¬', 'value': round(type_breakdown.get('fire', 0) / total * 100), 'color': '#f28c28'},
+        {'label': 'ë‚œë™', 'value': round(type_breakdown.get('violence', 0) / total * 100), 'color': '#3cb371'},
     ]
     
     # Daily stats for last 7 days
@@ -958,14 +966,14 @@ def api_report_stats(request):
     })
 
 
-@login_required
+@pms_login_required
 def api_reports(request):
     """API for reports page - returns all chart data"""
     user = request.user
     if not user.is_admin():
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
-    user_branches = get_user_branches(user)
+    user_branches = get_user_branches(user, request)
     today = timezone.now().date()
     
     # Parse date range
@@ -1073,7 +1081,7 @@ def api_reports(request):
     })
 
 
-@login_required
+@pms_login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_set_cashier_zone(request, camera_id):
@@ -1081,7 +1089,7 @@ def api_set_cashier_zone(request, camera_id):
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     data = json.loads(request.body)
@@ -1102,7 +1110,7 @@ def api_set_cashier_zone(request, camera_id):
     })
 
 
-@login_required
+@pms_login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_set_cash_drawer_zone(request, camera_id):
@@ -1110,7 +1118,7 @@ def api_set_cash_drawer_zone(request, camera_id):
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     data = json.loads(request.body)
@@ -1131,7 +1139,7 @@ def api_set_cash_drawer_zone(request, camera_id):
     })
 
 
-@login_required
+@pms_login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_camera_settings(request, camera_id):
@@ -1139,7 +1147,7 @@ def api_camera_settings(request, camera_id):
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     data = json.loads(request.body)
@@ -1188,7 +1196,7 @@ def api_camera_settings(request, camera_id):
     })
 
 
-@login_required
+@pms_login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_test_camera_connection(request, camera_id):
@@ -1196,7 +1204,7 @@ def api_test_camera_connection(request, camera_id):
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     try:
@@ -1252,7 +1260,7 @@ def api_test_camera_connection(request, camera_id):
             'error': str(e)
         })
 
-@login_required
+@pms_login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_toggle_detection(request, camera_id):
@@ -1260,7 +1268,7 @@ def api_toggle_detection(request, camera_id):
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     data = json.loads(request.body)
@@ -1284,14 +1292,14 @@ def api_toggle_detection(request, camera_id):
     })
 
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET", "POST"])
 def api_branch_accounts(request, branch_id):
     """API for branch accounts"""
     user = request.user
     branch = get_object_or_404(Branch, id=branch_id)
     
-    if not user.is_admin() and branch not in get_user_branches(user):
+    if not user.is_admin() and branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     if request.method == 'GET':
@@ -1509,13 +1517,13 @@ def save_detection(camera, detection, frame_number):
     )
 
 
-@login_required
+@pms_login_required
 def video_feed(request, camera_id):
     """Video streaming endpoint"""
     camera = get_object_or_404(Camera, id=camera_id)
     
     user = request.user
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     return StreamingHttpResponse(
@@ -1927,13 +1935,13 @@ def draw_debug_panel(frame, camera, cached_worker=None):
     cv2.putText(frame, "Client", (w - 150, 67), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
 
 
-@login_required
+@pms_login_required
 def video_feed_debug(request, camera_id):
     """Debug video streaming endpoint with pose/distance overlay"""
     camera = get_object_or_404(Camera, id=camera_id)
     
     user = request.user
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     # Check if debug mode is enabled for this camera
@@ -1946,7 +1954,7 @@ def video_feed_debug(request, camera_id):
     )
 
 
-@login_required
+@pms_login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_verify_dev_password(request, camera_id):
@@ -1954,7 +1962,7 @@ def api_verify_dev_password(request, camera_id):
     camera = get_object_or_404(Camera, id=camera_id)
     
     user = request.user
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     data = json.loads(request.body)
@@ -1977,7 +1985,7 @@ def api_verify_dev_password(request, camera_id):
         }, status=401)
 
 
-@login_required
+@pms_login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_lock_dev_mode(request, camera_id):
@@ -1990,7 +1998,7 @@ def api_lock_dev_mode(request, camera_id):
     return JsonResponse({'success': True, 'message': 'Developer mode locked'})
 
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET"])
 def api_dev_mode_status(request, camera_id):
     """Get developer mode status for a camera"""
@@ -2005,7 +2013,7 @@ def api_dev_mode_status(request, camera_id):
     })
 
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET"])
 def api_detection_debug_info(request, camera_id):
     """Get live detection debug information"""
@@ -2056,7 +2064,7 @@ def api_detection_debug_info(request, camera_id):
 
 # ==================== USER MANAGEMENT ====================
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET", "POST"])
 def api_users(request):
     """API for users"""
@@ -2068,7 +2076,7 @@ def api_users(request):
             users = User.objects.all()
         else:
             # Get users assigned to manager's branches
-            user_branches = get_user_branches(user)
+            user_branches = get_user_branches(user, request)
             users = User.objects.filter(managed_branches__in=user_branches).distinct()
         
         data = [{
@@ -2089,7 +2097,7 @@ def api_users(request):
         if 'branch_id' in data:
             branch = get_object_or_404(Branch, id=data['branch_id'])
             # Check if user has access to this branch
-            if not user.is_admin() and branch not in get_user_branches(user):
+            if not user.is_admin() and branch not in get_user_branches(user, request):
                 return JsonResponse({'error': 'Permission denied'}, status=403)
         else:
             # Only admins can create users without branch assignment
@@ -2130,7 +2138,7 @@ def api_users(request):
             return JsonResponse({'error': 'User creation failed', 'detail': str(e)}, status=400)
 
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET", "PUT", "DELETE"])
 def api_user_detail(request, user_id):
     """API for single user"""
@@ -2179,7 +2187,7 @@ def api_user_detail(request, user_id):
 
 # ==================== REGION MANAGEMENT ====================
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET", "POST"])
 def api_regions(request):
     """API for regions"""
@@ -2214,7 +2222,7 @@ def api_regions(request):
         })
 
 
-@login_required
+@pms_login_required
 @require_http_methods(["GET", "PUT", "DELETE"])
 def api_region_detail(request, region_id):
     """API for single region"""
@@ -2248,7 +2256,7 @@ def api_region_detail(request, region_id):
 
 # ==================== BULK OPERATIONS ====================
 
-@login_required
+@pms_login_required
 @require_http_methods(["POST"])
 def api_bulk_delete_events(request):
     """API for bulk deleting events"""
@@ -2281,7 +2289,7 @@ def api_bulk_delete_events(request):
     return JsonResponse({'success': True, 'deleted_count': deleted})
 
 
-@login_required
+@pms_login_required
 @require_http_methods(["POST"])
 def api_bulk_update_events(request):
     """API for bulk updating event status"""
@@ -2294,7 +2302,7 @@ def api_bulk_update_events(request):
     if not event_ids or not new_status:
         return JsonResponse({'error': 'event_ids and status are required'}, status=400)
     
-    user_branches = get_user_branches(user)
+    user_branches = get_user_branches(user, request)
     events = Event.objects.filter(id__in=event_ids, branch__in=user_branches)
     
     updated = events.update(
@@ -2932,7 +2940,7 @@ class BackgroundCameraWorker:
                                 
                                 # Use corrected event type if Gemini detected something different
                                 if corrected_event_type != event_type:
-                                    print(f"[Detection] Event type corrected: {event_type} → {corrected_event_type}")
+                                    print(f"[Detection] Event type corrected: {event_type} â†’ {corrected_event_type}")
                                     event_type = corrected_event_type
                                 
                                 if not gemini_validated:
@@ -3135,7 +3143,7 @@ class BackgroundCameraWorker:
         return True
 
 
-@login_required
+@pms_login_required
 @require_http_methods(['POST'])
 def start_background_worker(request, camera_id):
     """Start background worker for a camera (threading-based for Gunicorn)"""
@@ -3162,7 +3170,7 @@ def start_background_worker(request, camera_id):
     return JsonResponse({'success': True, 'message': f'Worker started for {camera.camera_id}'})
 
 
-@login_required
+@pms_login_required
 @require_http_methods(['POST'])
 def stop_background_worker(request, camera_id):
     """Stop background worker for a camera (threading-based)"""
@@ -3180,7 +3188,7 @@ def stop_background_worker(request, camera_id):
     return JsonResponse({'success': True, 'message': 'Worker stopped'})
 
 
-@login_required
+@pms_login_required
 def get_background_worker_status(request):
     """Get status of all background workers (threading-based)"""
     if not request.user.is_admin():
@@ -3248,7 +3256,7 @@ def start_all_background_workers_internal():
             if camera.id in background_workers:
                 worker = background_workers[camera.id]
                 if worker.running:
-                    print(f"  ⏭️  Worker already running: {camera.camera_id}")
+                    print(f"  â­ï¸  Worker already running: {camera.camera_id}")
                     continue
                 else:
                     # Dead worker, remove it
@@ -3259,18 +3267,18 @@ def start_all_background_workers_internal():
                 worker.start()
                 background_workers[camera.id] = worker
                 started.append(camera.camera_id)
-                print(f"  ▶️  Started worker thread: {camera.camera_id} ({camera.name})")
+                print(f"  â–¶ï¸  Started worker thread: {camera.camera_id} ({camera.name})")
             except Exception as e:
                 failed.append((camera.camera_id, str(e)))
-                print(f"  ✗ Failed to start {camera.camera_id}: {e}")
+                print(f"  âœ— Failed to start {camera.camera_id}: {e}")
     
     if failed:
-        print(f"  ⚠️  {len(failed)} workers failed to start")
+        print(f"  âš ï¸  {len(failed)} workers failed to start")
     
     return started
 
 
-@login_required
+@pms_login_required
 @require_http_methods(['POST'])
 def start_all_background_workers(request):
     """Start background workers for all cameras"""
@@ -3281,7 +3289,7 @@ def start_all_background_workers(request):
     return JsonResponse({'success': True, 'started': started, 'count': len(started)})
 
 
-@login_required
+@pms_login_required
 @require_http_methods(['POST'])
 def stop_all_background_workers(request):
     """Stop all background workers (threading-based)"""
@@ -3302,7 +3310,7 @@ def stop_all_background_workers(request):
 
 # ==================== TEST DETECTION API ====================
 
-@login_required
+@pms_login_required
 @require_http_methods(['POST'])
 def api_test_upload(request):
     """Upload video for testing"""
@@ -3361,7 +3369,7 @@ def api_test_upload(request):
     })
 
 
-@login_required
+@pms_login_required
 @require_http_methods(['POST'])
 def api_test_process(request):
     """Process uploaded video with detection"""
@@ -3768,7 +3776,7 @@ def api_test_process(request):
 
 # ==================== GEMINI LOGS & PROMPTS API ====================
 
-@login_required
+@pms_login_required
 def api_gemini_logs(request, camera_id):
     """Get Gemini validation logs for a camera"""
     from .models import GeminiLog
@@ -3776,7 +3784,7 @@ def api_gemini_logs(request, camera_id):
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     # Get filter parameters
@@ -3817,7 +3825,7 @@ def api_gemini_logs(request, camera_id):
     })
 
 
-@login_required
+@pms_login_required
 def api_gemini_log_detail(request, log_id):
     """Get detailed info for a specific Gemini log"""
     from .models import GeminiLog
@@ -3825,7 +3833,7 @@ def api_gemini_log_detail(request, log_id):
     user = request.user
     log = get_object_or_404(GeminiLog, id=log_id)
     
-    if not user.is_admin() and log.camera.branch not in get_user_branches(user):
+    if not user.is_admin() and log.camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     return JsonResponse({
@@ -3844,13 +3852,13 @@ def api_gemini_log_detail(request, log_id):
     })
 
 
-@login_required
+@pms_login_required
 def api_gemini_prompts(request, camera_id):
     """Get or set Gemini prompts (now global)"""
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     from .models import GeminiPrompts
@@ -3883,7 +3891,7 @@ def api_gemini_prompts(request, camera_id):
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
-@login_required
+@pms_login_required
 def api_gemini_reset_prompts(request, camera_id):
     """Reset Gemini prompts to defaults (now affects global prompts)"""
     user = request.user
@@ -3900,13 +3908,13 @@ def api_gemini_reset_prompts(request, camera_id):
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
-@login_required
+@pms_login_required
 def api_polygon_zones(request, camera_id):
     """Get or update polygon zones for a camera"""
     user = request.user
     camera = get_object_or_404(Camera, id=camera_id)
     
-    if not user.is_admin() and camera.branch not in get_user_branches(user):
+    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     
     if request.method == 'GET':
@@ -3949,7 +3957,7 @@ def api_polygon_zones(request, camera_id):
 
 # ==================== GLOBAL GEMINI API ENDPOINTS ====================
 
-@login_required
+@pms_login_required
 def api_gemini_global_prompts(request):
     """Get or update global Gemini prompts (unified prompt for all event types)"""
     user = request.user
@@ -3992,7 +4000,7 @@ def api_gemini_global_prompts(request):
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
-@login_required
+@pms_login_required
 def api_gemini_all_logs(request):
     """Get all Gemini logs across all cameras"""
     user = request.user
@@ -4080,7 +4088,7 @@ def api_gemini_all_logs(request):
         'avg_processing_time': round(avg_time, 0),
     })
 
-@login_required
+@pms_login_required
 def api_gemini_bulk_delete(request):
     """Bulk delete Gemini logs"""
     if request.method != 'POST':
@@ -4108,3 +4116,32 @@ def api_gemini_bulk_delete(request):
         })
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
+
+@require_http_methods(["GET", "OPTIONS"])
+def api_public_regions(request):
+    """
+    Public API for PMS to fetch available regions.
+    No authentication required - this is for PMS integration.
+    """
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        response = JsonResponse({})
+        response['Access-Control-Allow-Origin'] = '*'
+        response['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        response['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return response
+    
+    regions = Region.objects.all()
+    data = [{
+        'code': r.code,
+        'name': r.name,
+        'branch_count': r.branches.count(),
+    } for r in regions]
+    
+    response = JsonResponse({
+        'regions': data,
+        'source': 'cctv',
+    })
+    response['Access-Control-Allow-Origin'] = '*'
+    return response
