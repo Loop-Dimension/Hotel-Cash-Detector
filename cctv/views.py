@@ -446,14 +446,12 @@ def gemini_logs_page(request):
 
 # ==================== API ENDPOINTS ====================
 
-@pms_login_required
 @require_http_methods(["GET", "POST"])
 def api_branches(request):
-    """API for branches"""
-    user = request.user
-    
+    """API for branches - Public access"""
+    # For public access, show all branches
     if request.method == 'GET':
-        branches = get_user_branches(user, request).select_related('region')
+        branches = Branch.objects.all().select_related('region')
         data = [{
             'id': b.id,
             'name': b.name,
@@ -588,15 +586,12 @@ def api_branch_cameras(request, branch_id):
         })
 
 
-@pms_login_required
 @require_http_methods(["GET", "POST"])
 def api_cameras(request):
-    """API for all cameras"""
-    user = request.user
-    user_branches = get_user_branches(user, request)
-    
+    """API for all cameras - Public access"""
+    # For public access, show all cameras
     if request.method == 'GET':
-        cameras = Camera.objects.filter(branch__in=user_branches).select_related('branch')
+        cameras = Camera.objects.all().select_related('branch')
         data = [{
             'id': c.id,
             'camera_id': c.camera_id,
@@ -721,20 +716,18 @@ def api_camera_detail(request, camera_id):
         return JsonResponse({'success': True})
 
 
-@pms_login_required
 def api_events(request):
-    """API for events"""
-    user = request.user
-    user_branches = get_user_branches(user, request)
-    
+    """API for events - Public access"""
+    # For public access, show all events
     # Get filter parameters
     date_filter = request.GET.get('date')
     region_filter = request.GET.get('region')
     type_filter = request.GET.get('type')
     branch_filter = request.GET.get('branch')
+    branch_id_filter = request.GET.get('branch_id')
     limit = int(request.GET.get('limit', 50))
     
-    events = Event.objects.filter(branch__in=user_branches).select_related('branch', 'camera', 'branch__region')
+    events = Event.objects.all().select_related('branch', 'camera', 'branch__region')
     
     if date_filter:
         events = events.filter(created_at__date=date_filter)
@@ -747,6 +740,9 @@ def api_events(request):
     
     if branch_filter:
         events = events.filter(branch__name__icontains=branch_filter)
+    
+    if branch_id_filter:
+        events = events.filter(branch_id=int(branch_id_filter))
     
     events = events.order_by('-created_at')[:limit]
     

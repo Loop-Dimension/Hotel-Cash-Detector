@@ -159,11 +159,18 @@ class PMSAuthBackend(BaseBackend):
 def verify_pms_token(request):
     """
     Verify the stored PMS token is still valid.
-    Call this on each protected request.
+    Can check both session token (for web) and Authorization header (for API).
     
     Returns: (is_valid, user_info)
     """
-    token = request.session.get("pms_token")
+    # Try Authorization header first (for API calls)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header.replace("Bearer ", "")
+    else:
+        # Fall back to session token (for web pages)
+        token = request.session.get("pms_token")
+    
     if not token:
         return False, None
     
@@ -199,14 +206,61 @@ def verify_pms_token(request):
 def pms_login_required(view_func):
     """
     Decorator that validates PMS token on each request.
+    Supports both session-based auth (web pages) and JWT header auth (API calls).
     Use this instead of Django's login_required for PMS-authenticated views.
     """
     from functools import wraps
     from django.shortcuts import redirect
     from django.contrib.auth import logout
+    from django.http import JsonResponse
     
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
+        # Check if this is an API request (has Authorization header or is JSON request)
+        is_api_request = (
+            request.headers.get("Authorization", "").startswith("Bearer ") or
+            request.path.startswith("/api/") or
+            request.content_type == "application/json"
+        )
+        
+        # For API requests, verify token from header
+        if is_api_request:
+            is_valid, user_info = verify_pms_token(request)
+            
+            if not is_valid:
+                return JsonResponse(
+                    {"error": "Unauthorized", "detail": "Invalid or expired token"},
+                    status=401
+                )
+            
+            # Create temporary user object for the request (don't need Django session for API)
+            if user_info:
+                user_email = str(user_info.get("email", ""))
+                pms_role = user_info.get("role", "")
+                if isinstance(pms_role, dict):
+                    pms_role = str(pms_role.get("name", ""))
+                else:
+                    pms_role = str(pms_role)
+                
+                cctv_role = get_cctv_role(pms_role)
+                
+                # Get or create user
+                user, _ = User.objects.get_or_create(
+                    username=user_email,
+                    defaults={
+                        "email": user_email,
+                        "role": cctv_role,
+                        "is_active": True,
+                    }
+                )
+                
+                # Attach user to request
+                request.user = user
+                request.pms_user_info = user_info
+            
+            return view_func(request, *args, **kwargs)
+        
+        # For web pages, use session-based authentication
         if not request.user.is_authenticated:
             return redirect(settings.LOGIN_URL)
         
