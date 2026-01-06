@@ -1513,14 +1513,9 @@ def save_detection(camera, detection, frame_number):
     )
 
 
-@pms_login_required
 def video_feed(request, camera_id):
-    """Video streaming endpoint"""
+    """Video streaming endpoint - Public access"""
     camera = get_object_or_404(Camera, id=camera_id)
-    
-    user = request.user
-    if not user.is_admin() and camera.branch not in get_user_branches(user, request):
-        return JsonResponse({'error': 'Permission denied'}, status=403)
     
     return StreamingHttpResponse(
         generate_frames(camera),
