@@ -592,6 +592,11 @@ def api_cameras(request):
     # For public access, show all cameras
     if request.method == 'GET':
         cameras = Camera.objects.all().select_related('branch')
+        
+        # Get the full URL for video feeds
+        scheme = 'https' if request.is_secure() else 'http'
+        host = request.get_host()
+        
         data = [{
             'id': c.id,
             'camera_id': c.camera_id,
@@ -601,6 +606,8 @@ def api_cameras(request):
             'location': c.location,
             'status': c.status,
             'status_display': c.get_status_display(),
+            'video_feed_url': f'{scheme}://{host}/video-feed/{c.id}/',
+            'rtsp_url': c.rtsp_url if c.rtsp_url else None,
         } for c in cameras]
         return JsonResponse({'cameras': data})
     
