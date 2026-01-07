@@ -54,6 +54,7 @@ CORS_ALLOWED_ORIGINS = [
     # Production domains
     "https://pms.hio.ai.kr",
     "https://cctv.hio.ai.kr",
+    "https://cctv.loopdimension.com",
     "https://kiosk.hio.ai.kr",
 ]
 CORS_ALLOW_CREDENTIALS = True
