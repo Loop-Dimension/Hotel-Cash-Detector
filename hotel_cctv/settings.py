@@ -42,6 +42,15 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# Allow video-feed URLs to be embedded in iframes
+X_FRAME_OPTIONS = 'DENY'  # Default for all pages
+# Exempt video streaming endpoints from X-Frame-Options
+from django.urls import reverse_lazy
+X_FRAME_OPTIONS_EXEMPT = [
+    r'^/video-feed/.*',
+    r'^/video-feed-debug/.*',
+]
+
 # CORS settings
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # Allow all in development
 CORS_ALLOWED_ORIGINS = [

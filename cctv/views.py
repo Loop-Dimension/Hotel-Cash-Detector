@@ -33,6 +33,7 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.clickjacking import xframe_options_exempt
 from django.utils import timezone
 from django.db.models import Count, Q
 from django.conf import settings
@@ -1520,8 +1521,9 @@ def save_detection(camera, detection, frame_number):
     )
 
 
+@xframe_options_exempt
 def video_feed(request, camera_id):
-    """Video streaming endpoint - Public access"""
+    """Video streaming endpoint - Public access, allows iframe embedding"""
     camera = get_object_or_404(Camera, id=camera_id)
     
     return StreamingHttpResponse(
