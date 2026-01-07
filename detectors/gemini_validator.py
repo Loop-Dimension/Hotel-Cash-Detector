@@ -21,92 +21,196 @@ from google.genai import types
 
 
 # ============================================================================
-# GLOBAL GEMINI PROMPT - Edit this to change AI validation behavior
+# GLOBAL UNIFIED PROMPT (SOFT SCORING: CASH != CARD)
 # ============================================================================
-DEFAULT_UNIFIED_PROMPT = """You are an AI security analyst reviewing CCTV footage. Analyze this image for: {event_type}
+DEFAULT_UNIFIED_PROMPT = r"""
+You are an AI Retail Security & Safety Analyst.
 
-YOUR TASK:
-1. Look at the image carefully
-2. Determine what event (if any) is actually happening
-3. Classify into ONE of 3 categories: CASH, VIOLENCE, or FIRE
-4. Respond with what you SEE, not what you're told to find
+You will receive:
+1) A CCTV image OR a short CCTV video clip (5–10 seconds)
+2) An upstream detection_type string: "{event_type}"
+3) Optional detection metadata (YOLO/camera context)
 
-IMPORTANT: The system detects "potential_cash" as early warning, but YOU must classify ANY payment-related activity as "cash".
+Your job is to visually analyze ONLY what is visible in the clip and choose ONE policy:
+- CASH_TRANSACTION
+- THREAT_TO_CASHIER
+- FIRE_ALERT
+- STAFF_CASH_THEFT_SUSPECT
+- NONE
 
-EVENT TYPE DEFINITIONS:
-======================
+=====================================================================
+GLOBAL OUTPUT FORMAT (MANDATORY)
+=====================================================================
 
-CASH / PAYMENT TRANSACTIONS (Classify as: "cash")
-CRITICAL RULE: Must see CASHIER + CUSTOMER + PAYMENT ITEMS
+Return ONLY one JSON object with this exact structure:
 
-VALID if ALL conditions met:
-   1. Person(s) behind counter (cashier area)
-   2. Person(s) in front of counter (customer area)
-   3. PAYMENT ITEMS visible: cash bills, coins, credit/debit cards, mobile payment
-   4. Transaction happening: hands exchanging PAYMENT items, opening cash drawer
-   
-   EXAMPLES - ALL VALID:
-   - Cashier receiving cash bills or coins from customer
-   - Customer handing credit card / debit card / visa / payment card to cashier
-   - Cashier opening cash drawer while handling money
-   - Coins or bills visible on counter during transaction
-   - Customer using mobile payment (phone near terminal)
-   - Hand holding cash/card reaching to cashier
-   - ANY payment with visible cash, coins, or cards
+{{
+  "event_policy": "CASH_TRANSACTION | THREAT_TO_CASHIER | FIRE_ALERT | STAFF_CASH_THEFT_SUSPECT | NONE",
+  "event_type_detected": "cash | violence | fire | staff_cash_theft | none",
+  "is_valid_event": true | false,
+  "decision": "TRUE_POSITIVE | FALSE_POSITIVE | NOT_APPLICABLE",
+  "severity_label": "none | low | medium | high | critical",
+  "confidence": 0.0-1.0,
+  "policy_scores": {{}},
+  "reason_bullets": [
+    "- Factual bullet point",
+    "- Each bullet must describe a concrete visual fact",
+    "- Do not speculate beyond what is visible"
+  ]
+}}
 
-REJECT immediately if:
-   1. Empty counter with no people
-   2. Person walking by without stopping/interacting
-   3. No PAYMENT ITEMS visible (no cash, cards, coins)
-   4. Exchanging NON-PAYMENT items (keys, envelopes, documents, packages, food)
-   5. Just talking or standing (no payment visible)
-   6. Giving room keys, letters, or other hotel items (NOT payment)
+Rules:
+- Output JSON ONLY (no extra text).
+- Fill ALL top-level fields.
+- reason_bullets must be a list of strings starting with "- ".
 
-REMEMBER: ONLY classify as "cash" if you see ACTUAL PAYMENT ITEMS (cash, coins, cards)
 
-VIOLENCE/ALTERCATION (event_type = "violence")
-VALID if you see:
-   - People in fighting poses (fists raised, defensive stance)
-   - Physical aggression (punching, pushing, grabbing)
-   - Person on ground from being attacked
-   - Multiple people surrounding one person aggressively
-   - Clear hostile body language
+=====================================================================
+POLICY 1) CASH_TRANSACTION  (CASH/COINS only; cards should score low)
+=====================================================================
 
-REJECT if:
-   - Normal standing/walking
-   - Friendly handshake or conversation
-   - People just standing close together
-   - Normal interaction
+Goal:
+Detect REAL CASH payment between customer and cashier (banknotes or coins).
+Cards/phones/QR/receipts are NOT cash.
 
-FIRE/SMOKE (event_type = "fire")
-VALID if you see:
-   - Visible flames (orange/red/yellow fire)
-   - Smoke clouds (white, gray, or black)
-   - Unusual bright lighting from fire
-   - Objects actively burning
+MANDATORY CONTEXT (for cash transaction consideration):
+- A person behind the counter (cashier area)
+- A person in front of counter (customer area) or clearly acting as customer
+- Interaction around the payment area
 
-REJECT if:
-   - Normal lighting or sunset colors
-   - Red/orange objects (not fire)
-   - Steam from cooking
-   - Screen reflections
+SOFT SCORING (IMPORTANT):
+Even if there is a payment interaction, classify as CASH_TRANSACTION only if
+the evidence of CASH/COINS is strong enough to pass the score threshold.
+If the exchanged object is card-like or unclear, reduce points so it likely fails threshold.
 
-RESPONSE FORMAT (JSON ONLY):
-{
-    "is_valid": true/false,
-    "event_type_detected": "cash" | "violence" | "fire" | "none",
-    "confidence": 0.0-1.0,
-    "reason": "brief 1-sentence explanation"
-}
+policy_scores for CASH_TRANSACTION MUST be:
 
-IMPORTANT RULES:
-1. is_valid = true ONLY if you SEE the event clearly
-2. event_type_detected = MUST be one of: "cash", "violence", "fire", or "none"
-3. If YOLO says "potential_cash", classify as "cash" if you see ANY payment activity
-4. If YOLO says "violence" but you see payment, set event_type_detected = "cash"
-5. If you see NOTHING suspicious, set is_valid = false, event_type_detected = "none"
-6. Be LENIENT for payment detection - accept early stage transactions
-7. NEVER return "potential_cash" - always use "cash" for any payment activity
+{{
+  "money_likelihood": 0-40,
+  "hand_to_hand": 0-40,
+  "safe_drawer": 0-40,
+  "counting_wallet": 0-10,
+  "gaze_context": 0-10,
+  "card_like_penalty": -40-0,
+  "total_score": 0-100
+}}
+
+Scoring guidance:
+- money_likelihood (0–40):
+  - 35–40: clearly visible cash bills/coins (shape, texture, coin shine, banknote edges)
+  - 20–34: partially occluded or brief but still plausible cash/coins
+  - 5–19: ambiguous rectangular item (could be card or folded bill)
+  - 0–4: clearly NOT cash (card/phone/receipt/paper)
+
+- hand_to_hand (0–40):
+  - 30–40: hand-to-hand exchange with visible cash/coins
+  - 10–25: exchange motion occurs, but cash/coins not clearly visible
+  - 0–5: exchanged object looks card-like/phone-like/receipt-like
+
+- counting_wallet (0–10):
+  - 8–10: visible cash counting or visible bills pulled out
+  - 1–4: wallet motion but cash not visible
+  - 0: no wallet/cash cues
+
+- safe_drawer (0–40):
+  - 30–40: clear register/cash storage interaction consistent with payment
+  - 10–25: hand moves toward register area but drawer not visible
+  - 0–5: no register-area interaction
+
+- gaze_context (0–10):
+  - 8–10: both focus on payment/POS area with transaction posture
+  - 1–4: weak context
+  - 0: unrelated
+
+- card_like_penalty (-40 to 0):
+  Apply negative points if evidence suggests CARD/PHONE/QR/RECEIPT:
+  - -30 to -40: clearly card-like object / tapping / phone / QR visible
+  - -10 to -25: strongly rigid rectangular object but not fully clear
+  - 0: no card-like evidence
+
+Total score:
+- total_score = money_likelihood + hand_to_hand + safe_drawer + counting_wallet + gaze_context + card_like_penalty
+- Clamp total_score to 0–100
+
+Decision:
+- If total_score >= 60 and cash/coin evidence is consistent -> CASH_TRANSACTION (severity_label="low")
+- Otherwise -> NONE (even if it looks like a payment but appears to be card/phone)
+
+=====================================================================
+POLICY 2) THREAT_TO_CASHIER
+=====================================================================
+
+Goal: threats/violence toward cashier/staff.
+
+Valid cues:
+- aggressive reach across counter
+- punching/pushing/grabbing/throwing objects
+- weapon visible
+
+policy_scores:
+{{
+  "mandatory_score": 0,
+  "supporting_score": 0,
+  "negative_score": 0,
+  "total_score": 0,
+  "threat_level": 0-4,
+  "threat_label": "CLEAR | TENSE | INTIMIDATION | PHYSICAL | WEAPON"
+}}
+
+Severity mapping:
+CLEAR->none, TENSE->low, INTIMIDATION->medium, PHYSICAL->high, WEAPON->critical
+
+=====================================================================
+POLICY 3) FIRE_ALERT
+=====================================================================
+
+Valid if you SEE:
+- flames or smoke (not reflections/steam)
+
+policy_scores:
+{{
+  "fire_confidence": 0.0-1.0,
+  "smoke_confidence": 0.0-1.0
+}}
+
+Severity guideline:
+none/low/medium/high/critical based on visible scale and risk.
+
+=====================================================================
+POLICY 4) STAFF_CASH_THEFT_SUSPECT
+=====================================================================
+
+Goal: suspicious cash removal by staff without valid customer transaction.
+
+If metadata has has_cash_box_roi=true and cash_box_bboxes exist:
+- cash_box access can be used as strong hint.
+Otherwise use behavior:
+- cash-like object appears in staff hand
+- moved toward personal area (pocket/bag/inside clothes)
+- nervous look-around / hiding
+
+policy_scores:
+{{
+  "suspicion_level": 0-3,
+  "suspicion_label": "none | low | medium | high",
+  "cash_box_access": true/false,
+  "looks_around": true/false,
+  "moves_cash_to_personal_area": true/false,
+  "customer_present": true/false,
+  "paperwork_or_reconciliation": true/false
+}}
+
+Severity guideline:
+none/low/medium/high (critical only if extremely obvious and severe)
+
+FINAL POLICY PRIORITY:
+1) FIRE_ALERT
+2) THREAT_TO_CASHIER
+3) CASH_TRANSACTION
+4) STAFF_CASH_THEFT_SUSPECT
+5) NONE
+
+Always justify using reason_bullets with factual observations.
 """
 # ============================================================================
 
@@ -358,7 +462,7 @@ Respond in JSON format ONLY:
                     temperature=0.1,
                     top_k=1,
                     top_p=1.0,
-                    max_output_tokens=500,
+                    max_output_tokens=1500,
                     response_mime_type="application/json"
                 )
             )
@@ -376,18 +480,99 @@ Respond in JSON format ONLY:
                     text = text[:-3]
                 text = text.strip()
                 
-                return json.loads(text)
+                result = json.loads(text)
+                print(f"[GeminiValidator] API response: {json.dumps(result, indent=2)[:500]}")
+                return result
             else:
                 return {"error": "No response from Gemini"}
                 
         except json.JSONDecodeError as e:
             print(f"[GeminiValidator] JSON parse error: {e}")
-            print(f"[GeminiValidator] Response text: {response.text[:200] if response else 'None'}")
+            print(f"[GeminiValidator] Response text: {response.text[:500] if response else 'None'}")
             return {"error": "Invalid JSON response"}
         except Exception as e:
             print(f"[GeminiValidator] API error: {e}")
             return {"error": str(e)}
     
+    def _parse_new_response_format(self, result: dict, original_event_type: str) -> Tuple[bool, float, str, str]:
+        """
+        Parse the new Gemini response format (soft scoring with policies).
+        
+        New format fields:
+        - event_policy: CASH_TRANSACTION | THREAT_TO_CASHIER | FIRE_ALERT | STAFF_CASH_THEFT_SUSPECT | NONE
+        - event_type_detected: cash | violence | fire | staff_cash_theft | none
+        - is_valid_event: true/false
+        - decision: TRUE_POSITIVE | FALSE_POSITIVE | NOT_APPLICABLE
+        - severity_label: none | low | medium | high | critical
+        - confidence: 0.0-1.0
+        - policy_scores: dict with scoring details
+        - reason_bullets: list of strings
+        
+        Returns:
+            Tuple of (is_valid, confidence, reason, corrected_event_type)
+        """
+        # Check for new format fields
+        event_policy = result.get('event_policy', '')
+        is_valid_event = result.get('is_valid_event')
+        event_type_detected = result.get('event_type_detected', 'none')
+        confidence = result.get('confidence', 0.0)
+        decision = result.get('decision', '')
+        severity_label = result.get('severity_label', 'none')
+        policy_scores = result.get('policy_scores', {})
+        reason_bullets = result.get('reason_bullets', [])
+        
+        # Also support legacy format for backwards compatibility
+        legacy_is_valid = result.get('is_valid')
+        legacy_reason = result.get('reason', '')
+        
+        # Determine is_valid - prefer new format
+        if is_valid_event is not None:
+            is_valid = is_valid_event
+        elif legacy_is_valid is not None:
+            is_valid = legacy_is_valid
+        else:
+            # Infer from event_policy
+            is_valid = event_policy not in ['NONE', '', None]
+        
+        # Build reason string from bullets or use legacy
+        if reason_bullets and isinstance(reason_bullets, list):
+            reason = ' '.join([b.strip() for b in reason_bullets])
+        elif legacy_reason:
+            reason = legacy_reason
+        else:
+            reason = f"Policy: {event_policy}, Decision: {decision}, Severity: {severity_label}"
+        
+        # Add policy scores to reason if available
+        if policy_scores and isinstance(policy_scores, dict):
+            total_score = policy_scores.get('total_score', 'N/A')
+            reason = f"[Score: {total_score}] {reason}"
+        
+        # Map event_policy to event_type_detected if not set
+        if not event_type_detected or event_type_detected == 'none':
+            policy_to_type = {
+                'CASH_TRANSACTION': 'cash',
+                'THREAT_TO_CASHIER': 'violence',
+                'FIRE_ALERT': 'fire',
+                'STAFF_CASH_THEFT_SUSPECT': 'staff_cash_theft',
+                'NONE': 'none'
+            }
+            event_type_detected = policy_to_type.get(event_policy, 'none')
+        
+        # Determine corrected event type
+        corrected_event_type = original_event_type
+        
+        if is_valid and event_type_detected != 'none' and event_type_detected != original_event_type:
+            # Handle violence -> cash correction (avoid duplicates)
+            if original_event_type == "violence" and event_type_detected == "cash":
+                is_valid = False
+                corrected_event_type = original_event_type
+                reason = f"[BLOCKED] Violence->Cash correction blocked. {reason}"
+            else:
+                corrected_event_type = event_type_detected
+                reason = f"[CORRECTED: {original_event_type}→{corrected_event_type}] {reason}"
+        
+        return is_valid, confidence, reason, corrected_event_type
+
     def validate_event(
         self, frame, event_type: str, save_image: bool = True
     ) -> Tuple[bool, float, str, str]:
@@ -443,38 +628,8 @@ Respond in JSON format ONLY:
                 print(f"[GeminiValidator] API error, allowing event: {result['error']}")
                 return True, 1.0, f"API error: {result['error']}", event_type
             
-            # Get Gemini's validation result
-            is_valid = result.get('is_valid', False)
-            confidence = result.get('confidence', 0.0)
-            reason = result.get('reason', 'No reason provided')
-            
-            # Check if Gemini detected a DIFFERENT event type (correction)
-            detected_type = result.get('event_type_detected', event_type)
-            corrected_event_type = event_type  # Default to original
-            
-            # === 핵심 정책 변경 ===
-            if is_valid and detected_type != 'none' and detected_type != event_type:
-                # 규칙 1: violence → cash 로 교정되는 경우는 무시 (중복 cash 방지)
-                if event_type == "violence" and detected_type == "cash":
-                    is_valid = False
-                    corrected_event_type = event_type  # 여전히 violence
-                    reason = (
-                        "Gemini classified this VIOLENCE event as CASH, "
-                        "but to avoid duplicate CASH events from nearby frames, "
-                        "this VIOLENCE event is ignored. "
-                        + reason
-                    )
-                else:
-                    # 그 외 타입 변경은 기존처럼 교정 허용
-                    corrected_event_type = detected_type
-                    reason = f"Corrected: {event_type.upper()} → {corrected_event_type.upper()}. {reason}"
-            elif is_valid and detected_type == event_type:
-                # Gemini confirmed the original detection
-                pass  # corrected_event_type stays as event_type
-            elif not is_valid:
-                # Gemini rejected the detection
-                # Keep original event_type but mark as invalid
-                pass
+            # Parse response using new format parser (handles both old and new formats)
+            is_valid, confidence, reason, corrected_event_type = self._parse_new_response_format(result, event_type)
             
             # Calculate processing time
             processing_time_ms = int((time.time() - start_time) * 1000)
@@ -503,9 +658,9 @@ Respond in JSON format ONLY:
                 print(f"[GeminiValidator] ⚠️ Skipping database log - no camera_id set!")
             
             print(
-                f"[GeminiValidator] {event_type}: valid={is_valid}, "
+                f"[GeminiValidator] IMAGE {event_type}: valid={is_valid}, "
                 f"conf={confidence:.2f}, corrected={corrected_event_type}, "
-                f"reason={reason[:100]}"
+                f"reason={reason[:150]}"
             )
             
             return is_valid, confidence, reason, corrected_event_type
@@ -540,11 +695,11 @@ Respond in JSON format ONLY:
             
             # Get appropriate prompt
             prompt = self.get_prompt(event_type)
-            prompt = f"{prompt}\n\nAnalyze this 3-second video clip showing the detected event. Consider motion, behavior, and context over time."
+            prompt = f"{prompt}\n\nAnalyze this short video clip (5-10 seconds) showing the detected event. Consider motion, behavior, and context over time."
             
             # Call Gemini API with video
             result = self._call_gemini_api_video(video_bytes, prompt)
-            response_raw = str(result)
+            response_raw = json.dumps(result) if isinstance(result, dict) else str(result)
             
             # Parse response
             if 'error' in result:
@@ -556,18 +711,8 @@ Respond in JSON format ONLY:
                 print(f"[GeminiValidator] Empty response from Gemini API")
                 return True, 1.0, "Empty API response", event_type
             
-            # Check for unified response format (support both is_valid and is_detected)
-            is_valid = result.get('is_valid', result.get('is_detected', False))
-            confidence = result.get('confidence', 0.0)
-            reason = result.get('reason', 'No reason provided')
-            
-            # Check if Gemini detected a DIFFERENT event type (correction)
-            detected_type = result.get('event_type_detected', event_type)
-            corrected_event_type = event_type  # Default to original
-            
-            if is_valid and detected_type != 'none' and detected_type != event_type:
-                corrected_event_type = detected_type
-                reason = f"Corrected: {event_type.upper()} → {corrected_event_type.upper()}. {reason}"
+            # Parse response using new format parser (handles both old and new formats)
+            is_valid, confidence, reason, corrected_event_type = self._parse_new_response_format(result, event_type)
             
             # Calculate processing time
             processing_time_ms = int((time.time() - start_time) * 1000)
@@ -602,7 +747,7 @@ Respond in JSON format ONLY:
                     validation_type='video', video_path=relative_video_path
                 )
             
-            print(f"[GeminiValidator] VIDEO {event_type}: valid={is_valid}, conf={confidence:.2f}, corrected={corrected_event_type}, reason={reason[:100]}")
+            print(f"[GeminiValidator] VIDEO {event_type}: valid={is_valid}, conf={confidence:.2f}, corrected={corrected_event_type}, reason={reason[:150]}")
             
             return is_valid, confidence, reason, corrected_event_type
             
@@ -642,7 +787,7 @@ Respond in JSON format ONLY:
                     temperature=0.1,
                     top_k=1,
                     top_p=1.0,
-                    max_output_tokens=500,
+                    max_output_tokens=1500,
                     response_mime_type="application/json"
                 )
             )
