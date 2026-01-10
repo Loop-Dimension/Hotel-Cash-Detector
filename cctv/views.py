@@ -465,6 +465,7 @@ def api_branches(request):
         return JsonResponse({'branches': data})
     
     elif request.method == 'POST':
+        user = request.user
         if not user.is_admin():
             return JsonResponse({'error': 'Permission denied'}, status=403)
         
@@ -613,6 +614,9 @@ def api_cameras(request):
         return JsonResponse({'cameras': data})
     
     elif request.method == 'POST':
+        user = request.user
+        user_branches = get_user_branches(user, request)
+        
         data = json.loads(request.body)
         
         # Get branch
@@ -2147,7 +2151,7 @@ def api_user_detail(request, user_id):
     
     # Check permissions: admins can manage all, managers can manage users in their branches
     if not current_user.is_admin():
-        user_branches = get_user_branches(current_user)
+        user_branches = get_user_branches(current_user, request)
         target_branches = target_user.managed_branches.all()
         # Check if any of target user's branches overlap with current user's branches
         if not any(branch in user_branches for branch in target_branches):
