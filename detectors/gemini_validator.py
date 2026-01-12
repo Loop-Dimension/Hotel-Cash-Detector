@@ -227,7 +227,7 @@ class GeminiValidator:
     # Best for: high volume, cost-efficient image validation
     # Pricing: FREE (standard) | $0.10/1M input + $0.40/1M output (paid)
     # https://ai.google.dev/gemini-api/docs/pricing
-    MODEL_NAME = "gemini-2.5-flash-lite"
+    MODEL_NAME = "gemini-2.5-flash"
     
     # Legacy prompts (for backward compatibility)
     PROMPTS = {
