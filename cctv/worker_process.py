@@ -24,6 +24,7 @@ from cctv.utils import (
     create_rtsp_capture,
     save_clip,
     save_validation_clip,
+    upload_validation_clip_to_s3,
     save_event,
     validate_detection,
     DEFAULT_EVENT_COOLDOWN,
@@ -431,15 +432,33 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
                                     
                                     # Choose validation method based on environment variable
                                     if use_video_validation:
-                                        # VIDEO MODE: Create 3-second validation video
-                                        validation_video_path = _save_gemini_validation_clip(
+                                        # VIDEO MODE: Create 3-second validation video (local temp path)
+                                        local_video_path = save_validation_clip(
                                             gemini_buffer[-45:] if len(gemini_buffer) >= 45 else gemini_buffer,
                                             camera, event_type
                                         )
                                         
-                                        if validation_video_path:
-                                            gemini_validated, gemini_confidence, gemini_reason, corrected_event_type = validator.validate_event_video(validation_video_path, event_type)
+                                        if local_video_path:
+                                            # Validate with Gemini (reads local file)
+                                            gemini_validated, gemini_confidence, gemini_reason, corrected_event_type = validator.validate_event_video(local_video_path, event_type)
                                             print(f"[Worker-{camera_id}] Gemini VIDEO validation: {event_type} = {gemini_validated}")
+                                            
+                                            # After Gemini reads it, upload to S3 and log to database
+                                            final_video_url = upload_validation_clip_to_s3(local_video_path)
+                                            if hasattr(validator, 'last_validation_log') and validator.last_validation_log:
+                                                log_data = validator.last_validation_log
+                                                from cctv.utils import _log_video_validation
+                                                _log_video_validation(
+                                                    camera_id=camera.id,
+                                                    event_type=event_type,
+                                                    is_valid=gemini_validated,
+                                                    confidence=gemini_confidence,
+                                                    reason=gemini_reason,
+                                                    prompt=log_data.get('prompt', ''),
+                                                    response_raw=log_data.get('response_raw', ''),
+                                                    video_url=final_video_url,
+                                                    processing_time_ms=log_data.get('processing_time_ms', 0)
+                                                )
                                         else:
                                             # Fallback to image if video creation failed
                                             gemini_validated, gemini_confidence, gemini_reason, corrected_event_type = validator.validate_event(frame, event_type)

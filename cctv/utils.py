@@ -10,6 +10,8 @@ import json
 import subprocess
 import threading
 import uuid
+import tempfile
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple, List, Dict, Any
@@ -119,16 +121,17 @@ def save_clip(
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     unique_id = uuid.uuid4().hex[:6]
     
-    # Always use local temp directory for ffmpeg processing
-    temp_dir = Path(settings.MEDIA_ROOT) / 'temp'
+    # Use system temp directory for ffmpeg processing (web server has permission here)
+    temp_dir = Path(tempfile.gettempdir()) / 'hotel_cctv_clips'
     temp_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create local dirs (needed even for S3 since ffmpeg needs local files)
-    clip_dir = Path(settings.MEDIA_ROOT) / 'clips'
-    clip_dir.mkdir(parents=True, exist_ok=True)
-    
-    thumb_dir = Path(settings.MEDIA_ROOT) / 'thumbnails'
-    thumb_dir.mkdir(parents=True, exist_ok=True)
+    # For local storage mode, create media directories if needed
+    if not is_s3_enabled():
+        clip_dir = Path(settings.MEDIA_ROOT) / 'clips'
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        
+        thumb_dir = Path(settings.MEDIA_ROOT) / 'thumbnails'
+        thumb_dir.mkdir(parents=True, exist_ok=True)
     
     temp_filename = f"{camera.camera_id}_{event_type}_{timestamp}_{unique_id}_temp.avi"
     final_filename = f"{camera.camera_id}_{event_type}_{timestamp}.mp4"
@@ -286,9 +289,12 @@ def save_validation_clip(
         camera: Camera model instance
         event_type: Type of event
         duration_name: Name to include in filename (e.g., "3s")
+        upload_to_s3: If True and S3 is enabled, upload and return S3 URL.
+                      If False, return local path (for Gemini to read first).
         
     Returns:
-        Path/URL to saved video file or None on failure
+        Tuple of (local_path, s3_url_or_none) - local_path for reading, s3_url after upload
+        Or single string path for backward compatibility when upload_to_s3=True
     """
     if not frames or len(frames) == 0:
         return None
@@ -296,18 +302,19 @@ def save_validation_clip(
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     unique_id = uuid.uuid4().hex[:6]
     
-    # Use temp directory for processing
-    temp_dir = Path(settings.MEDIA_ROOT) / 'temp'
+    # Use system temp directory for processing (web server has permission here)
+    temp_dir = Path(tempfile.gettempdir()) / 'hotel_cctv_validation'
     temp_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create validation_clips directory for local storage
+    # For local storage mode, create validation_clips directory if needed
     validation_dir = Path(settings.MEDIA_ROOT) / 'validation_clips'
-    validation_dir.mkdir(parents=True, exist_ok=True)
+    if not is_s3_enabled():
+        validation_dir.mkdir(parents=True, exist_ok=True)
     
     filename = f"{camera.camera_id}_{event_type}_{timestamp}_{unique_id}.mp4"
     temp_avi_filename = f"temp_{unique_id}.avi"
     temp_avi_path = temp_dir / temp_avi_filename
-    final_path = temp_dir / filename  # Use temp_dir for S3 workflow
+    final_path = temp_dir / filename  # Use temp_dir for processing
     
     # Create video
     h, w = frames[0].shape[:2]
@@ -340,31 +347,57 @@ def save_validation_clip(
             safe_delete_file(temp_avi_path)
             return None
     
-    # Upload to S3 or return local path
+    # Return local path - let caller decide when to upload to S3
+    # This allows Gemini to read the file before we delete/upload it
+    return str(final_path)
+
+
+def upload_validation_clip_to_s3(local_path: str) -> Optional[str]:
+    """
+    Upload a validation clip to S3 and clean up local file.
+    
+    Args:
+        local_path: Local path to the validation clip
+        
+    Returns:
+        S3 URL or local /media/ path if S3 disabled
+    """
+    if not local_path:
+        return None
+        
+    local_path = Path(local_path)
+    if not local_path.exists():
+        print(f"[Validation] File not found for S3 upload: {local_path}")
+        return None
+    
+    filename = local_path.name
+    
     if is_s3_enabled():
         try:
             storage_path = f"validation_clips/{filename}"
-            url = upload_file_to_storage(str(final_path), storage_path)
+            url = upload_file_to_storage(str(local_path), storage_path)
             
             # Clean up local temp file
-            safe_delete_file(final_path)
+            safe_delete_file(local_path)
             
             print(f"[Validation] Uploaded to S3: {url}")
-            return url  # Return full S3 URL for Gemini to access
+            return url  # Return full S3 URL
             
         except Exception as e:
             print(f"[Validation] S3 upload failed: {e}")
             import traceback
             traceback.print_exc()
-            safe_delete_file(final_path)
+            safe_delete_file(local_path)
             return None
     else:
-        # Move to validation_clips directory
-        local_path = validation_dir / filename
-        if final_path != local_path:
-            import shutil
-            shutil.move(str(final_path), str(local_path))
-        return str(local_path)
+        # Move to validation_clips directory for local storage
+        validation_dir = Path(settings.MEDIA_ROOT) / 'validation_clips'
+        validation_dir.mkdir(parents=True, exist_ok=True)
+        
+        local_media_path = validation_dir / filename
+        if local_path != local_media_path:
+            shutil.move(str(local_path), str(local_media_path))
+        return f"/media/validation_clips/{filename}"
 
 
 # ============================================================================
@@ -555,11 +588,32 @@ def validate_detection(
     
     try:
         if use_video and validation_frames:
-            # Create validation video
-            video_path = save_validation_clip(validation_frames, camera, event_type)
-            if video_path:
-                result = validator.validate_event_video(video_path, event_type)
-                print(f"[Detection] Gemini VIDEO validation: {event_type} = {result[0]}")
+            # Create validation video (returns local temp path)
+            local_video_path = save_validation_clip(validation_frames, camera, event_type)
+            if local_video_path:
+                # Validate with Gemini (reads local file)
+                result = validator.validate_event_video(local_video_path, event_type)
+                is_valid, confidence, reason, corrected_event_type = result
+                
+                # After Gemini reads it, upload to S3 and get final URL for database
+                final_url = upload_validation_clip_to_s3(local_video_path)
+                
+                # Log to database with correct S3 URL
+                if hasattr(validator, 'last_validation_log') and validator.last_validation_log:
+                    log_data = validator.last_validation_log
+                    _log_video_validation(
+                        camera_id=camera.id,
+                        event_type=event_type,
+                        is_valid=is_valid,
+                        confidence=confidence,
+                        reason=reason,
+                        prompt=log_data.get('prompt', ''),
+                        response_raw=log_data.get('response_raw', ''),
+                        video_url=final_url,  # S3 URL or /media/ path
+                        processing_time_ms=log_data.get('processing_time_ms', 0)
+                    )
+                
+                print(f"[Detection] Gemini VIDEO validation: {event_type} = {is_valid}, video_url={final_url}")
                 return result
             # Fallback to image
             use_video = False
@@ -574,6 +628,42 @@ def validate_detection(
     except Exception as e:
         print(f"[Detection] Gemini validation error: {e}")
         return True, 1.0, f"Validation error: {e}", event_type
+
+
+def _log_video_validation(
+    camera_id: int,
+    event_type: str,
+    is_valid: bool,
+    confidence: float,
+    reason: str,
+    prompt: str,
+    response_raw: str,
+    video_url: str,
+    processing_time_ms: int
+):
+    """Log video validation result to database with correct S3 URL."""
+    try:
+        from cctv.models import GeminiLog, Camera
+        
+        camera = Camera.objects.get(id=camera_id)
+        log = GeminiLog.objects.create(
+            camera=camera,
+            event_type=event_type,
+            validation_type='video',
+            is_validated=is_valid,
+            confidence=confidence,
+            reason=reason,
+            prompt_used=prompt,
+            response_raw=response_raw,
+            image_path='',
+            video_path=video_url or '',  # S3 URL or /media/ path
+            processing_time_ms=processing_time_ms
+        )
+        print(f"[Detection] ✅ Logged validation ID {log.id}, video_path={video_url}")
+    except Exception as e:
+        print(f"[Detection] Failed to log validation: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ============================================================================

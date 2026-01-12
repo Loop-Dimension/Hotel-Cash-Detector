@@ -745,27 +745,14 @@ Respond in JSON format ONLY:
                 'reason': reason,
                 'prompt': prompt,
                 'response': result,
-                'video_path': video_path,
+                'response_raw': response_raw,
+                'video_path': video_path,  # Local temp path - will be updated by caller
                 'processing_time_ms': processing_time_ms
             }
             
-            # Log to database (using video path instead of image path)
-            if self.camera_id:
-                # Convert absolute path to relative path for storage
-                relative_video_path = video_path
-                try:
-                    from django.conf import settings
-                    media_root = str(settings.MEDIA_ROOT)
-                    if video_path.startswith(media_root):
-                        relative_video_path = video_path[len(media_root):].lstrip('/').lstrip('\\')
-                except Exception:
-                    pass
-                
-                self._log_validation(
-                    self.camera_id, event_type, is_valid, confidence, 
-                    reason, prompt, response_raw, None, processing_time_ms,
-                    validation_type='video', video_path=relative_video_path
-                )
+            # NOTE: Database logging is now handled by the caller (validate_detection in utils.py)
+            # after it uploads the video to S3 and has the correct URL.
+            # This allows us to store S3 URLs instead of temp file paths.
             
             print(f"[GeminiValidator] VIDEO {event_type}: valid={is_valid}, conf={confidence:.2f}, corrected={corrected_event_type}, reason={reason[:150]}")
             
