@@ -3816,7 +3816,7 @@ def api_gemini_logs(request, camera_id):
         'reason': log.reason,
         'prompt_used': log.prompt_used[:200] + '...' if len(log.prompt_used) > 200 else log.prompt_used,
         'response_raw': log.response_raw,
-        'image_path': f'/media/{log.image_path}' if log.image_path else None,
+        'image_path': log.image_path if (log.image_path and (log.image_path.startswith('http') or log.image_path.startswith('/media/'))) else (f'/media/{log.image_path}' if log.image_path else None),
         'processing_time_ms': log.processing_time_ms,
         'created_at': log.created_at.isoformat(),
     } for log in logs]
@@ -3850,7 +3850,7 @@ def api_gemini_log_detail(request, log_id):
         'reason': log.reason,
         'prompt_used': log.prompt_used,
         'response_raw': log.response_raw,
-        'image_path': f'/media/{log.image_path}' if log.image_path else None,
+        'image_path': log.image_path if (log.image_path and (log.image_path.startswith('http') or log.image_path.startswith('/media/'))) else (f'/media/{log.image_path}' if log.image_path else None),
         'processing_time_ms': log.processing_time_ms,
         'created_at': log.created_at.isoformat(),
     })
@@ -4052,9 +4052,15 @@ def api_gemini_all_logs(request):
     avg_time = all_logs.aggregate(avg=Avg('processing_time_ms'))['avg'] or 0
     
     def get_video_url(video_path):
-        """Convert video path to URL, handling both absolute and relative paths"""
+        """Convert video path to URL, handling both absolute paths and S3 URLs"""
         if not video_path:
             return None
+        # If it's already a full URL (S3), return as-is
+        if video_path.startswith('http'):
+            return video_path
+        # If it already starts with /media/, return as-is
+        if video_path.startswith('/media/'):
+            return video_path
         # If it's an absolute path, extract relative part
         if video_path.startswith('/var/www/') or video_path.startswith('C:') or video_path.startswith('D:'):
             # Extract just the filename or relative path from validation_clips/
@@ -4074,7 +4080,7 @@ def api_gemini_all_logs(request):
             'confidence': log.confidence,
             'reason': log.reason or 'No reason provided',
             'processing_time_ms': log.processing_time_ms,
-            'image_path': f'/media/{log.image_path}' if log.image_path else None,
+            'image_path': log.image_path if (log.image_path and (log.image_path.startswith('http') or log.image_path.startswith('/media/'))) else (f'/media/{log.image_path}' if log.image_path else None),
             'video_path': get_video_url(log.video_path),
             'validation_type': log.validation_type or 'image',
             'created_at': log.created_at.isoformat(),

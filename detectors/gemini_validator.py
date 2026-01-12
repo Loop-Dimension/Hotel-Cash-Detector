@@ -382,8 +382,8 @@ Respond in JSON format ONLY:
                     
                     # Upload directly to S3
                     url = save_image_to_storage(frame, storage_path, jpeg_quality=85)
-                    print(f"[GeminiValidator] Uploaded validation image to S3: {storage_path}")
-                    return storage_path  # Return relative path for database
+                    print(f"[GeminiValidator] Uploaded validation image to S3: {url}")
+                    return url  # Return full S3 URL
                     
                 except Exception as e:
                     print(f"[GeminiValidator] S3 upload failed, falling back to local: {e}")
@@ -395,7 +395,7 @@ Respond in JSON format ONLY:
             
             filepath = log_dir / filename
             cv2.imwrite(str(filepath), frame)
-            return storage_path  # Return relative path
+            return f'/media/{storage_path}'  # Return /media/ path for local storage
             
         except Exception as e:
             print(f"[GeminiValidator] Failed to save validation image: {e}")
