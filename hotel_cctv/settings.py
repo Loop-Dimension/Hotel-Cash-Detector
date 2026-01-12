@@ -84,6 +84,7 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'cctv.context_processors.language_context',
                 'cctv.context_processors.app_context',
+                'cctv.context_processors.server_time_context',
             ],
         },
     },

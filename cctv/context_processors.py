@@ -2,6 +2,7 @@
 Context processors for Hotel CCTV Monitoring System
 """
 from django.conf import settings
+from django.utils import timezone
 from .translations import get_translation
 
 
@@ -25,6 +26,16 @@ def language_context(request):
             {'code': 'ko', 'name': '한국어'},
             {'code': 'en', 'name': 'English'},
         ],
+    }
+
+
+def server_time_context(request):
+    """Add current server time to template context"""
+    now = timezone.now()
+    return {
+        'server_time': now,
+        'server_time_str': now.strftime('%Y-%m-%d %H:%M:%S %Z'),
+        'server_timezone': str(timezone.get_current_timezone()),
     }
 
 

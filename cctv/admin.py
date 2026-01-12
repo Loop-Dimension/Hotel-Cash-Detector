@@ -3,7 +3,16 @@ Django Admin configuration for CCTV app
 """
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Region, Branch, Camera, Event, VideoRecord, BranchAccount, GeminiPrompts
+from django.utils import timezone
+from django.utils.html import format_html
+from .models import User, Region, Branch, Camera, Event, VideoRecord, BranchAccount, GeminiPrompts, GeminiLog
+
+
+# Add server time to admin header
+admin.site.site_header = format_html(
+    'Hotel CCTV Admin <span style="font-size: 12px; margin-left: 20px;">Server Time: {}</span>',
+    timezone.now().strftime('%Y-%m-%d %H:%M:%S %Z')
+)
 
 
 @admin.register(User)
@@ -72,7 +81,7 @@ class EventAdmin(admin.ModelAdmin):
     search_fields = ['camera__camera_id', 'branch__name']
     date_hierarchy = 'created_at'
     list_editable = ['status']
-    readonly_fields = ['confidence', 'frame_number', 'bbox_x1', 'bbox_y1', 'bbox_x2', 'bbox_y2', 'created_at']
+    readonly_fields = ['confidence', 'frame_number', 'bbox_x1', 'bbox_y1', 'bbox_x2', 'bbox_y2', 'created_at', 'clip_url', 'thumbnail_url']
     
     fieldsets = (
         ('Event Info', {
@@ -89,8 +98,7 @@ class EventAdmin(admin.ModelAdmin):
             'fields': ('reviewed_by', 'reviewed_at', 'notes')
         }),
         ('Files', {
-            'fields': ('clip_path', 'thumbnail_path'),
-            'classes': ('collapse',)
+            'fields': ('clip_path', 'clip_url', 'thumbnail_path', 'thumbnail_url'),
         }),
     )
     
@@ -98,6 +106,22 @@ class EventAdmin(admin.ModelAdmin):
         return f"{obj.confidence * 100:.1f}%"
     confidence_percent.short_description = 'Confidence'
     confidence_percent.admin_order_field = 'confidence'
+    
+    def clip_url(self, obj):
+        if obj.clip_path:
+            if obj.clip_path.startswith('http'):
+                return format_html('<a href="{}" target="_blank">{}</a>', obj.clip_path, obj.clip_path)
+            return obj.clip_path
+        return '-'
+    clip_url.short_description = 'Clip URL (clickable)'
+    
+    def thumbnail_url(self, obj):
+        if obj.thumbnail_path:
+            if obj.thumbnail_path.startswith('http'):
+                return format_html('<a href="{}" target="_blank"><img src="{}" width="100" /> View</a>', obj.thumbnail_path, obj.thumbnail_path)
+            return obj.thumbnail_path
+        return '-'
+    thumbnail_url.short_description = 'Thumbnail Preview'
 
 
 @admin.register(VideoRecord)
@@ -136,5 +160,68 @@ class GeminiPromptsAdmin(admin.ModelAdmin):
     
     def has_delete_permission(self, request, obj=None):
         # Don't allow deletion
+        return False
+
+
+@admin.register(GeminiLog)
+class GeminiLogAdmin(admin.ModelAdmin):
+    list_display = ['id', 'camera', 'event_type', 'validation_type', 'is_validated', 'confidence_percent', 'processing_time', 'created_at']
+    list_filter = ['event_type', 'validation_type', 'is_validated', 'camera', 'created_at']
+    search_fields = ['camera__camera_id', 'camera__name', 'reason']
+    date_hierarchy = 'created_at'
+    readonly_fields = ['camera', 'event_type', 'validation_type', 'is_validated', 'confidence', 'reason', 
+                       'prompt_used', 'response_raw', 'image_url', 'video_url', 'processing_time_ms', 'created_at']
+    
+    fieldsets = (
+        ('Validation Info', {
+            'fields': ('camera', 'event_type', 'validation_type', 'is_validated', 'confidence', 'processing_time_ms', 'created_at')
+        }),
+        ('Result', {
+            'fields': ('reason',),
+        }),
+        ('Media', {
+            'fields': ('image_path', 'image_url', 'video_path', 'video_url'),
+        }),
+        ('Prompt & Response', {
+            'fields': ('prompt_used', 'response_raw'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def confidence_percent(self, obj):
+        return f"{obj.confidence * 100:.1f}%"
+    confidence_percent.short_description = 'Confidence'
+    confidence_percent.admin_order_field = 'confidence'
+    
+    def processing_time(self, obj):
+        return f"{obj.processing_time_ms}ms"
+    processing_time.short_description = 'Time'
+    processing_time.admin_order_field = 'processing_time_ms'
+    
+    def image_url(self, obj):
+        if obj.image_path:
+            if obj.image_path.startswith('http'):
+                return format_html('<a href="{}" target="_blank"><img src="{}" width="200" /></a>', obj.image_path, obj.image_path)
+            # Check if it's a relative path - construct S3 URL
+            from django.conf import settings
+            if getattr(settings, 'USE_S3', False):
+                url = f"https://{settings.AWS_STORAGE_BUCKET_NAME}.s3.{settings.AWS_S3_REGION_NAME}.amazonaws.com/{obj.image_path}"
+                return format_html('<a href="{}" target="_blank"><img src="{}" width="200" /></a>', url, url)
+            return obj.image_path
+        return '-'
+    image_url.short_description = 'Image Preview'
+    
+    def video_url(self, obj):
+        if obj.video_path:
+            if obj.video_path.startswith('http'):
+                return format_html('<a href="{}" target="_blank">View Video</a>', obj.video_path)
+            return obj.video_path
+        return '-'
+    video_url.short_description = 'Video URL'
+    
+    def has_add_permission(self, request):
+        return False
+    
+    def has_change_permission(self, request, obj=None):
         return False
 

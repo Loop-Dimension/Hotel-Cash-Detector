@@ -242,8 +242,8 @@ def save_clip(
             print(f"[Clip] Uploaded to S3: {clip_url}")
             print(f"[Clip] Thumbnail S3: {thumb_url}")
             
-            # Return relative paths for database storage
-            return f'/media/{clip_storage_path}', f'/media/{thumb_storage_path}'
+            # Return full S3 URLs for database storage
+            return clip_url, thumb_url
             
         except Exception as e:
             print(f"[Clip] S3 upload failed: {e}")
