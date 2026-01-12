@@ -2,6 +2,10 @@
 Django
 django-cors-headers
 
+# AWS S3 Storage
+boto3
+django-storages
+
 # Database & ORM
 psycopg2-binary
 
