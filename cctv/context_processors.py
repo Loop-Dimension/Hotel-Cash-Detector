@@ -30,12 +30,16 @@ def language_context(request):
 
 
 def server_time_context(request):
-    """Add current server time to template context"""
+    """Add current server time to template context (Korean timezone)"""
     now = timezone.now()
+    local_now = timezone.localtime(now)
+    
     return {
-        'server_time': now,
-        'server_time_str': now.strftime('%Y-%m-%d %H:%M:%S %Z'),
-        'server_timezone': str(timezone.get_current_timezone()),
+        'server_time': local_now,
+        'server_time_str': local_now.strftime('%Y-%m-%d %H:%M:%S'),
+        'server_time_korean': local_now.strftime('%Y년 %m월 %d일 %H시 %M분'),
+        'server_timezone': 'KST (UTC+9)',
+        'server_timezone_full': str(timezone.get_current_timezone()),
     }
 
 

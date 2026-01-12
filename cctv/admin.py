@@ -8,11 +8,16 @@ from django.utils.html import format_html
 from .models import User, Region, Branch, Camera, Event, VideoRecord, BranchAccount, GeminiPrompts, GeminiLog
 
 
-# Add server time to admin header
-admin.site.site_header = format_html(
-    'Hotel CCTV Admin <span style="font-size: 12px; margin-left: 20px;">Server Time: {}</span>',
-    timezone.now().strftime('%Y-%m-%d %H:%M:%S %Z')
-)
+# Add server time to admin header (Korean timezone)
+def get_admin_header():
+    """Generate admin header with current Korean time"""
+    now = timezone.localtime()
+    return format_html(
+        'Hotel CCTV Admin <span style="font-size: 12px; margin-left: 20px; color: #666;">서버 시간: {} KST</span>',
+        now.strftime('%Y-%m-%d %H:%M:%S')
+    )
+
+admin.site.site_header = get_admin_header()
 
 
 @admin.register(User)
