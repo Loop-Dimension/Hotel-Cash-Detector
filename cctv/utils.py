@@ -16,6 +16,16 @@ from typing import Optional, Tuple, List, Dict, Any
 
 from django.conf import settings
 
+# Import storage utilities
+from cctv.storage import (
+    get_storage, 
+    upload_file_to_storage, 
+    upload_bytes_to_storage,
+    save_image_to_storage,
+    get_media_url,
+    is_s3_enabled
+)
+
 
 # ============================================================================
 # GLOBAL LOCKS AND STATE
@@ -90,6 +100,7 @@ def save_clip(
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Save video clip and thumbnail from frames.
+    Uploads to S3 if USE_S3 is True, otherwise saves locally.
     
     Args:
         frames: List of OpenCV frames
@@ -99,7 +110,7 @@ def save_clip(
         add_overlay: Whether to add detection label overlay
         
     Returns:
-        Tuple of (clip_path, thumbnail_path) or (None, None) on failure
+        Tuple of (clip_url, thumbnail_url) or (None, None) on failure
     """
     if not frames or len(frames) == 0:
         print(f"[Clip] No frames to save")
@@ -108,7 +119,11 @@ def save_clip(
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     unique_id = uuid.uuid4().hex[:6]
     
-    # Create directories
+    # Always use local temp directory for ffmpeg processing
+    temp_dir = Path(settings.MEDIA_ROOT) / 'temp'
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create local dirs (needed even for S3 since ffmpeg needs local files)
     clip_dir = Path(settings.MEDIA_ROOT) / 'clips'
     clip_dir.mkdir(parents=True, exist_ok=True)
     
@@ -117,9 +132,10 @@ def save_clip(
     
     temp_filename = f"{camera.camera_id}_{event_type}_{timestamp}_{unique_id}_temp.avi"
     final_filename = f"{camera.camera_id}_{event_type}_{timestamp}.mp4"
+    thumb_filename = f"{camera.camera_id}_{event_type}_{timestamp}.jpg"
     
-    temp_path = clip_dir / temp_filename
-    final_path = clip_dir / final_filename
+    temp_path = temp_dir / temp_filename
+    final_path = temp_dir / final_filename  # Use temp_dir for S3 workflow
     
     height, width = frames[0].shape[:2]
     
@@ -177,11 +193,11 @@ def save_clip(
             
             print(f"[Clip] FFmpeg return code: {result.returncode}")
             
-            # Clean up temp file
+            # Clean up temp avi file
             safe_delete_file(temp_path)
             
             if result.returncode == 0 and final_path.exists():
-                print(f"[Clip] Saved: {final_path} ({final_path.stat().st_size / 1024:.1f} KB)")
+                print(f"[Clip] Created: {final_path} ({final_path.stat().st_size / 1024:.1f} KB)")
             else:
                 print(f"[Clip] FFmpeg failed! Return code: {result.returncode}")
                 print(f"[Clip] FFmpeg stderr: {result.stderr.decode()[:500]}")
@@ -202,20 +218,57 @@ def save_clip(
             safe_delete_file(temp_path)
             return None, None
     
-    # Save thumbnail from last frame
-    thumb_filename = f"{camera.camera_id}_{event_type}_{timestamp}.jpg"
-    thumb_path = thumb_dir / thumb_filename
-    
+    # Prepare thumbnail
     thumb_frame = frames[-1].copy()
     if add_overlay:
         label = f"{event_type.upper()}"
         cv2.rectangle(thumb_frame, (10, 10), (150, 45), (0, 0, 0), -1)
         cv2.putText(thumb_frame, label, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-    cv2.imwrite(str(thumb_path), thumb_frame)
     
-    print(f"[Clip] Thumbnail: {thumb_path}")
-    
-    return f'/media/clips/{final_filename}', f'/media/thumbnails/{thumb_filename}'
+    # Upload to S3 or save locally
+    if is_s3_enabled():
+        try:
+            # Upload video to S3
+            clip_storage_path = f"clips/{final_filename}"
+            clip_url = upload_file_to_storage(str(final_path), clip_storage_path)
+            
+            # Upload thumbnail to S3
+            thumb_storage_path = f"thumbnails/{thumb_filename}"
+            thumb_url = save_image_to_storage(thumb_frame, thumb_storage_path, jpeg_quality=90)
+            
+            # Clean up local temp file
+            safe_delete_file(final_path)
+            
+            print(f"[Clip] Uploaded to S3: {clip_url}")
+            print(f"[Clip] Thumbnail S3: {thumb_url}")
+            
+            # Return relative paths for database storage
+            return f'/media/{clip_storage_path}', f'/media/{thumb_storage_path}'
+            
+        except Exception as e:
+            print(f"[Clip] S3 upload failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback to local storage
+            safe_delete_file(final_path)
+            return None, None
+    else:
+        # Save locally (move from temp to clips dir)
+        local_clip_path = clip_dir / final_filename
+        thumb_path = thumb_dir / thumb_filename
+        
+        # Move the video file
+        if final_path != local_clip_path:
+            import shutil
+            shutil.move(str(final_path), str(local_clip_path))
+        
+        # Save thumbnail locally
+        cv2.imwrite(str(thumb_path), thumb_frame)
+        
+        print(f"[Clip] Saved locally: {local_clip_path}")
+        print(f"[Clip] Thumbnail: {thumb_path}")
+        
+        return f'/media/clips/{final_filename}', f'/media/thumbnails/{thumb_filename}'
 
 
 def save_validation_clip(
@@ -226,6 +279,7 @@ def save_validation_clip(
 ) -> Optional[str]:
     """
     Save a short video clip for Gemini validation.
+    Uploads to S3 if USE_S3 is True, otherwise saves locally.
     
     Args:
         frames: List of OpenCV frames (typically ~45 frames for 3 seconds)
@@ -234,7 +288,7 @@ def save_validation_clip(
         duration_name: Name to include in filename (e.g., "3s")
         
     Returns:
-        Path to saved video file or None on failure
+        Path/URL to saved video file or None on failure
     """
     if not frames or len(frames) == 0:
         return None
@@ -242,19 +296,23 @@ def save_validation_clip(
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     unique_id = uuid.uuid4().hex[:6]
     
-    # Create validation_clips directory
+    # Use temp directory for processing
+    temp_dir = Path(settings.MEDIA_ROOT) / 'temp'
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create validation_clips directory for local storage
     validation_dir = Path(settings.MEDIA_ROOT) / 'validation_clips'
     validation_dir.mkdir(parents=True, exist_ok=True)
     
     filename = f"{camera.camera_id}_{event_type}_{timestamp}_{unique_id}.mp4"
-    temp_filename = f"temp_{filename}"
-    temp_path = validation_dir / temp_filename
-    final_path = validation_dir / filename
+    temp_avi_filename = f"temp_{unique_id}.avi"
+    temp_avi_path = temp_dir / temp_avi_filename
+    final_path = temp_dir / filename  # Use temp_dir for S3 workflow
     
     # Create video
     h, w = frames[0].shape[:2]
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(str(temp_path), fourcc, 15, (w, h))
+    out = cv2.VideoWriter(str(temp_avi_path), fourcc, 15, (w, h))
     
     for frame in frames:
         if frame is not None:
@@ -268,20 +326,45 @@ def save_validation_clip(
     with _ffmpeg_lock:
         try:
             subprocess.run([
-                ffmpeg_path, '-y', '-i', str(temp_path),
+                ffmpeg_path, '-y', '-i', str(temp_avi_path),
                 '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
                 '-pix_fmt', 'yuv420p', '-r', '15',
                 str(final_path)
             ], capture_output=True, timeout=30, check=True)
             
-            safe_delete_file(temp_path)
+            safe_delete_file(temp_avi_path)
             print(f"[Validation] Created {duration_name} clip for Gemini: {filename}")
-            return str(final_path)
             
         except Exception as e:
             print(f"[Validation] FFmpeg error creating validation clip: {e}")
-            safe_delete_file(temp_path)
+            safe_delete_file(temp_avi_path)
             return None
+    
+    # Upload to S3 or return local path
+    if is_s3_enabled():
+        try:
+            storage_path = f"validation_clips/{filename}"
+            url = upload_file_to_storage(str(final_path), storage_path)
+            
+            # Clean up local temp file
+            safe_delete_file(final_path)
+            
+            print(f"[Validation] Uploaded to S3: {url}")
+            return url  # Return full S3 URL for Gemini to access
+            
+        except Exception as e:
+            print(f"[Validation] S3 upload failed: {e}")
+            import traceback
+            traceback.print_exc()
+            safe_delete_file(final_path)
+            return None
+    else:
+        # Move to validation_clips directory
+        local_path = validation_dir / filename
+        if final_path != local_path:
+            import shutil
+            shutil.move(str(final_path), str(local_path))
+        return str(local_path)
 
 
 # ============================================================================
@@ -303,6 +386,7 @@ def save_event(
 ):
     """
     Save detection event to database with metadata as JSON file.
+    Uploads JSON to S3 if USE_S3 is True, otherwise saves locally.
     
     Args:
         camera: Camera model instance
@@ -344,21 +428,41 @@ def save_event(
             }
         })
         
-        # Save JSON file
-        json_dir = Path(settings.MEDIA_ROOT) / 'json'
-        json_dir.mkdir(parents=True, exist_ok=True)
-        
+        # Prepare JSON data
         json_filename = f"{event_type}_{camera.camera_id}_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
-        json_path = json_dir / json_filename
+        storage_path = f"json/{json_filename}"
         
         # Convert numpy types to JSON-serializable
         event_metadata = convert_to_json_serializable(event_metadata)
+        json_content = json.dumps(event_metadata, indent=2, ensure_ascii=False)
         
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(event_metadata, f, indent=2, ensure_ascii=False)
+        # Save to S3 or locally
+        if is_s3_enabled():
+            try:
+                url = upload_bytes_to_storage(
+                    json_content.encode('utf-8'), 
+                    storage_path,
+                    content_type='application/json'
+                )
+                print(f"[JSON] Uploaded to S3: {storage_path}")
+            except Exception as e:
+                print(f"[JSON] S3 upload failed, saving locally: {e}")
+                # Fallback to local
+                json_dir = Path(settings.MEDIA_ROOT) / 'json'
+                json_dir.mkdir(parents=True, exist_ok=True)
+                json_path = json_dir / json_filename
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    f.write(json_content)
+        else:
+            # Save locally
+            json_dir = Path(settings.MEDIA_ROOT) / 'json'
+            json_dir.mkdir(parents=True, exist_ok=True)
+            json_path = json_dir / json_filename
+            with open(json_path, 'w', encoding='utf-8') as f:
+                f.write(json_content)
+            print(f"[JSON] Saved locally: {storage_path}")
         
-        json_relative_path = f"json/{json_filename}"
-        print(f"[JSON] Saved metadata: {json_relative_path}")
+        json_relative_path = storage_path
         
         # Create database event
         event = Event.objects.create(

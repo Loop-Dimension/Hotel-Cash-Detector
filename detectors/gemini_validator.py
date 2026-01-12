@@ -362,21 +362,41 @@ Respond in JSON format ONLY:
         return buffer.tobytes()
     
     def _save_validation_image(self, frame, event_type: str) -> Optional[str]:
-        """Save validation image for debugging/logging"""
+        """Save validation image for debugging/logging.
+        Uploads to S3 if USE_S3 is True, otherwise saves locally.
+        """
         try:
             from datetime import datetime
             from django.conf import settings
             
-            # Create gemini_logs directory
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            filename = f"{event_type}_{self.camera_id or 'unknown'}_{timestamp}.jpg"
+            storage_path = f"gemini_logs/{filename}"
+            
+            # Check if S3 is enabled
+            use_s3 = getattr(settings, 'USE_S3', False)
+            
+            if use_s3:
+                try:
+                    from cctv.storage import save_image_to_storage
+                    
+                    # Upload directly to S3
+                    url = save_image_to_storage(frame, storage_path, jpeg_quality=85)
+                    print(f"[GeminiValidator] Uploaded validation image to S3: {storage_path}")
+                    return storage_path  # Return relative path for database
+                    
+                except Exception as e:
+                    print(f"[GeminiValidator] S3 upload failed, falling back to local: {e}")
+                    # Fall through to local storage
+            
+            # Local storage fallback
             log_dir = Path(settings.MEDIA_ROOT) / 'gemini_logs'
             log_dir.mkdir(parents=True, exist_ok=True)
             
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-            filename = f"{event_type}_{self.camera_id or 'unknown'}_{timestamp}.jpg"
             filepath = log_dir / filename
-            
             cv2.imwrite(str(filepath), frame)
-            return str(filepath.relative_to(settings.MEDIA_ROOT))
+            return storage_path  # Return relative path
+            
         except Exception as e:
             print(f"[GeminiValidator] Failed to save validation image: {e}")
             return None
