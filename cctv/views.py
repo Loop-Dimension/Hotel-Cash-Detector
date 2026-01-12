@@ -2519,27 +2519,18 @@ class BackgroundCameraWorker:
         return shared_convert_to_json_serializable(obj)
     
     def save_event(self, camera, event_type, confidence, frame_number, bbox=None, clip_path=None, thumbnail_path=None, metadata=None):
-        """Save event to database with detection metadata as JSON file."""
-        import json
-        from datetime import datetime
+        """Save event to database with detection metadata.
+        
+        Uses shared utility function from cctv/utils.py that handles S3 uploads.
+        """
         try:
             # Build metadata JSON with detection parameters
             event_metadata = metadata or {}
             
-            # Add timestamp
-            timestamp = datetime.now()
-            event_metadata['timestamp'] = timestamp.isoformat()
-            
             # Add standard detection info
             event_metadata.update({
-                'frame_number': frame_number,
-                'confidence': round(confidence, 3),
-                'bbox': bbox,
                 'camera_id': camera.camera_id,
                 'camera_name': camera.name,
-                'event_type': event_type,
-                'clip_path': clip_path,
-                'thumbnail_path': thumbnail_path,
             })
             
             # Add detector-specific info if available
@@ -2578,41 +2569,21 @@ class BackgroundCameraWorker:
                         'fire_confidence': getattr(fd, 'fire_confidence', 0.5),
                     }
             
-            # Save JSON file to media/json folder
-            json_dir = os.path.join(settings.MEDIA_ROOT, 'json')
-            os.makedirs(json_dir, exist_ok=True)
-            
-            # Generate JSON filename matching clip pattern
-            json_filename = f"{event_type}_{camera.camera_id}_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
-            json_path = os.path.join(json_dir, json_filename)
-            
-            # Convert numpy types to JSON-serializable types
-            event_metadata = self.convert_to_json_serializable(event_metadata)
-            
-            # Write JSON file with pretty formatting
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(event_metadata, f, indent=2, ensure_ascii=False)
-            
-            # Store relative path for database
-            json_relative_path = f"json/{json_filename}"
-            print(f"[JSON] Saved metadata: {json_relative_path}")
-            
-            event = Event.objects.create(
-                branch=camera.branch,
+            # Use shared save_event utility that handles S3 uploads
+            return shared_save_event(
                 camera=camera,
                 event_type=event_type,
                 confidence=confidence,
                 frame_number=frame_number,
-                bbox_x1=bbox[0] if bbox else 0,
-                bbox_y1=bbox[1] if bbox else 0,
-                bbox_x2=bbox[2] if bbox else 0,
-                bbox_y2=bbox[3] if bbox else 0,
+                bbox=bbox,
                 clip_path=clip_path,
                 thumbnail_path=thumbnail_path,
-                metadata=json_relative_path,  # Store path to JSON file
+                metadata=event_metadata,
+                gemini_validated=True,
+                gemini_confidence=1.0,
+                gemini_reason=""
             )
-            print(f"[DB] Saved event: {event_type} (id={event.id}) with JSON: {json_relative_path}")
-            return event
+            
         except Exception as e:
             print(f"[DB] Error saving event: {e}")
             import traceback
