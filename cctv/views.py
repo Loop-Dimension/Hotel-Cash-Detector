@@ -2470,6 +2470,38 @@ class BackgroundCameraWorker:
         except Camera.DoesNotExist:
             return None
     
+    def _safe_db_operation(self, operation, max_retries=3):
+        """Execute a database operation with retry logic for connection issues.
+        
+        Args:
+            operation: Callable that performs the DB operation
+            max_retries: Maximum number of retry attempts
+            
+        Returns:
+            Result of the operation or None on failure
+        """
+        from django.db import connection
+        from django.db.utils import OperationalError
+        import time
+        
+        for attempt in range(max_retries):
+            try:
+                return operation()
+            except OperationalError as e:
+                if 'SSL connection' in str(e) or 'closed unexpectedly' in str(e):
+                    print(f"[Worker] DB connection error (attempt {attempt + 1}/{max_retries}): {e}")
+                    # Close stale connection and let Django create a new one
+                    connection.close()
+                    if attempt < max_retries - 1:
+                        time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                        continue
+                raise
+            except Exception as e:
+                print(f"[Worker] Unexpected DB error: {e}")
+                raise
+        
+        return None
+    
     def create_detector(self, camera):
         if not DETECTOR_AVAILABLE:
             return None
@@ -2693,7 +2725,7 @@ class BackgroundCameraWorker:
             self.status = 'error'
             self.last_error = f'Cannot open stream after {max_connect_retries} attempts: {camera.rtsp_url}'
             camera.status = 'offline'
-            camera.save()
+            self._safe_db_operation(lambda: camera.save())
             return
         
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -2701,7 +2733,7 @@ class BackgroundCameraWorker:
         self.status = 'running'
         camera.status = 'online'
         camera.last_connected = timezone.now()
-        camera.save()
+        self._safe_db_operation(lambda: camera.save())
         
         consecutive_failures = 0
         max_failures = 20  # Max consecutive read failures before reconnect (increased)
@@ -2794,7 +2826,7 @@ class BackgroundCameraWorker:
         camera = self.get_camera()
         if camera:
             camera.status = 'offline'
-            camera.save()
+            self._safe_db_operation(lambda: camera.save())
     
     def run_detection(self):
         """Detection processing loop - runs in separate thread.
@@ -2828,11 +2860,14 @@ class BackgroundCameraWorker:
             
             # Reload camera settings periodically
             if time.time() - last_settings_check > 30:
-                camera = self.get_camera()
-                if camera and self.detector:
-                    self.detector.detect_cash = camera.detect_cash
-                    self.detector.detect_violence = camera.detect_violence
-                    self.detector.detect_fire = camera.detect_fire
+                try:
+                    camera = self._safe_db_operation(self.get_camera)
+                    if camera and self.detector:
+                        self.detector.detect_cash = camera.detect_cash
+                        self.detector.detect_violence = camera.detect_violence
+                        self.detector.detect_fire = camera.detect_fire
+                except Exception as e:
+                    print(f"[Detection] Failed to reload camera settings: {e}")
                 last_settings_check = time.time()
             
             try:

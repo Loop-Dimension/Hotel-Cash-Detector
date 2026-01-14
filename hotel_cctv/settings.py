@@ -104,6 +104,16 @@ if DB_ENGINE == 'postgresql':
             'PASSWORD': os.getenv('DB_PASSWORD', '00oo00oo'),
             'HOST': os.getenv('DB_HOST', 'localhost'),
             'PORT': os.getenv('DB_PORT', '5432'),
+            # Connection pooling and timeout settings
+            'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '60')),  # Reuse connections (seconds)
+            'CONN_HEALTH_CHECKS': True,  # Check connection health before reuse
+            'OPTIONS': {
+                'connect_timeout': int(os.getenv('DB_CONNECT_TIMEOUT', '10')),  # Connection timeout
+                'options': f"-c statement_timeout={os.getenv('DB_STATEMENT_TIMEOUT', '30000')}",  # Query timeout (ms)
+                # Uncomment if using SSL:
+                # 'sslmode': os.getenv('DB_SSLMODE', 'require'),  # require, verify-ca, verify-full
+                # 'sslrootcert': os.getenv('DB_SSLROOTCERT', ''),  # Path to root certificate
+            },
         }
     }
 else:

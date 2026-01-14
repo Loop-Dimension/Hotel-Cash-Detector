@@ -49,6 +49,39 @@ except ImportError as e:
 # Global manager for all workers (create once, reuse)
 _manager = None
 
+
+def safe_db_operation(operation, max_retries=3):
+    """Execute a database operation with retry logic for connection issues.
+    
+    Args:
+        operation: Callable that performs the DB operation
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        Result of the operation or None on failure
+    """
+    from django.db import connection
+    from django.db.utils import OperationalError
+    import time
+    
+    for attempt in range(max_retries):
+        try:
+            return operation()
+        except OperationalError as e:
+            if 'SSL connection' in str(e) or 'closed unexpectedly' in str(e):
+                print(f"[Worker] DB connection error (attempt {attempt + 1}/{max_retries}): {e}")
+                # Close stale connection and let Django create a new one
+                connection.close()
+                if attempt < max_retries - 1:
+                    time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                    continue
+            raise
+        except Exception as e:
+            print(f"[Worker] Unexpected DB error: {e}")
+            raise
+    
+    return None
+
 def get_manager():
     """Get or create the global Manager instance"""
     global _manager
@@ -286,12 +319,12 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
         shared_state['error'] = 'Cannot connect to stream'
         shared_state['status'] = 'error'
         camera.status = 'offline'
-        camera.save()
+        safe_db_operation(lambda: camera.save())
         return
     
     # Update camera status
     camera.status = 'online'
-    camera.save()
+    safe_db_operation(lambda: camera.save())
     shared_state['status'] = 'running'
     
     # Frame buffer for clips
@@ -510,7 +543,7 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
     # Cleanup
     cap.release()
     camera.status = 'offline'
-    camera.save()
+    safe_db_operation(lambda: camera.save())
     print(f"[Worker-{camera_id}] Loop ended")
 
 
