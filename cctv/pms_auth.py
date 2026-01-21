@@ -15,27 +15,31 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 # Role mapping from PMS to CCTV
+# Note: Kiosk and Call Test roles should NOT have CCTV access
 PMS_TO_CCTV_ROLE = {
     "Super Admin": "admin",
     "super_admin": "admin",
-    "Master": "admin",
-    "master": "admin",
+    "Master": "admin",  # Legacy support
+    "master": "admin",  # Legacy support
     "Team Leader": "project_manager",
     "team_leader": "project_manager",
     "Manager": "project_manager",
     "manager": "project_manager",
     "CLIENT": "project_manager",
     "client": "project_manager",
+    "Client": "project_manager",
     "Project": "project_manager",
     "project": "project_manager",
-    "Kiosk": "project_manager",
-    "kiosk": "project_manager",
+    # Kiosk and Call Test are explicitly NOT included - they have no CCTV access
 }
 
 
 def get_cctv_role(pms_role: str) -> str:
-    """Map PMS role to CCTV role"""
-    return PMS_TO_CCTV_ROLE.get(pms_role, "project_manager")
+    """
+    Map PMS role to CCTV role
+    Returns None for roles that shouldn't access CCTV (Kiosk, Call Test)
+    """
+    return PMS_TO_CCTV_ROLE.get(pms_role, None)
 
 
 def get_pms_auth_url():
@@ -113,6 +117,11 @@ class PMSAuthBackend(BaseBackend):
             
             # Map PMS role to CCTV role
             cctv_role = get_cctv_role(pms_role)
+            
+            # Reject Kiosk and Call Test roles (they should only access kiosk)
+            if cctv_role is None:
+                logger.warning(f"User {username} with role {pms_role} cannot access CCTV (kiosk-only role)")
+                return None
             
             # Get or create local user (for Django session)
             user, created = User.objects.get_or_create(
