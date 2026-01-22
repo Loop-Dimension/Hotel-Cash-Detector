@@ -201,6 +201,13 @@ TRANSLATIONS = {
         'from_date': '시작일',
         'to_date': '종료일',
         
+        # PMS Sync
+        'sync_from_pms': 'PMS에서 동기화',
+        'sync_success': '동기화 성공',
+        'sync_error': '동기화 실패',
+        'created': '생성됨',
+        'updated': '업데이트됨',
+        
         # Developer Mode
         'developer_mode': '개발자 모드',
         'developer_mode_desc': '디버깅 및 고급 설정 (비밀번호 필요)',
@@ -420,6 +427,13 @@ TRANSLATIONS = {
         'print': 'Print',
         'from_date': 'From Date',
         'to_date': 'To Date',
+        
+        # PMS Sync
+        'sync_from_pms': 'Sync from PMS',
+        'sync_success': 'Sync successful',
+        'sync_error': 'Sync failed',
+        'created': 'created',
+        'updated': 'updated',
         
         # Developer Mode
         'developer_mode': 'Developer Mode',

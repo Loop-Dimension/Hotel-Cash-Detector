@@ -27,6 +27,10 @@
                     <button class="lang-btn {% if current_lang == 'ko' %}active{% endif %}" onclick="setLanguage('ko')">한국어</button>
                     <button class="lang-btn {% if current_lang == 'en' %}active{% endif %}" onclick="setLanguage('en')">EN</button>
                 </div>
+                <!-- PMS Sync Button -->
+                <button class="btn btn-sm btn-success" onclick="manualSyncPMS()" id="topSyncBtn" style="margin: 0 10px; padding: 6px 12px; font-size: 13px;">
+                    <span id="topSyncIcon">🔄</span> <span id="topSyncText">{{ t.sync_from_pms }}</span>
+                </button>
                 <span class="user-info">{{ user.first_name|default:user.username }}</span>
                 <a href="{% url 'cctv:logout' %}" class="logout-btn">{{ t.logout }}</a>
             </div>
@@ -193,6 +197,86 @@
                 if (data.success) {
                     window.location.reload();
                 }
+            });
+        }
+        
+        // Auto-sync from PMS on EVERY page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('[Auto-Sync] Triggering PMS sync...');
+            
+            fetch('/api/pms/trigger-sync/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                localStorage.setItem('lastPMSSync', Date.now().toString());
+                
+                if (data.success) {
+                    if (data.created > 0 || data.updated > 0) {
+                        console.log(`[Auto-Sync] Success: ${data.created} created, ${data.updated} updated`);
+                    } else {
+                        console.log('[Auto-Sync] No changes');
+                    }
+                } else {
+                    console.error('[Auto-Sync] Failed:', data.error);
+                }
+            })
+            .catch(error => {
+                console.error('[Auto-Sync] Error:', error);
+            });
+        });
+        
+        // Manual sync from top bar button
+        function manualSyncPMS() {
+            const syncBtn = document.getElementById('topSyncBtn');
+            const syncIcon = document.getElementById('topSyncIcon');
+            const syncText = document.getElementById('topSyncText');
+            
+            if (!syncBtn) return;
+            
+            // Show loading state
+            syncBtn.disabled = true;
+            syncIcon.style.animation = 'spin 1s linear infinite';
+            syncIcon.textContent = '⏳';
+            
+            fetch('/api/pms/trigger-sync/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                localStorage.setItem('lastPMSSync', Date.now().toString());
+                
+                if (data.success) {
+                    const message = `{{ t.sync_success }}: ${data.created || 0} {{ t.created }}, ${data.updated || 0} {{ t.updated }}`;
+                    showToast(message, 'success');
+                    console.log(`[Manual Sync] Success: ${data.created} created, ${data.updated} updated`);
+                    
+                    // Reload if on manage branches page and there were changes
+                    if (window.location.pathname.includes('manage/branches') && (data.created > 0 || data.updated > 0)) {
+                        setTimeout(() => window.location.reload(), 1000);
+                    }
+                } else {
+                    showToast(data.error || '{{ t.sync_error }}', 'error');
+                    console.error('[Manual Sync] Failed:', data.error);
+                }
+            })
+            .catch(error => {
+                console.error('[Manual Sync] Error:', error);
+                showToast('{{ t.sync_error }}', 'error');
+            })
+            .finally(() => {
+                // Reset button state
+                syncBtn.disabled = false;
+                syncIcon.style.animation = '';
+                syncIcon.textContent = '🔄';
             });
         }
     </script>

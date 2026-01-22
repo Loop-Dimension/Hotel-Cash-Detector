@@ -61,6 +61,11 @@ class Branch(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    # PMS Integration - Link to PMS Project
+    pms_project_id = models.CharField(max_length=36, blank=True, null=True, unique=True,
+                                       help_text='UUID from PMS project for synchronization')
+    pms_project_type = models.CharField(max_length=50, blank=True, null=True)
+    
     # Project managers assigned to this branch
     managers = models.ManyToManyField(User, related_name='managed_branches', blank=True)
     

@@ -198,6 +198,11 @@ else:
     MEDIA_ROOT = BASE_DIR / 'media'
 
 # Upload settings
+
+# =============================================================================
+# PMS INTEGRATION
+# =============================================================================
+PMS_URL = os.getenv('PMS_URL', 'http://localhost:8000')
 DATA_UPLOAD_MAX_MEMORY_SIZE = 1024 * 1024 * 1024  # 1GB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 1024 * 1024 * 1024  # 1GB
 

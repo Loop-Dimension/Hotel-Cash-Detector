@@ -107,4 +107,9 @@ urlpatterns = [
     
     # Public API for PMS integration (no auth required)
     path('api/public/regions/', views.api_public_regions, name='api_public_regions'),
+    
+    # PMS Sync API - For syncing projects/branches from PMS
+    path('api/pms/sync-project/', views.api_pms_sync_project, name='api_pms_sync_project'),
+    path('api/pms/sync-projects/', views.api_pms_sync_projects, name='api_pms_sync_projects'),
+    path('api/pms/trigger-sync/', views.api_pms_trigger_sync, name='api_pms_trigger_sync'),
 ]

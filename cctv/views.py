@@ -4180,3 +4180,280 @@ def api_public_regions(request):
     })
     response['Access-Control-Allow-Origin'] = '*'
     return response
+
+
+@csrf_exempt
+@require_http_methods(["POST", "OPTIONS"])
+def api_pms_sync_project(request):
+    """
+    Sync a single project from PMS to CCTV as a Branch.
+    Creates or updates a Branch based on pms_project_id.
+    
+    Expected payload:
+    {
+        "project_id": "uuid-string",
+        "name": "Project Name",
+        "type": "motel",  // motel, hotel, etc.
+        "city": "Seoul",
+        "district": "Gangnam",
+        "is_active": true
+    }
+    """
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        response = JsonResponse({})
+        response['Access-Control-Allow-Origin'] = '*'
+        response['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        response['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return response
+    
+    try:
+        import json
+        data = json.loads(request.body)
+        
+        project_id = data.get('project_id')
+        name = data.get('name')
+        project_type = data.get('type', 'motel')
+        city = data.get('city', '')
+        district = data.get('district', '')
+        is_active = data.get('is_active', True)
+        
+        if not project_id or not name:
+            return JsonResponse({'error': 'project_id and name are required'}, status=400)
+        
+        # Get or create region based on city
+        region_name = city if city else 'Default'
+        region_code = region_name[:3].upper() if region_name else 'DEF'
+        region, created = Region.objects.get_or_create(
+            code=region_code,
+            defaults={'name': region_name}
+        )
+        if created:
+            print(f"[PMS Sync] Created new region: {region_name}")
+        
+        # Build address from city + district
+        address = f"{city} {district}".strip() if city or district else None
+        
+        # Check if branch exists by pms_project_id
+        try:
+            branch = Branch.objects.get(pms_project_id=project_id)
+            # Update existing
+            branch.name = name
+            branch.region = region
+            branch.address = address
+            branch.pms_project_type = project_type
+            # Set status based on is_active
+            if not is_active:
+                branch.status = 'pending'
+            branch.save()
+            action = 'updated'
+            print(f"[PMS Sync] Updated branch: {name} (ID: {project_id})")
+        except Branch.DoesNotExist:
+            # Create new branch
+            branch = Branch.objects.create(
+                name=name,
+                region=region,
+                address=address,
+                pms_project_id=project_id,
+                pms_project_type=project_type,
+                status='pending'
+            )
+            action = 'created'
+            print(f"[PMS Sync] Created branch: {name} (ID: {project_id})")
+        
+        response = JsonResponse({
+            'success': True,
+            'action': action,
+            'branch': {
+                'id': branch.id,
+                'name': branch.name,
+                'pms_project_id': branch.pms_project_id,
+                'region': branch.region.name,
+            }
+        })
+        response['Access-Control-Allow-Origin'] = '*'
+        return response
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        print(f"[PMS Sync] Error: {str(e)}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST", "OPTIONS"])
+def api_pms_sync_projects(request):
+    """
+    Sync multiple projects from PMS to CCTV as Branches (batch operation).
+    
+    Expected payload:
+    {
+        "projects": [
+            {
+                "project_id": "uuid-string",
+                "name": "Project Name",
+                "type": "motel",
+                "city": "Seoul",
+                "district": "Gangnam",
+                "is_active": true
+            },
+            ...
+        ]
+    }
+    """
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        response = JsonResponse({})
+        response['Access-Control-Allow-Origin'] = '*'
+        response['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        response['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return response
+    
+    try:
+        import json
+        data = json.loads(request.body)
+        projects = data.get('projects', [])
+        
+        if not projects:
+            return JsonResponse({'error': 'projects array is required'}, status=400)
+        
+        results = {
+            'created': 0,
+            'updated': 0,
+            'errors': []
+        }
+        
+        for project in projects:
+            try:
+                project_id = project.get('project_id')
+                name = project.get('name')
+                project_type = project.get('type', 'motel')
+                city = project.get('city', '')
+                district = project.get('district', '')
+                is_active = project.get('is_active', True)
+                
+                if not project_id or not name:
+                    results['errors'].append(f"Missing project_id or name for project")
+                    continue
+                
+                # Get or create region based on city
+                region_name = city if city else 'Default'
+                region_code = region_name[:3].upper() if region_name else 'DEF'
+                region, _ = Region.objects.get_or_create(
+                    code=region_code,
+                    defaults={'name': region_name}
+                )
+                
+                # Build address
+                address = f"{city} {district}".strip() if city or district else None
+                
+                # Upsert branch
+                try:
+                    branch = Branch.objects.get(pms_project_id=project_id)
+                    print(f"[PMS Sync] Found existing branch: {branch.name} (id={branch.id})")
+                    branch.name = name
+                    branch.region = region
+                    branch.address = address
+                    branch.pms_project_type = project_type
+                    if not is_active:
+                        branch.status = 'pending'
+                    branch.save()
+                    results['updated'] += 1
+                    print(f"[PMS Sync] Updated branch: {branch.name}")
+                except Branch.DoesNotExist:
+                    print(f"[PMS Sync] Branch not found, creating new: {name} (pms_id={project_id})")
+                    new_branch = Branch.objects.create(
+                        name=name,
+                        region=region,
+                        address=address,
+                        pms_project_id=project_id,
+                        pms_project_type=project_type,
+                        status='pending'
+                    )
+                    results['created'] += 1
+                    print(f"[PMS Sync] Created branch: {new_branch.name} (id={new_branch.id})")
+                    
+            except Exception as e:
+                results['errors'].append(f"Error syncing {project.get('name', 'unknown')}: {str(e)}")
+        
+        print(f"[PMS Sync] Batch sync complete: created={results['created']}, updated={results['updated']}, errors={len(results['errors'])}")
+        
+        response = JsonResponse({
+            'success': True,
+            'created': results['created'],
+            'updated': results['updated'],
+            'errors': results['errors']
+        })
+        response['Access-Control-Allow-Origin'] = '*'
+        return response
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        print(f"[PMS Sync] Batch error: {str(e)}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def api_pms_trigger_sync(request):
+    """
+    Trigger sync from PMS by calling PMS API to fetch all projects.
+    This endpoint is called from CCTV frontend "Sync from PMS" button.
+    """
+    import requests
+    from django.conf import settings
+    
+    print("[PMS Sync] Frontend triggered sync request")
+    
+    try:
+        # Get PMS URL from settings or use default
+        pms_url = getattr(settings, 'PMS_URL', 'http://localhost:8000')
+        pms_api_url = f"{pms_url}/api/v1/projects/sync-to-cctv"
+        
+        print(f"[PMS Sync] Calling PMS API: {pms_api_url}")
+        
+        # Call PMS API to trigger sync
+        # Note: PMS will call back to our /api/pms/sync-projects/ endpoint
+        response = requests.post(
+            pms_api_url,
+            headers={
+                'Content-Type': 'application/json',
+                # Add auth token if needed in future
+            },
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            print(f"[PMS Sync] Success: {result}")
+            
+            return JsonResponse({
+                'success': True,
+                'created': result.get('created', 0),
+                'updated': result.get('updated', 0),
+                'errors': result.get('errors', [])
+            })
+        else:
+            error_msg = f"PMS API returned status {response.status_code}"
+            print(f"[PMS Sync] Error: {error_msg}")
+            return JsonResponse({
+                'success': False,
+                'error': error_msg
+            }, status=response.status_code)
+            
+    except requests.exceptions.ConnectionError:
+        error_msg = "Cannot connect to PMS server. Is it running?"
+        print(f"[PMS Sync] Error: {error_msg}")
+        return JsonResponse({
+            'success': False,
+            'error': error_msg
+        }, status=503)
+    except Exception as e:
+        error_msg = f"Sync trigger failed: {str(e)}"
+        print(f"[PMS Sync] Error: {error_msg}")
+        return JsonResponse({
+            'success': False,
+            'error': error_msg
+        }, status=500)

@@ -10,6 +10,9 @@
     </div>
     <div class="page-actions">
         <button class="btn btn-secondary" onclick="openAddRegionModal()">+ {{ t.add_region }}</button>
+        <button class="btn btn-success" onclick="syncFromPMS()" id="syncBtn">
+            <span id="syncIcon">🔄</span> {{ t.sync_from_pms }}
+        </button>
         <button class="btn btn-primary" onclick="openAddBranchModal()">+ {{ t.create_branch }}</button>
     </div>
 </div>
@@ -272,6 +275,66 @@
             }
         } catch (error) {
             showToast('{{ t.error }}', 'error');
+        }
+    }
+    
+    async function syncFromPMS(silent = false) {
+        const syncBtn = document.getElementById('syncBtn');
+        const syncIcon = document.getElementById('syncIcon');
+        
+        // Only update UI if not silent mode
+        if (!silent && syncBtn) {
+            syncBtn.disabled = true;
+            syncIcon.style.animation = 'spin 1s linear infinite';
+            syncIcon.textContent = '⏳';
+        }
+        
+        try {
+            const response = await fetch('/api/pms/trigger-sync/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                }
+            });
+            
+            const data = await response.json();
+            
+            // Store last sync time
+            localStorage.setItem('lastPMSSync', Date.now().toString());
+            
+            if (response.ok && data.success) {
+                const message = `{{ t.sync_success }}: ${data.created || 0} {{ t.created }}, ${data.updated || 0} {{ t.updated }}`;
+                
+                if (!silent) {
+                    showToast(message, 'success');
+                    // Reload after 1 second to show new branches
+                    setTimeout(() => window.location.reload(), 1000);
+                } else if (data.created > 0 || data.updated > 0) {
+                    // Only reload if there were actual changes in silent mode
+                    console.log('[Auto-Sync] Changes detected, reloading page...');
+                    setTimeout(() => window.location.reload(), 500);
+                } else {
+                    console.log('[Auto-Sync] No changes detected');
+                }
+            } else {
+                if (!silent) {
+                    showToast(data.error || '{{ t.sync_error }}', 'error');
+                }
+                console.error('[Sync Error]:', data.error);
+            }
+        } catch (error) {
+            console.error('Sync error:', error);
+            if (!silent) {
+                showToast('{{ t.sync_error }}: ' + error.message, 'error');
+            }
+        } finally {
+            // Reset button state
+            if (!silent && syncBtn) {
+                syncBtn.disabled = false;
+                syncIcon.style.animation = '';
+                syncIcon.textContent = '🔄';
+            }
         }
     }
 </script>
