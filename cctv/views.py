@@ -4409,7 +4409,7 @@ def api_pms_trigger_sync(request):
     
     try:
         # Get PMS URL from settings or use default
-        pms_url = getattr(settings, 'PMS_URL', 'http://localhost:8000')
+        pms_url = getattr(settings, 'PMS_AUTH_URL', 'http://localhost:8000')
         pms_api_url = f"{pms_url}/api/v1/projects/sync-to-cctv"
         
         print(f"[PMS Sync] Calling PMS API: {pms_api_url}")
