@@ -40,7 +40,7 @@ from django.conf import settings
 
 from .models import User, Region, Branch, Camera, Event, VideoRecord, BranchAccount, GeminiLog
 from .translations import get_translation, t
-from .pms_auth import pms_login_required, get_user_allowed_regions, filter_branches_by_region, get_accessible_regions
+from .pms_auth import pms_login_required, get_user_project_ids, filter_branches_by_project
 
 # Add root directory to path for detector imports
 sys.path.insert(0, str(settings.BASE_DIR))
@@ -88,15 +88,24 @@ background_worker_lock = threading.Lock()
 
 
 def get_user_branches(user, request=None):
-    """Get branches accessible by the user based on role and allowed_regions"""
-    if user.is_admin():
-        branches = Branch.objects.all()
+    """Get branches accessible by the user based on role and PMS projects"""
+    # For PMS-authenticated users, use project-based filtering only
+    if request and request.session.get('pms_token'):
+        # PMS authenticated - filter by project_ids from PMS
+        if user.is_admin():
+            branches = Branch.objects.all()
+        else:
+            # Start with all branches, then filter by PMS projects
+            branches = Branch.objects.all()
+        
+        # Apply PMS project filtering
+        branches = filter_branches_by_project(branches, request)
     else:
-        branches = user.managed_branches.all()
-    
-    # Apply region filtering from PMS (if request available)
-    if request:
-        branches = filter_branches_by_region(branches, request)
+        # Local CCTV authentication - use managed_branches
+        if user.is_admin():
+            branches = Branch.objects.all()
+        else:
+            branches = user.managed_branches.all()
     
     return branches
 
@@ -137,12 +146,10 @@ def home(request):
     """Dashboard home page"""
     user = request.user
     branches = get_user_branches(user, request)
-    regions = get_accessible_regions(request)
     
     context = {
         'user': user,
         'branches': branches,
-        'regions': regions,
         'active_page': 'home',
     }
     return render(request, 'cctv/home.html', context)
@@ -150,18 +157,15 @@ def home(request):
 
 @pms_login_required
 def monitor_all(request):
-    """All branches monitoring page (Admin only)"""
+    """All branches monitoring page - shows only branches user has access to"""
     user = request.user
-    if not user.is_admin():
-        return redirect('cctv:monitor_local')
     
-    branches = Branch.objects.all().select_related('region')
-    regions = Region.objects.all()
+    # Get branches the user has access to
+    branches = get_user_branches(user, request).select_related('region')
     
     context = {
         'user': user,
         'branches': branches,
-        'regions': regions,
         'active_page': 'monitor-all',
     }
     return render(request, 'cctv/monitor_all.html', context)
@@ -181,14 +185,12 @@ def monitor_local(request, branch_id=None):
         branch = user_branches.first()
     
     cameras = branch.cameras.all() if branch else []
-    regions = get_accessible_regions(request)
     
     context = {
         'user': user,
         'branch': branch,
         'branches': user_branches,
         'cameras': cameras,
-        'regions': regions,
         'active_page': 'monitor-local',
     }
     return render(request, 'cctv/monitor_local.html', context)
@@ -199,7 +201,6 @@ def video_logs(request):
     """Event logs page"""
     user = request.user
     user_branches = get_user_branches(user, request)
-    regions = get_accessible_regions(request)
     
     # Get filter parameters
     date_from = request.GET.get('from', '')
@@ -250,7 +251,6 @@ def video_logs(request):
         'events': events,
         'branches': user_branches,
         'offline_cameras': offline_cameras,
-        'regions': regions,
         'active_page': 'video-logs',
         'filters': {
             'date_from': date_from,
@@ -268,7 +268,6 @@ def video_full(request):
     """Full videos page"""
     user = request.user
     user_branches = get_user_branches(user, request)
-    regions = Region.objects.all()
     
     # Get filter parameters
     date_filter = request.GET.get('date', '')
@@ -296,7 +295,6 @@ def video_full(request):
         'user': user,
         'videos': videos,
         'branches': user_branches,
-        'regions': regions,
         'active_page': 'video-full',
         'filters': {
             'date': date_filter,
@@ -315,7 +313,6 @@ def manage_branches(request):
         return redirect('cctv:home')
     
     branches = Branch.objects.all().select_related('region')
-    regions = Region.objects.all()
     
     # Get filter parameters
     region_filter = request.GET.get('region', 'ì „ì²´')
@@ -330,7 +327,6 @@ def manage_branches(request):
     context = {
         'user': user,
         'branches': branches,
-        'regions': regions,
         'active_page': 'manage-branches',
         'filters': {
             'region': region_filter,
@@ -352,14 +348,12 @@ def manage_branch_detail(request, branch_id):
     # Get users (project managers) assigned to this branch
     accounts = branch.managers.all()
     cameras = branch.cameras.all()
-    regions = Region.objects.all()
     
     context = {
         'user': user,
         'branch': branch,
         'accounts': accounts,  # These are User objects assigned as managers
         'cameras': cameras,
-        'regions': regions,
         'active_page': 'manage-branch-detail',
     }
     return render(request, 'cctv/manage_branch_detail.html', context)
@@ -389,12 +383,10 @@ def reports(request):
     if not user.is_admin():
         return redirect('cctv:home')
     
-    regions = Region.objects.all()
     branches = Branch.objects.all().select_related('region')
     
     context = {
         'user': user,
-        'regions': regions,
         'branches': branches,
         'active_page': 'reports',
     }
@@ -458,7 +450,7 @@ def api_branches(request):
         data = [{
             'id': b.id,
             'name': b.name,
-            'region': b.region.name,
+            'region': b.region.name if b.region else None,
             'status': b.status,
             'status_display': b.get_status_display(),
             'camera_count': b.get_camera_count(),
@@ -473,11 +465,12 @@ def api_branches(request):
         
         data = json.loads(request.body)
         
-        # Support both region_id and region name
-        if 'region_id' in data:
+        # Region is now optional
+        region = None
+        if 'region_id' in data and data['region_id']:
             region = get_object_or_404(Region, id=data['region_id'])
-        else:
-            region = get_object_or_404(Region, name=data.get('region'))
+        elif 'region' in data and data['region']:
+            region = Region.objects.filter(name=data.get('region')).first()
         
         branch = Branch.objects.create(
             name=data.get('name'),
@@ -491,7 +484,7 @@ def api_branches(request):
             'branch': {
                 'id': branch.id,
                 'name': branch.name,
-                'region': branch.region.name,
+                'region': branch.region.name if branch.region else None,
             }
         })
 
@@ -510,8 +503,8 @@ def api_branch_detail(request, branch_id):
         return JsonResponse({
             'id': branch.id,
             'name': branch.name,
-            'region': branch.region.name,
-            'region_id': branch.region.id,
+            'region': branch.region.name if branch.region else None,
+            'region_id': branch.region.id if branch.region else None,
             'status': branch.status,
             'status_display': branch.get_status_display(),
             'address': branch.address,
@@ -526,7 +519,8 @@ def api_branch_detail(request, branch_id):
         branch.name = data.get('name', branch.name)
         branch.address = data.get('address', branch.address)
         
-        if 'region_id' in data:
+        # Region update is optional
+        if 'region_id' in data and data['region_id']:
             region = get_object_or_404(Region, id=data['region_id'])
             branch.region = region
         
@@ -4221,16 +4215,6 @@ def api_pms_sync_project(request):
         if not project_id or not name:
             return JsonResponse({'error': 'project_id and name are required'}, status=400)
         
-        # Get or create region based on city
-        region_name = city if city else 'Default'
-        region_code = region_name[:3].upper() if region_name else 'DEF'
-        region, created = Region.objects.get_or_create(
-            code=region_code,
-            defaults={'name': region_name}
-        )
-        if created:
-            print(f"[PMS Sync] Created new region: {region_name}")
-        
         # Build address from city + district
         address = f"{city} {district}".strip() if city or district else None
         
@@ -4239,7 +4223,6 @@ def api_pms_sync_project(request):
             branch = Branch.objects.get(pms_project_id=project_id)
             # Update existing
             branch.name = name
-            branch.region = region
             branch.address = address
             branch.pms_project_type = project_type
             # Set status based on is_active
@@ -4249,10 +4232,10 @@ def api_pms_sync_project(request):
             action = 'updated'
             print(f"[PMS Sync] Updated branch: {name} (ID: {project_id})")
         except Branch.DoesNotExist:
-            # Create new branch
+            # Create new branch (without region)
             branch = Branch.objects.create(
                 name=name,
-                region=region,
+                region=None,  # Region is now optional
                 address=address,
                 pms_project_id=project_id,
                 pms_project_type=project_type,
@@ -4268,7 +4251,6 @@ def api_pms_sync_project(request):
                 'id': branch.id,
                 'name': branch.name,
                 'pms_project_id': branch.pms_project_id,
-                'region': branch.region.name,
             }
         })
         response['Access-Control-Allow-Origin'] = '*'
@@ -4337,14 +4319,6 @@ def api_pms_sync_projects(request):
                     results['errors'].append(f"Missing project_id or name for project")
                     continue
                 
-                # Get or create region based on city
-                region_name = city if city else 'Default'
-                region_code = region_name[:3].upper() if region_name else 'DEF'
-                region, _ = Region.objects.get_or_create(
-                    code=region_code,
-                    defaults={'name': region_name}
-                )
-                
                 # Build address
                 address = f"{city} {district}".strip() if city or district else None
                 
@@ -4353,7 +4327,6 @@ def api_pms_sync_projects(request):
                     branch = Branch.objects.get(pms_project_id=project_id)
                     print(f"[PMS Sync] Found existing branch: {branch.name} (id={branch.id})")
                     branch.name = name
-                    branch.region = region
                     branch.address = address
                     branch.pms_project_type = project_type
                     if not is_active:
@@ -4365,7 +4338,7 @@ def api_pms_sync_projects(request):
                     print(f"[PMS Sync] Branch not found, creating new: {name} (pms_id={project_id})")
                     new_branch = Branch.objects.create(
                         name=name,
-                        region=region,
+                        region=None,  # Region is now optional
                         address=address,
                         pms_project_id=project_id,
                         pms_project_type=project_type,

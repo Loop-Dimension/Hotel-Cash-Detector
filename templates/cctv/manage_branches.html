@@ -9,7 +9,6 @@
         <h1>{{ t.manage_branches_title }}</h1>
     </div>
     <div class="page-actions">
-        <button class="btn btn-secondary" onclick="openAddRegionModal()">+ {{ t.add_region }}</button>
         <button class="btn btn-success" onclick="syncFromPMS()" id="syncBtn">
             <span id="syncIcon">🔄</span> {{ t.sync_from_pms }}
         </button>
@@ -21,15 +20,6 @@
 <div class="manage-header">
     <div class="manage-filters">
         <div class="filter-group">
-            <label>{{ t.select_region }}</label>
-            <select id="regionFilter" onchange="filterBranches()">
-                <option value="">{{ t.all_regions }}</option>
-                {% for region in regions %}
-                <option value="{{ region.id }}">{{ region.name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div class="filter-group">
             <label>{{ t.search_placeholder }}</label>
             <input type="text" id="searchInput" placeholder="{{ t.search_placeholder }}" onkeyup="filterBranches()">
         </div>
@@ -40,15 +30,13 @@
 <div class="table manage-table">
     <div class="table-head">
         <span>{{ t.branch_name }}</span>
-        <span>{{ t.region }}</span>
         <span class="text-center">{{ t.camera }}</span>
         <span class="text-right">{{ t.actions }}</span>
     </div>
     <div class="table-body" id="branchTableBody">
         {% for branch in branches %}
-        <div class="table-row clickable" data-region="{{ branch.region.id }}" data-name="{{ branch.name|lower }}" onclick="goToBranch({{ branch.id }})">
+        <div class="table-row clickable" data-name="{{ branch.name|lower }}" onclick="goToBranch({{ branch.id }})">
             <span>{{ branch.name }}</span>
-            <span>{{ branch.region.name }}</span>
             <span class="text-center">{{ branch.get_camera_count }}</span>
             <span class="text-right" onclick="event.stopPropagation()">
                 <button class="btn btn-sm btn-ghost" onclick="editBranch({{ branch.id }})">{{ t.edit }}</button>
@@ -78,14 +66,6 @@
                     <input type="text" name="name" id="branchName" required>
                 </div>
                 <div class="form-group">
-                    <label>{{ t.region }}</label>
-                    <select name="region_id" id="branchRegion" required>
-                        {% for region in regions %}
-                        <option value="{{ region.id }}">{{ region.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
                     <label>{{ t.address }}</label>
                     <textarea name="address" id="branchAddress" rows="2"></textarea>
                 </div>
@@ -97,39 +77,11 @@
         </form>
     </div>
 </div>
-
-<!-- Add Region Modal -->
-<div class="modal-backdrop" id="addRegionModal" style="display: none;">
-    <div class="modal">
-        <div class="modal-header">
-            <h2 id="regionModalTitle">{{ t.add_region }}</h2>
-            <button class="modal-close" onclick="closeModal('addRegionModal')">×</button>
-        </div>
-        <form id="addRegionForm" onsubmit="submitRegion(event)">
-            <input type="hidden" name="region_id" id="editRegionId">
-            <div class="modal-body">
-                <div class="form-group">
-                    <label>{{ t.region }}</label>
-                    <input type="text" name="name" id="regionName" required>
-                </div>
-                <div class="form-group">
-                    <label>{{ t.region_code }}</label>
-                    <input type="text" name="code" id="regionCode" placeholder="e.g., SEO, BUS">
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" onclick="closeModal('addRegionModal')">{{ t.cancel }}</button>
-                <button type="submit" class="btn btn-primary" id="regionSubmitBtn">{{ t.create }}</button>
-            </div>
-        </form>
-    </div>
-</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
     let editMode = false;
-    let regionEditMode = false;
     
     function openAddBranchModal() {
         editMode = false;
@@ -137,7 +89,6 @@
         document.getElementById('branchSubmitBtn').textContent = '{{ t.create }}';
         document.getElementById('editBranchId').value = '';
         document.getElementById('branchName').value = '';
-        document.getElementById('branchRegion').selectedIndex = 0;
         document.getElementById('branchAddress').value = '';
         document.getElementById('addBranchModal').style.display = 'flex';
     }
@@ -152,22 +103,11 @@
             document.getElementById('branchSubmitBtn').textContent = '{{ t.save }}';
             document.getElementById('editBranchId').value = branchId;
             document.getElementById('branchName').value = branch.name;
-            document.getElementById('branchRegion').value = branch.region_id;
             document.getElementById('branchAddress').value = branch.address || '';
             document.getElementById('addBranchModal').style.display = 'flex';
         } catch (error) {
             showToast('{{ t.error }}', 'error');
         }
-    }
-    
-    function openAddRegionModal() {
-        regionEditMode = false;
-        document.getElementById('regionModalTitle').textContent = '{{ t.add_region }}';
-        document.getElementById('regionSubmitBtn').textContent = '{{ t.create }}';
-        document.getElementById('editRegionId').value = '';
-        document.getElementById('regionName').value = '';
-        document.getElementById('regionCode').value = '';
-        document.getElementById('addRegionModal').style.display = 'flex';
     }
     
     function closeModal(id) {
@@ -179,18 +119,13 @@
     }
     
     function filterBranches() {
-        const regionId = document.getElementById('regionFilter').value;
         const searchText = document.getElementById('searchInput').value.toLowerCase();
         const rows = document.querySelectorAll('#branchTableBody .table-row');
         
         rows.forEach(row => {
-            const rowRegion = row.dataset.region;
             const rowName = row.dataset.name;
-            
-            const matchRegion = !regionId || rowRegion === regionId;
             const matchSearch = !searchText || rowName.includes(searchText);
-            
-            row.style.display = (matchRegion && matchSearch) ? 'grid' : 'none';
+            row.style.display = matchSearch ? 'grid' : 'none';
         });
     }
     
@@ -205,38 +140,6 @@
         try {
             const url = editMode ? `/api/branches/${branchId}/` : '{% url "cctv:api_branches" %}';
             const method = editMode ? 'PUT' : 'POST';
-            
-            const response = await fetch(url, {
-                method: method,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': getCookie('csrftoken')
-                },
-                body: JSON.stringify(data)
-            });
-            
-            if (response.ok) {
-                showToast('{{ t.success }}', 'success');
-                window.location.reload();
-            } else {
-                showToast('{{ t.error }}', 'error');
-            }
-        } catch (error) {
-            showToast('{{ t.error }}', 'error');
-        }
-    }
-    
-    async function submitRegion(e) {
-        e.preventDefault();
-        const form = e.target;
-        const formData = new FormData(form);
-        const data = Object.fromEntries(formData);
-        const regionId = data.region_id;
-        delete data.region_id;
-        
-        try {
-            const url = regionEditMode ? `/api/regions/${regionId}/` : '/api/regions/';
-            const method = regionEditMode ? 'PUT' : 'POST';
             
             const response = await fetch(url, {
                 method: method,

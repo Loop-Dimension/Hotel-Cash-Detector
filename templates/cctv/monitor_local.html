@@ -14,20 +14,11 @@
 <!-- Filters -->
 <div class="filters">
     <div class="filter-group">
-        <label>{{ t.select_region }}</label>
-        <select id="regionFilter" onchange="filterBranchesByRegion(true)">
-            <option value="">{{ t.all_regions }}</option>
-            {% for region in regions %}
-            <option value="{{ region.id }}" {% if branch and branch.region.id == region.id %}selected{% endif %}>{{ region.name }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="filter-group">
         <label>{{ t.select_branch }}</label>
         <select id="branchFilter" onchange="loadCameras()">
             <option value="">{{ t.all_branches }}</option>
             {% for b in branches %}
-            <option value="{{ b.id }}" data-region="{{ b.region.id }}" {% if branch and branch.id == b.id %}selected{% endif %}>{{ b.name }}</option>
+            <option value="{{ b.id }}" {% if branch and branch.id == b.id %}selected{% endif %}>{{ b.name }}</option>
             {% endfor %}
         </select>
     </div>
@@ -404,43 +395,6 @@
             showToast('{{ t.error }}', 'error');
         }
     }
-    
-    function filterBranchesByRegion(resetBranch = true) {
-        const regionId = document.getElementById('regionFilter').value;
-        const branchSelect = document.getElementById('branchFilter');
-        const options = branchSelect.querySelectorAll('option');
-        const currentBranchId = branchSelect.value;
-        
-        // Reset branch selection only if resetBranch is true and we're filtering
-        if (resetBranch && regionId) {
-            // Check if current branch is still valid for selected region
-            const currentOption = branchSelect.querySelector(`option[value="${currentBranchId}"]`);
-            if (currentOption && currentOption.dataset.region !== regionId) {
-                branchSelect.value = '';
-            }
-        }
-        
-        options.forEach(option => {
-            if (option.value === '') {
-                option.style.display = 'block';
-                option.hidden = false;
-            } else {
-                const optionRegion = option.dataset.region;
-                if (!regionId || optionRegion === regionId) {
-                    option.style.display = 'block';
-                    option.hidden = false;
-                } else {
-                    option.style.display = 'none';
-                    option.hidden = true;
-                }
-            }
-        });
-    }
-    
-    // Initialize filter on page load
-    document.addEventListener('DOMContentLoaded', function() {
-        filterBranchesByRegion(false);
-    });
     
     function loadCameras() {
         const branchId = document.getElementById('branchFilter').value;

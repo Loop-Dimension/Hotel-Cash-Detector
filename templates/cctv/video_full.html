@@ -13,20 +13,11 @@
 <!-- Filters -->
 <div class="filters">
     <div class="filter-group">
-        <label>{{ t.select_region }}</label>
-        <select id="regionFilter" onchange="filterBranchesByRegion()">
-            <option value="">{{ t.all_regions }}</option>
-            {% for region in regions %}
-            <option value="{{ region.id }}">{{ region.name }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="filter-group">
         <label>{{ t.select_branch }}</label>
         <select id="branchFilter">
             <option value="">{{ t.all_branches }}</option>
             {% for branch in branches %}
-            <option value="{{ branch.id }}" data-region="{{ branch.region.id }}">{{ branch.name }}</option>
+            <option value="{{ branch.id }}">{{ branch.name }}</option>
             {% endfor %}
         </select>
     </div>
@@ -104,39 +95,11 @@
 
 {% block extra_js %}
 <script>
-    function filterBranchesByRegion() {
-        const regionId = document.getElementById('regionFilter').value;
-        const branchSelect = document.getElementById('branchFilter');
-        const options = branchSelect.querySelectorAll('option');
-        
-        // Reset branch selection
-        branchSelect.value = '';
-        
-        options.forEach(option => {
-            if (option.value === '') {
-                // Keep "All Branches" visible
-                option.style.display = 'block';
-                option.hidden = false;
-            } else {
-                const optionRegion = option.dataset.region;
-                if (!regionId || optionRegion === regionId) {
-                    option.style.display = 'block';
-                    option.hidden = false;
-                } else {
-                    option.style.display = 'none';
-                    option.hidden = true;
-                }
-            }
-        });
-    }
-    
     function applyFilters() {
-        const region = document.getElementById('regionFilter').value;
         const branch = document.getElementById('branchFilter').value;
         const date = document.getElementById('dateFilter').value;
         
         let params = new URLSearchParams();
-        if (region) params.append('region', region);
         if (branch) params.append('branch', branch);
         if (date) params.append('date', date);
         

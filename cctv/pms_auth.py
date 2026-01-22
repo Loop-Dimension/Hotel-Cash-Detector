@@ -105,10 +105,21 @@ class PMSAuthBackend(BaseBackend):
             if not isinstance(allowed_systems, list):
                 allowed_systems = []
             
-            # Get allowed regions
-            allowed_regions = pms_user.get("allowed_regions", [])
-            if not isinstance(allowed_regions, list):
-                allowed_regions = []
+            # Get user's projects from PMS
+            user_projects = pms_user.get("projects", [])
+            if not isinstance(user_projects, list):
+                user_projects = []
+            
+            # Extract project IDs
+            project_ids = []
+            for proj in user_projects:
+                if isinstance(proj, dict) and "id" in proj:
+                    project_ids.append(str(proj["id"]))
+            
+            # Also check for single project_id (for non-Team Leaders)
+            single_project_id = pms_user.get("project_id")
+            if single_project_id and single_project_id not in project_ids:
+                project_ids.append(str(single_project_id))
             
             # Check if user can access CCTV
             if "cctv" not in allowed_systems:
@@ -145,7 +156,14 @@ class PMSAuthBackend(BaseBackend):
                 request.session["pms_user_id"] = user_id
                 request.session["pms_role"] = pms_role
                 request.session["allowed_systems"] = [str(s) for s in allowed_systems]
-                request.session["allowed_regions"] = [str(r) for r in allowed_regions]
+                request.session["project_ids"] = project_ids  # Store project IDs instead of regions
+                
+                # Debug logging
+                print(f"[PMS AUTH] User {user_id} authenticated")
+                print(f"[PMS AUTH] Role: {pms_role}")
+                print(f"[PMS AUTH] Projects from PMS: {user_projects}")
+                print(f"[PMS AUTH] Single project_id: {single_project_id}")
+                print(f"[PMS AUTH] Final project_ids stored in session: {project_ids}")
             
             logger.info(f"User {username} authenticated via PMS with role {cctv_role}")
             return user
@@ -286,7 +304,17 @@ def pms_login_required(view_func):
             pms_role = user_info.get("role", "")
             request.session["pms_role"] = str(pms_role)
             request.session["allowed_systems"] = list(user_info.get("allowed_systems", []))
-            request.session["allowed_regions"] = list(user_info.get("allowed_regions", []))
+            
+            # Extract project IDs from PMS user info
+            project_ids = []
+            user_projects = user_info.get("projects", [])
+            for proj in user_projects:
+                if isinstance(proj, dict) and "id" in proj:
+                    project_ids.append(str(proj["id"]))
+            single_project_id = user_info.get("project_id")
+            if single_project_id and single_project_id not in project_ids:
+                project_ids.append(str(single_project_id))
+            request.session["project_ids"] = project_ids
             
             # Update local user role if changed
             cctv_role = get_cctv_role(pms_role)
@@ -299,48 +327,76 @@ def pms_login_required(view_func):
     return wrapper
 
 
-def get_user_allowed_regions(request):
+def get_user_project_ids(request):
     """
-    Get list of regions the current user can access.
-    Returns empty list for admin users (meaning all regions).
+    Get list of project IDs the current user can access.
+    Returns empty list for admin users (meaning all projects).
     """
     if not request.user.is_authenticated:
         return []
     
-    # Admin users can access all regions (empty list = all)
+    # Admin users can access all projects (empty list = all)
     if request.user.is_admin():
         return []
     
-    return request.session.get("allowed_regions", [])
+    return request.session.get("project_ids", [])
 
 
 def get_accessible_regions(request):
     """
-    Get Region objects that the current user can access.
-    Returns all regions for admin users.
+    DEPRECATED: Kept for backwards compatibility.
+    Returns empty queryset since regions are no longer used.
     """
     from cctv.models import Region
-    
-    allowed_region_codes = get_user_allowed_regions(request)
-    
-    # Empty list means admin - return all regions
-    if not allowed_region_codes:
-        return Region.objects.all()
-    
-    # Filter by region code
-    return Region.objects.filter(code__in=allowed_region_codes)
+    return Region.objects.none()
 
 
 def filter_branches_by_region(queryset, request):
     """
-    Filter Branch queryset by user's allowed regions.
+    DEPRECATED: Use filter_branches_by_project instead.
+    Kept for backwards compatibility - now filters by project.
+    """
+    return filter_branches_by_project(queryset, request)
+
+
+def filter_branches_by_project(queryset, request):
+    """
+    Filter Branch queryset by user's assigned projects.
     Admin users see all branches.
     """
-    allowed_regions = get_user_allowed_regions(request)
+    project_ids = get_user_project_ids(request)
+    
+    # Debug logging
+    print(f"[FILTER BRANCHES] User: {request.user.username if request.user.is_authenticated else 'Anonymous'}")
+    print(f"[FILTER BRANCHES] project_ids from session: {project_ids}")
+    print(f"[FILTER BRANCHES] Is admin: {request.user.is_admin() if request.user.is_authenticated else False}")
     
     # Empty list means admin - no filtering
-    if not allowed_regions:
+    if not project_ids:
+        total_count = queryset.count()
+        print(f"[FILTER BRANCHES] Admin user - returning all {total_count} branches")
         return queryset
     
-    # Filter by region code
-    return queryset.filter(region__code__in=allowed_regions)
+    # Convert project_ids to UUID objects for database comparison
+    from uuid import UUID
+    uuid_project_ids = []
+    for pid in project_ids:
+        try:
+            if isinstance(pid, str):
+                uuid_project_ids.append(UUID(pid))
+            elif isinstance(pid, UUID):
+                uuid_project_ids.append(pid)
+        except (ValueError, AttributeError):
+            print(f"[FILTER BRANCHES] WARNING: Invalid project_id: {pid}")
+    
+    # Filter by PMS project ID
+    filtered = queryset.filter(pms_project_id__in=uuid_project_ids)
+    print(f"[FILTER BRANCHES] Filtering by UUID project_ids: {uuid_project_ids}")
+    print(f"[FILTER BRANCHES] Filtered branches count: {filtered.count()}")
+    
+    # Debug: Show which branches exist in DB
+    from cctv.models import Branch
+    all_branches = Branch.objects.all().values_list('id', 'name', 'pms_project_id')
+    print(f"[FILTER BRANCHES] All branches in DB: {list(all_branches)}")
+    
+    return filtered

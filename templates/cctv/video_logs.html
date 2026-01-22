@@ -13,20 +13,11 @@
 <!-- Filters -->
 <div class="filters">
     <div class="filter-group">
-        <label>{{ t.select_region }}</label>
-        <select id="regionFilter" onchange="filterBranchesByRegion()">
-            <option value="">{{ t.all_regions }}</option>
-            {% for region in regions %}
-            <option value="{{ region.id }}" {% if filters.region == region.id|stringformat:"s" %}selected{% endif %}>{{ region.name }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="filter-group">
         <label>{{ t.select_branch }}</label>
         <select id="branchFilter">
             <option value="">{{ t.all_branches }}</option>
             {% for branch in branches %}
-            <option value="{{ branch.id }}" data-region="{{ branch.region.id }}" {% if filters.branch == branch.id|stringformat:"s" %}selected{% endif %}>{{ branch.name }}</option>
+            <option value="{{ branch.id }}" {% if filters.branch == branch.id|stringformat:"s" %}selected{% endif %}>{{ branch.name }}</option>
             {% endfor %}
         </select>
     </div>
@@ -49,7 +40,7 @@
         <input type="date" id="dateTo" value="{{ filters.date_to }}">
     </div>
     <button class="btn btn-secondary" onclick="applyFilters()">{{ t.apply_filter }}</button>
-    {% if filters.region or filters.branch or filters.type or filters.date_from or filters.date_to %}
+    {% if filters.branch or filters.type or filters.date_from or filters.date_to %}
     <button class="btn btn-outline" onclick="window.location.href='{% url 'cctv:video_logs' %}'">Clear</button>
     {% endif %}
 </div>
@@ -295,41 +286,13 @@
         }
     }
     
-    function filterBranchesByRegion() {
-        const regionId = document.getElementById('regionFilter').value;
-        const branchSelect = document.getElementById('branchFilter');
-        const options = branchSelect.querySelectorAll('option');
-        
-        // Reset branch selection
-        branchSelect.value = '';
-        
-        options.forEach(option => {
-            if (option.value === '') {
-                // Keep "All Branches" visible
-                option.style.display = 'block';
-                option.hidden = false;
-            } else {
-                const optionRegion = option.dataset.region;
-                if (!regionId || optionRegion === regionId) {
-                    option.style.display = 'block';
-                    option.hidden = false;
-                } else {
-                    option.style.display = 'none';
-                    option.hidden = true;
-                }
-            }
-        });
-    }
-    
     function applyFilters() {
-        const region = document.getElementById('regionFilter').value;
         const branch = document.getElementById('branchFilter').value;
         const eventType = document.getElementById('eventTypeFilter').value;
         const dateFrom = document.getElementById('dateFrom').value;
         const dateTo = document.getElementById('dateTo').value;
         
         let params = new URLSearchParams();
-        if (region) params.append('region', region);
         if (branch) params.append('branch', branch);
         if (eventType) params.append('type', eventType);
         if (dateFrom) params.append('from', dateFrom);

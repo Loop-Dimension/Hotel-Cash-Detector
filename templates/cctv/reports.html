@@ -39,20 +39,11 @@
         <input type="date" id="endDate">
     </div>
     <div class="filter-group">
-        <label>{{ t.select_region }}</label>
-        <select id="regionFilter" onchange="filterBranchesByRegion(); loadReportData()">
-            <option value="">{{ t.all_regions }}</option>
-            {% for region in regions %}
-            <option value="{{ region.id }}">{{ region.name }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="filter-group">
         <label>{{ t.select_branch }}</label>
         <select id="branchFilter" onchange="loadReportData()">
             <option value="">{{ t.all_branches }}</option>
             {% for branch in branches %}
-            <option value="{{ branch.id }}" data-region="{{ branch.region.id }}">{{ branch.name }}</option>
+            <option value="{{ branch.id }}">{{ branch.name }}</option>
             {% endfor %}
         </select>
     </div>
@@ -310,40 +301,12 @@
         }
     }
     
-    function filterBranchesByRegion() {
-        const regionId = document.getElementById('regionFilter').value;
-        const branchSelect = document.getElementById('branchFilter');
-        const options = branchSelect.querySelectorAll('option');
-        
-        // Reset branch selection
-        branchSelect.value = '';
-        
-        options.forEach(option => {
-            if (option.value === '') {
-                // Keep "All Branches" visible
-                option.style.display = 'block';
-                option.hidden = false;
-            } else {
-                const optionRegion = option.dataset.region;
-                if (!regionId || optionRegion === regionId) {
-                    option.style.display = 'block';
-                    option.hidden = false;
-                } else {
-                    option.style.display = 'none';
-                    option.hidden = true;
-                }
-            }
-        });
-    }
-    
     async function loadReportData() {
         const dateRange = document.getElementById('dateRange').value;
-        const regionId = document.getElementById('regionFilter').value;
         const branchId = document.getElementById('branchFilter').value;
         
         let params = new URLSearchParams();
         params.append('date_range', dateRange);
-        if (regionId) params.append('region_id', regionId);
         if (branchId) params.append('branch_id', branchId);
         
         if (dateRange === 'custom') {

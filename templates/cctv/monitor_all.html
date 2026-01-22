@@ -13,15 +13,6 @@
 <!-- Filters -->
 <div class="filters">
     <div class="filter-group">
-        <label>{{ t.select_region }}</label>
-        <select id="regionFilter" onchange="filterBranches()">
-            <option value="">{{ t.all_regions }}</option>
-            {% for region in regions %}
-            <option value="{{ region.id }}">{{ region.name }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="filter-group">
         <label>{{ t.search_placeholder }}</label>
         <input type="text" id="searchInput" placeholder="{{ t.search_placeholder }}" onkeyup="filterBranches()">
     </div>
@@ -30,7 +21,7 @@
 <!-- Monitor Grid -->
 <div class="monitor-grid" id="monitorGrid">
     {% for branch in branches %}
-    <div class="monitor-card" data-region="{{ branch.region.id }}" data-name="{{ branch.name|lower }}">
+    <div class="monitor-card" data-name="{{ branch.name|lower }}">
         <div class="monitor-header">
             <h3>{{ branch.name }}</h3>
             <span class="status-pill status-{{ branch.status }}">{{ branch.get_status_display }}</span>
@@ -51,7 +42,7 @@
             {% endif %}
         </div>
         <div class="monitor-footer">
-            <span class="viewer-meta">{{ branch.region.name }}</span>
+            <span class="viewer-meta">{{ branch.get_camera_count }} cameras</span>
             <a href="{% url 'cctv:monitor_local_branch' branch.id %}" class="btn btn-sm btn-ghost">{{ t.view_all }}</a>
         </div>
     </div>
@@ -142,18 +133,13 @@
     });
 
     function filterBranches() {
-        const regionId = document.getElementById('regionFilter').value;
         const searchText = document.getElementById('searchInput').value.toLowerCase();
         const cards = document.querySelectorAll('.monitor-card');
         
         cards.forEach(card => {
-            const cardRegion = card.dataset.region;
             const cardName = card.dataset.name;
-            
-            const matchRegion = !regionId || cardRegion === regionId;
             const matchSearch = !searchText || cardName.includes(searchText);
-            
-            card.style.display = (matchRegion && matchSearch) ? 'flex' : 'none';
+            card.style.display = matchSearch ? 'flex' : 'none';
         });
     }
 </script>

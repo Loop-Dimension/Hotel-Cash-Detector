@@ -47,7 +47,7 @@ class Region(models.Model):
 
 
 class Branch(models.Model):
-    """Hotel/Project branches"""
+    """Hotel/Project branches - synced from PMS projects"""
     STATUS_CHOICES = [
         ('confirmed', '확인완료'),
         ('reviewing', '확인중'),
@@ -55,7 +55,8 @@ class Branch(models.Model):
     ]
     
     name = models.CharField(max_length=100)
-    region = models.ForeignKey(Region, on_delete=models.CASCADE, related_name='branches')
+    # Region is now optional - kept for backwards compatibility but not used in UI
+    region = models.ForeignKey(Region, on_delete=models.SET_NULL, related_name='branches', null=True, blank=True)
     address = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -75,7 +76,7 @@ class Branch(models.Model):
         verbose_name_plural = 'Branches'
     
     def __str__(self):
-        return f"{self.name} ({self.region.name})"
+        return self.name
     
     def get_camera_count(self):
         return self.cameras.count()
