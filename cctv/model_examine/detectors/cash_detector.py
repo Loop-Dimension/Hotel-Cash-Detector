@@ -25,12 +25,14 @@ class CashDetector(BaseDetector):
     Track 2: cash
         - After hand touch, tracks cashier's hand
         - If hand enters cash drawer zone within tracking duration → cash event
-        - Cooldown-based (separate from Track 1)
 
     Track 3: cash_object
         - YOLO object detection model for direct cash detection
         - Triggers when cash object detected with confidence >= 0.7
-        - Cooldown-based (separate from Track 1 & 2)
+
+    SHARED COOLDOWN:
+        - When ANY cash event triggers, ALL tracks enter cooldown
+        - Prevents duplicate detections of the same transaction
     """
 
     # Model priority for pose detection (Track 1 & 2)
@@ -70,6 +72,11 @@ class CashDetector(BaseDetector):
         # Detection parameters
         self.hand_touch_distance = self.config.get('hand_touch_distance', 100)
         self.detection_mode = self.config.get('detection_mode', 'strict')
+
+        # ==================== SHARED COOLDOWN (all tracks) ====================
+        # When ANY cash event triggers, ALL tracks enter cooldown
+        self.last_any_cash_frame = -1800  # Global cooldown for all cash events
+        self.global_cash_cooldown = self.config.get('global_cash_cooldown', 300)  # 10s at 30fps
 
         # ==================== TRACK 1: potential_cash ====================
         self.last_potential_cash_frame = -1800
@@ -152,6 +159,23 @@ class CashDetector(BaseDetector):
         """Log message if logging enabled"""
         if self.enable_logs:
             print(message)
+
+    def _trigger_global_cooldown(self, track_name: str):
+        """
+        Trigger global cooldown for ALL cash detection tracks.
+
+        When any cash event is detected, all tracks enter cooldown to prevent
+        duplicate detections of the same transaction.
+        """
+        self.last_any_cash_frame = self.frame_count
+        self.last_potential_cash_frame = self.frame_count
+        self.last_transaction_frame = self.frame_count
+        self.last_cash_object_frame = self.frame_count
+        self._log(f"  [GlobalCooldown] All cash tracks cooldown triggered by {track_name}")
+
+    def _is_global_cooldown_active(self) -> bool:
+        """Check if global cooldown is active (any recent cash event)"""
+        return self.frame_count - self.last_any_cash_frame < self.global_cash_cooldown
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
         """
@@ -275,7 +299,11 @@ class CashDetector(BaseDetector):
 
             self.last_debug_detections = debug_detections
 
-            # Check cooldown for confirmed detection
+            # Check GLOBAL cooldown (any recent cash event blocks all tracks)
+            if self._is_global_cooldown_active():
+                return None
+
+            # Check track-specific cooldown for confirmed detection
             frames_since_last = self.frame_count - self.last_cash_object_frame
             if frames_since_last < self.cash_object_cooldown:
                 return None
@@ -311,7 +339,8 @@ class CashDetector(BaseDetector):
             )
             detection.event_type = 'cash_object'
 
-            self.last_cash_object_frame = self.frame_count
+            # Trigger GLOBAL cooldown (blocks all cash tracks)
+            self._trigger_global_cooldown('Track3-cash_object')
 
             return detection
 
@@ -408,7 +437,8 @@ class CashDetector(BaseDetector):
                     )
                     detection.event_type = 'cash'
 
-                    self.last_transaction_frame = self.frame_count
+                    # Trigger GLOBAL cooldown (blocks all cash tracks)
+                    self._trigger_global_cooldown('Track2-cash')
                     self._reset_tracking("Detection complete")
 
                     return detection
@@ -467,6 +497,10 @@ class CashDetector(BaseDetector):
 
         Returns Detection if cooldown passed, None otherwise
         """
+        # Check GLOBAL cooldown (any recent cash event blocks all tracks)
+        if self._is_global_cooldown_active():
+            return None
+
         frames_since_last = self.frame_count - self.last_potential_cash_frame
 
         if frames_since_last < self.potential_cash_cooldown:
@@ -505,7 +539,8 @@ class CashDetector(BaseDetector):
         )
         detection.event_type = 'potential_cash'
 
-        self.last_potential_cash_frame = self.frame_count
+        # Trigger GLOBAL cooldown (blocks all cash tracks)
+        self._trigger_global_cooldown('Track1-potential_cash')
 
         return detection
 
@@ -517,7 +552,7 @@ class CashDetector(BaseDetector):
         - In strict mode
         - Cash drawer zone defined
         - Not already tracking
-        - Cooldown passed
+        - Global cooldown passed
         """
         if self.detection_mode != 'strict':
             return
@@ -525,7 +560,8 @@ class CashDetector(BaseDetector):
             return
         if self.tracking_cashier_hands:
             return
-        if self.frame_count - self.last_transaction_frame <= self.transaction_cooldown:
+        # Check GLOBAL cooldown (any recent cash event blocks tracking start)
+        if self._is_global_cooldown_active():
             return
 
         self.pending_transaction = event
