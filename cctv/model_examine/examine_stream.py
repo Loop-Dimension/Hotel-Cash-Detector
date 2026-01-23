@@ -301,7 +301,11 @@ class ClipRecorder:
                 is_valid, confidence, reason, corrected = self.gemini_validator.validate_event_video(
                     str(video_path), event_type
                 )
-                if not is_valid:
+
+                # API 에러 시 파일명 변경 안함 (평가 실패)
+                if "API error" in reason or "error" in reason.lower():
+                    print(f"[Clip] Gemini API error, keeping original name: {reason}")
+                elif not is_valid:
                     fp_original = original_path.with_name(f"FP_{original_path.name}")
                     fp_overlay = overlay_path.with_name(f"FP_{overlay_path.name}")
                     original_path.rename(fp_original)
@@ -416,11 +420,11 @@ class ZoneConfigurator:
 def run_stream(source: str, zone_config: str = None, setup_zones: bool = False,
                output_dir: str = None, detect_cash: bool = True,
                detect_violence: bool = True, detect_fire: bool = True,
-               hand_distance: int = 100, cash_cooldown: float = None,
-               cash_predict_cooldown: float = None, violence_cooldown: float = None,
-               fire_cooldown: float = None, zone_profile: int = None,
-               gemini_api_key: str = None, gemini_enabled: bool = False,
-               gemini_source: str = "original"):
+               hand_distance: int = 100, global_cash_cooldown: float = None,
+               cash_cooldown: float = None, cash_predict_cooldown: float = None,
+               violence_cooldown: float = None, fire_cooldown: float = None,
+               zone_profile: int = None, gemini_api_key: str = None,
+               gemini_enabled: bool = False, gemini_source: str = "original"):
     """
     Main streaming function
 
@@ -529,10 +533,19 @@ def run_stream(source: str, zone_config: str = None, setup_zones: bool = False,
         'gemini_api_key': gemini_api_key,
         'gemini_validator': gemini_validator
     }
-    if cash_predict_cooldown is not None:
-        detector_config['potential_cash_cooldown'] = seconds_to_frames(cash_predict_cooldown)
-    if cash_cooldown is not None:
-        detector_config['transaction_cooldown'] = seconds_to_frames(cash_cooldown)
+    # Global cash cooldown (all tracks share this)
+    if global_cash_cooldown is not None:
+        detector_config['global_cash_cooldown'] = seconds_to_frames(global_cash_cooldown)
+        # Also set individual cooldowns to the same value for consistency
+        detector_config['potential_cash_cooldown'] = seconds_to_frames(global_cash_cooldown)
+        detector_config['transaction_cooldown'] = seconds_to_frames(global_cash_cooldown)
+        detector_config['cash_object_cooldown'] = seconds_to_frames(global_cash_cooldown)
+    else:
+        # Legacy: individual cooldowns (deprecated)
+        if cash_predict_cooldown is not None:
+            detector_config['potential_cash_cooldown'] = seconds_to_frames(cash_predict_cooldown)
+        if cash_cooldown is not None:
+            detector_config['transaction_cooldown'] = seconds_to_frames(cash_cooldown)
     if violence_cooldown is not None:
         detector_config['violence_cooldown'] = seconds_to_frames(violence_cooldown)
     if fire_cooldown is not None:
@@ -736,10 +749,12 @@ def main():
                         help='Output directory for clip recordings')
     parser.add_argument('--hand-distance', type=int, default=125,
                         help='Hand touch distance threshold (pixels)')
+    parser.add_argument('--global-cash-cooldown', type=float,
+                        help='Global cash cooldown seconds (all tracks share this)')
     parser.add_argument('--cash-cooldown', type=float,
-                        help='Cash cooldown seconds (track2)')
+                        help='(Deprecated) Use --global-cash-cooldown instead')
     parser.add_argument('--cash-predict-cooldown', type=float,
-                        help='Potential cash cooldown seconds (track1)')
+                        help='(Deprecated) Use --global-cash-cooldown instead')
     parser.add_argument('--violence-cooldown', type=float,
                         help='Violence cooldown seconds')
     parser.add_argument('--fire-cooldown', type=float,
@@ -782,6 +797,7 @@ def main():
         detect_violence=not args.no_violence,
         detect_fire=not args.no_fire,
         hand_distance=args.hand_distance,
+        global_cash_cooldown=args.global_cash_cooldown,
         cash_cooldown=args.cash_cooldown,
         cash_predict_cooldown=args.cash_predict_cooldown,
         violence_cooldown=args.violence_cooldown,

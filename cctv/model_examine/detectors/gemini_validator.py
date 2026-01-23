@@ -26,7 +26,7 @@ except Exception as e:
     types = None
     _GEMINI_AVAILABLE = False
     _GEMINI_IMPORT_ERROR = str(e)
-
+    
 
 # API key should be set via environment variable: GEMINI_API_KEY
 api_key = os.environ.get('GEMINI_API_KEY', '')
@@ -90,62 +90,46 @@ Versioning rule:
  - All subsequent bullets must describe factual visual observations only.
 
 =====================================================================
-POLICY 1) CASH_TRANSACTION (Action-Oriented & Relaxed Scoring)
+POLICY 1) CASH_TRANSACTION (Evidence-Based Scoring)
 =====================================================================
 
 Goal:
-Detect REAL CASH payment. Prioritize "Actions/Verbs" over "Visual Clarity." 
-RELAXED RULE: Do NOT require 100% clarity of the banknote. If the sequence of actions strongly suggests a cash exchange, classify as CASH_TRANSACTION.
+Detect REAL CASH payment by validating the sequence of (Customer Action -> Exchange -> Staff Action). 
 
-MANDATORY CONTEXT (STRICT):
- - The counter area is EXCLUSIVELY defined as a "Retail/Service Transaction Zone." 
- - ANY interaction involving a person standing (customer) and a person behind the counter (staff) must be analyzed as a potential payment. 
- - DO NOT classify these as "personal transactions." If a wallet is used at this counter, it is a TRANSACTION.
+STRICT CONTEXT:
+ - Distinguish between "Staff Idle/Personal Activity" and "Active Transaction".
+ - Personal devices (smartphones) or stationary objects (pens, calculators) must NOT be confused with cash.
+ - Cash is typically flexible, thin, and often involves "counting" or "folding" motions.
 
-policy_scores for CASH_TRANSACTION MUST be:
+Scoring Guidance:
 
-{
- "money_likelihood": 0-40,
- "hand_to_hand": 0-40,
- "safe_drawer": 0-40,
- "counting_wallet": 0-10,
- "gaze_context": 0-10,
- "card_like_penalty": -40-0,
- "total_score": 0-100
-}
+1. money_likelihood (0–40):
+ - 35–40: Clear paper-like flexibility. Multiple items being "counted" or "peeled" from a bundle/wallet.
+ - 20–34: Small, thin object extracted from wallet, but material is blurry.
+ - 5–19: Object is rigid, reflective, or handled like a electronic device (Deduct if it looks like a phone).
+ - 0: No object or clearly a large non-cash item.
 
-Scoring guidance (Action-Centric):
+2. hand_to_hand (0–40):
+ - 30–40: Clear "Give and Take" sequence. Customer places/hands -> Staff immediately grasps and moves to register.
+ - 10–29: Proximity of hands suggests exchange, but the object's transition is occluded.
+ - 0: No physical interaction between customer and staff.
 
-money_likelihood (0–40):
- - 35–40: Customer **EXTRACTS** or **PULLS** a small, thin object directly FROM a wallet/pocket. (Action itself = High Score).
- - 20–34: Customer **PINCHES** or **HANDLES** a small rectangular/folded item on the counter.
- - 10–19: Customer **OPENS** a wallet and **REACHES** inside in a picking/sorting motion.
- - 0–9: Clearly NOT cash (large bag, phone) OR no hand-to-counter motion.
+3. safe_drawer (0–40):
+ - 30–40: Staff interacts with an open cash drawer or inserts object into a specific cash-slot/till.
+ - 10–29: Staff moves hand toward the register/POS area immediately after receiving an object.
+ - 0: Staff puts object in pocket, on counter, or continues holding it while idling.
 
-hand_to_hand (0–40):
- - 30–40: Sequential motion: Customer **PLACES/HANDS** an object -> Cashier **COLLECTS/RECEIVES** it and moves it toward register.
- - 10–29: Exchange motion occurs at the counter, even if the object is blurry or partially occluded.
- - 0–9: No exchange OR card-like tapping motion.
+4. non_cash_penalty (-60 to 0):
+ - -40 to -60: Clear use of Smartphone (glowing screen, thumb-scrolling), Credit Card (rigid, swiping/inserting), or Tablet.
+ - -20 to -39: Object is handled with one hand for a long duration without passing it (likely personal item).
+ - 0: No clear evidence of non-cash items.
 
-counting_wallet (0–10):
- - 8–10: Visible **FLIPPING** or **SORTING** motion inside a wallet.
- - 0–7: Wallet present but no active sorting.
-
-safe_drawer (0–40):
- - 30–40: Clear register interaction (drawer open / reaching into cash slots).
- - 10–29: Hand moves toward register area or counter-top cash area after receiving object.
-
-card_like_penalty (-40 to 0):
- - -30 to -40: Clear **TAPPING** (NFC/Card) or QR scanning motion.
- - 0: No card-like evidence; object is flexible or placed flat.
-
-Decision:
- If total_score >= 45 AND (money_likelihood >= 20 OR hand_to_hand >= 25) -> CASH_TRANSACTION
- Otherwise -> NONE
-
-ADDITIONAL SOFT RULES (CASH_TRANSACTION):
- - If a person takes a small object out of a wallet at the counter, it MUST score at least 25 in money_likelihood regardless of bill clarity.
- - reason_bullets MUST describe the specific action (e.g., "extracted from wallet", "placed on counter").
+Decision Logic:
+ total_score = money_likelihood + hand_to_hand + safe_drawer + counting_wallet + gaze_context + non_cash_penalty
+ 
+ IF total_score >= 60 AND (money_likelihood >= 25 AND hand_to_hand >= 20) -> CASH_TRANSACTION
+ ELSE IF total_score >= 50 AND safe_drawer >= 30 -> CASH_TRANSACTION
+ OTHERWISE -> NONE
 
 =====================================================================
 POLICY 2) THREAT_TO_CASHIER
