@@ -1,0 +1,28 @@
+# Model Examine Requirements
+# Generated from .venv environment
+
+# Core ML
+torch==2.9.1
+torchvision==0.24.1
+ultralytics==8.4.7
+ultralytics-thop==2.0.18
+
+# Computer Vision
+opencv-python==4.13.0.90
+pillow==12.1.0
+
+# Data Processing
+numpy==2.4.1
+scipy==1.17.0
+polars==1.37.1
+
+# Visualization
+matplotlib==3.10.8
+
+# Utilities
+requests==2.32.5
+PyYAML==6.0.3
+psutil==7.2.1
+
+# Google Gemini (optional - for GeminiValidator)
+google-genai>=1.0.0
