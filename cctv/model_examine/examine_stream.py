@@ -53,7 +53,7 @@ class ClipRecorder:
         self,
         output_dir: str,
         stream_fps: float,
-        buffer_stride: int = 2,
+        buffer_stride: int = 4,  # 4프레임마다 1개 저장 (30fps → 7.5fps)
         pre_buffer_sec: float = 6.0,
         post_buffer_sec: float = 6.0,
         gemini_validator=None,
@@ -71,12 +71,12 @@ class ClipRecorder:
         self.gemini_source = gemini_source
 
         # Frame queue for background processing (main thread just enqueues)
-        self._frame_queue = deque(maxlen=500)  # ~16s at 30fps
+        self._frame_queue = deque(maxlen=300)  # ~40s at 7.5fps (stride=4)
         self._frame_queue_lock = threading.Lock()
 
         # Buffer built by background thread
         pre_buffer_frames = int(round(self.pre_buffer_sec * self.buffer_fps))
-        self._buffer_original = deque(maxlen=max(1, pre_buffer_frames))
+        # Store overlay frames only to reduce memory usage
         self._buffer_overlay = deque(maxlen=max(1, pre_buffer_frames))
         self._buffer_lock = threading.Lock()
 
@@ -106,14 +106,22 @@ class ClipRecorder:
         if self._save_thread and self._save_thread.is_alive():
             self._save_thread.join(timeout=5)
 
-    def add_frame(self, original_frame: np.ndarray, overlay_frame: np.ndarray, frame_count: int):
-        """Enqueue frame for background processing (non-blocking)."""
+    def add_frame(self, overlay_frame: np.ndarray, frame_count: int):
+        """Enqueue frame for background processing (non-blocking).
+
+        IMPORTANT: Makes an immediate copy to prevent race condition.
+        The main thread may overwrite the original numpy array before
+        the worker thread processes it.
+        """
         if frame_count % self.buffer_stride != 0:
             return
 
-        # Just enqueue - no copy here, frame_worker will copy
+        # CRITICAL: Copy immediately to prevent race condition
+        # Without this, the main thread may overwrite the frame before worker copies it
+        frame_copy = overlay_frame.copy()
+
         with self._frame_queue_lock:
-            self._frame_queue.append((original_frame, overlay_frame, frame_count))
+            self._frame_queue.append((frame_copy, frame_count))
 
     def trigger_event(self, detection: Detection):
         """Queue event trigger for background processing (non-blocking)."""
@@ -137,23 +145,18 @@ class ClipRecorder:
                 time.sleep(0.005)  # 5ms sleep if no frames
                 continue
 
-            original_frame, overlay_frame, _ = frame_data
+            # Frame is already copied in add_frame() - no need to copy again
+            overlay_frame, _ = frame_data
 
-            # Make copies in background thread
-            orig_copy = original_frame.copy()
-            overlay_copy = overlay_frame.copy()
-
-            # Add to pre-buffer
+            # Add to pre-buffer (frame already copied, safe to use directly)
             with self._buffer_lock:
-                self._buffer_original.append(orig_copy)
-                self._buffer_overlay.append(overlay_copy)
+                self._buffer_overlay.append(overlay_frame)
 
             # Add to post-buffers of pending events
             with self._pending_lock:
                 for event in self._pending_events:
                     if event.get('collecting_post', False):
-                        event['post_orig'].append(orig_copy)
-                        event['post_overlay'].append(overlay_copy)
+                        event['post_overlay'].append(overlay_frame)
 
     def _process_triggers(self):
         """Process queued event triggers."""
@@ -179,16 +182,13 @@ class ClipRecorder:
 
                 # Snapshot pre-buffer
                 with self._buffer_lock:
-                    pre_orig = list(self._buffer_original)
                     pre_overlay = list(self._buffer_overlay)
 
                 post_frames_needed = int(round(self.post_buffer_sec * self.buffer_fps))
 
                 self._pending_events.append({
                     'detection': detection,
-                    'pre_orig': pre_orig,
                     'pre_overlay': pre_overlay,
-                    'post_orig': [],
                     'post_overlay': [],
                     'post_frames_needed': post_frames_needed,
                     'trigger_time': trigger_time,
@@ -205,7 +205,7 @@ class ClipRecorder:
                 # Find an event that has finished collecting post-buffer
                 for i, event in enumerate(self._pending_events):
                     if event.get('collecting_post', False):
-                        post_collected = len(event['post_orig'])
+                        post_collected = len(event['post_overlay'])
                         post_needed = event.get('post_frames_needed', 0)
                         if post_collected >= post_needed:
                             # Ready to save
@@ -218,18 +218,17 @@ class ClipRecorder:
                 continue
 
             # Combine pre-buffer + post-buffer
-            original_frames = ready_event['pre_orig'] + ready_event['post_orig'][:ready_event['post_frames_needed']]
             overlay_frames = ready_event['pre_overlay'] + ready_event['post_overlay'][:ready_event['post_frames_needed']]
 
             # Validate frames
-            valid_frames = [f for f in original_frames if f is not None and f.size > 0]
+            valid_frames = [f for f in overlay_frames if f is not None and f.size > 0]
             min_frames = int(round((self.pre_buffer_sec + self.post_buffer_sec) * self.buffer_fps * 0.5))  # At least 50% of expected
             if len(valid_frames) < min_frames:
                 print(f"[Clip] Not enough valid frames ({len(valid_frames)}/{min_frames}), skipping")
                 continue
 
             try:
-                self._save_clip_sync(ready_event['detection'], original_frames, overlay_frames)
+                self._save_clip_sync(ready_event['detection'], overlay_frames)
             except Exception as e:
                 print(f"[Clip] Save error: {e}")
 
@@ -269,24 +268,20 @@ class ClipRecorder:
         temp_path.unlink(missing_ok=True)
 
     def _save_clip_sync(self, detection: Detection,
-                        original_frames: List[np.ndarray],
                         overlay_frames: List[np.ndarray]):
         """Save clip to file (runs in background thread)"""
-        if not original_frames:
+        if not overlay_frames:
             print(f"[Clip] No frames to save")
             return
 
         timestamp = detection.timestamp.strftime('%Y%m%d_%H%M%S')
         event_type = detection.event_type or detection.label.lower()
         base_name = f"{timestamp}_{event_type}"
-        original_path = self.output_dir / f"{base_name}_orig.mp4"
         overlay_path = self.output_dir / f"{base_name}_overlay.mp4"
 
         try:
-            self._write_video(original_frames, original_path, self.buffer_fps, detection)
-            overlay_frames = overlay_frames or original_frames
             self._write_video(overlay_frames, overlay_path, self.buffer_fps, detection)
-            print(f"[Clip] Saved: {original_path.name}, {overlay_path.name} ({len(original_frames)} frames)")
+            print(f"[Clip] Saved: {overlay_path.name} ({len(overlay_frames)} frames)")
         except subprocess.TimeoutExpired:
             print(f"[Clip] FFmpeg timeout, keeping AVI")
         except Exception as e:
@@ -295,9 +290,7 @@ class ClipRecorder:
 
         if self.gemini_validator:
             try:
-                video_path = original_path
-                if self.gemini_source == "overlay":
-                    video_path = overlay_path
+                video_path = overlay_path
                 is_valid, confidence, reason, corrected = self.gemini_validator.validate_event_video(
                     str(video_path), event_type
                 )
@@ -306,15 +299,11 @@ class ClipRecorder:
                 if "API error" in reason or "error" in reason.lower():
                     print(f"[Clip] Gemini API error, keeping original name: {reason}")
                 elif not is_valid:
-                    fp_original = original_path.with_name(f"FP_{original_path.name}")
                     fp_overlay = overlay_path.with_name(f"FP_{overlay_path.name}")
-                    original_path.rename(fp_original)
                     overlay_path.rename(fp_overlay)
                     print(f"[Clip] Gemini rejected: renamed to FP_ (conf={confidence:.2f}) {reason}")
                 else:
-                    tp_original = original_path.with_name(f"TP_{original_path.name}")
                     tp_overlay = overlay_path.with_name(f"TP_{overlay_path.name}")
-                    original_path.rename(tp_original)
                     overlay_path.rename(tp_overlay)
                     print(f"[Clip] Gemini accepted: renamed to TP_ (conf={confidence:.2f}) {reason}")
             except Exception as e:
@@ -652,8 +641,9 @@ def run_stream(source: str, zone_config: str = None, setup_zones: bool = False,
             overlay_display = detector.draw_overlay(frame.copy(), detections)
 
             # Add to rolling buffer FIRST (before adding display labels)
+            # Only saves overlay frames (not original) to reduce memory usage
             if clip_recorder:
-                clip_recorder.add_frame(frame, overlay_display, frame_count)
+                clip_recorder.add_frame(overlay_display, frame_count)
 
             # Now add display labels (these won't be in the saved clips)
             cv2.putText(frame, "Original", (10, 30),

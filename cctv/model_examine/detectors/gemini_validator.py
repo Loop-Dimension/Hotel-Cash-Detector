@@ -31,7 +31,6 @@ except Exception as e:
 # API key should be set via environment variable: GEMINI_API_KEY
 api_key = os.environ.get('GEMINI_API_KEY', '')
 
-
 # ============================================================================
 # GLOBAL UNIFIED PROMPT (SOFT SCORING: CASH != CARD)
 # ============================================================================
