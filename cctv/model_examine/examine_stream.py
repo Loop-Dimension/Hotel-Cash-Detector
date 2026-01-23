@@ -306,9 +306,13 @@ class ClipRecorder:
                     fp_overlay = overlay_path.with_name(f"FP_{overlay_path.name}")
                     original_path.rename(fp_original)
                     overlay_path.rename(fp_overlay)
-                    print(f"[Clip] Gemini rejected: renamed to FP_ (conf={confidence:.2f})")
+                    print(f"[Clip] Gemini rejected: renamed to FP_ (conf={confidence:.2f}) {reason}")
                 else:
-                    print(f"[Clip] Gemini accepted: {event_type} (conf={confidence:.2f})")
+                    tp_original = original_path.with_name(f"TP_{original_path.name}")
+                    tp_overlay = overlay_path.with_name(f"TP_{overlay_path.name}")
+                    original_path.rename(tp_original)
+                    overlay_path.rename(tp_overlay)
+                    print(f"[Clip] Gemini accepted: renamed to TP_ (conf={confidence:.2f}) {reason}")
             except Exception as e:
                 print(f"[Clip] Gemini validation error: {e}")
 
