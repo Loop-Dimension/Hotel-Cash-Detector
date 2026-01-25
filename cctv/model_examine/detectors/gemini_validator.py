@@ -89,46 +89,170 @@ Versioning rule:
  - All subsequent bullets must describe factual visual observations only.
 
 =====================================================================
-POLICY 1) CASH_TRANSACTION (Evidence-Based Scoring)
+POLICY 1) CASH_TRANSACTION (Hard-Gate + Soft-Score Hybrid)
 =====================================================================
 
 Goal:
-Detect REAL CASH payment by validating the sequence of (Customer Action -> Exchange -> Staff Action). 
+Validate REAL CASH payment ONLY when mandatory visual evidence (HARD RULES)
+is satisfied, plus sufficient supporting evidence (SOFT RULES).
+When uncertain, choose NONE.
 
-STRICT CONTEXT:
- - Distinguish between "Staff Idle/Personal Activity" and "Active Transaction".
- - Personal devices (smartphones) or stationary objects (pens, calculators) must NOT be confused with cash.
- - Cash is typically flexible, thin, and often involves "counting" or "folding" motions.
+Strict context:
+- CASH means physical paper currency (not receipts/coupons/tickets).
+- Thin paper alone is NOT cash (receipts are also thin paper).
+- Hand proximity alone is NOT exchange.
+- Staff moving toward POS alone is NOT proof.
+- Unknown objects must be handled conservatively.
+- If you need speculative words ("appears", "likely", "consistent with", "suggests", "seems"),
+  then evidence is insufficient → choose NONE.
 
-Scoring Guidance:
+Upstream cash-like types (for decision mapping):
+- Treat these as "cash-like upstream": cash, cash_object, potential_cash
 
-1. money_likelihood (0–40):
- - 35–40: Clear paper-like flexibility. Multiple items being "counted" or "peeled" from a bundle/wallet.
- - 20–34: Small, thin object extracted from wallet, but material is blurry.
- - 5–19: Object is rigid, reflective, or handled like a electronic device (Deduct if it looks like a phone).
- - 0: No object or clearly a large non-cash item.
+A) HARD RULES (ALL MUST PASS)
 
-2. hand_to_hand (0–40):
- - 30–40: Clear "Give and Take" sequence. Customer places/hands -> Staff immediately grasps and moves to register.
- - 10–29: Proximity of hands suggests exchange, but the object's transition is occluded.
- - 0: No physical interaction between customer and staff.
+H1. CASH_VISUAL_CONFIRM (mandatory)
+PASS only if at least ONE cash-specific visual trait is clearly visible:
+- Visible banknote-like printing/color/pattern (not a plain white slip)
+OR
+- Multiple bills are clearly separated (more than one distinct paper bill)
+OR
+- Multiple bills are clearly counted/peeled (customer or staff)
 
-3. safe_drawer (0–40):
- - 30–40: Staff interacts with an open cash drawer or inserts object into a specific cash-slot/till.
- - 10–29: Staff moves hand toward the register/POS area immediately after receiving an object.
- - 0: Staff puts object in pocket, on counter, or continues holding it while idling.
+FAIL if:
+- Object looks like a plain white slip (receipt/coupon/ticket) with no visible banknote printing/color/features
+- Object is rigid/reflective like a card/device
+- Object emits light or resembles a smartphone screen
+- Object remains ambiguous with no cash-specific traits
 
-4. non_cash_penalty (-60 to 0):
- - -40 to -60: Clear use of Smartphone (glowing screen, thumb-scrolling), Credit Card (rigid, swiping/inserting), or Tablet.
- - -20 to -39: Object is handled with one hand for a long duration without passing it (likely personal item).
- - 0: No clear evidence of non-cash items.
+H2. OWNERSHIP_TRANSFER + PAYMENT_DIRECTION (mandatory)
+PASS only if ALL are visible:
+- Object is clearly visible in CUSTOMER's hand before transfer
+- After hands separate, the object is clearly visible in STAFF's hand (not just during overlap)
+- No “teleport”: object does not vanish and reappear without continuity
+FAIL if:
+- Staff→Customer-only transfer (receipt/change return) is the only confirmed direction
+- Ownership is unclear due to occlusion
+- Object is never clearly visible in staff possession after separation
 
-Decision Logic:
- total_score = money_likelihood + hand_to_hand + safe_drawer + counting_wallet + gaze_context + non_cash_penalty
- 
- IF total_score >= 60 AND (money_likelihood >= 25 AND hand_to_hand >= 20) -> CASH_TRANSACTION
- ELSE IF total_score >= 50 AND safe_drawer >= 30 -> CASH_TRANSACTION
- OTHERWISE -> NONE
+H3. ACTIVE_TRANSACTION_CONTEXT (mandatory)
+PASS only if transaction context is visible:
+- Customer and staff are engaged at the counter/register area
+- Staff behavior is consistent with active service (not idle/personal activity)
+FAIL if:
+- Staff appears idle or using personal items without transaction context
+- No register/counter service context is visible
+
+B) SOFT RULES (EVIDENCE AFTER HARD RULES PASS)
+
+Soft rules are supporting evidence only.
+Soft rules NEVER override hard-rule failure.
+
+Define STRONG vs WEAK soft rules:
+
+STRONG soft rules (at least 1 STRONG is REQUIRED to validate):
+S_STRONG_1. SAFE_DRAWER_OPEN_OR_INSERT
+- Cash drawer is visibly open OR object is inserted into a cash slot/till
+
+S_STRONG_2. STAFF_COUNTS_OR_ALIGNS_MULTIPLE_BILLS
+- Staff clearly counts/peels/aligns MULTIPLE paper bills (more than one)
+
+S_STRONG_3. CHANGE_GIVEN_BACK
+- Staff visibly gives paper bills/coins back to the customer as change
+
+WEAK soft rules:
+S_WEAK_1. CLEAR_GIVE_TAKE_VISIBILITY
+- The handover moment is clearly visible (not heavily occluded)
+
+S_WEAK_2. CUSTOMER_DEPARTS_AFTER
+- Customer turns away/leaves immediately after the exchange
+
+S_WEAK_3. GAZE_ON_OBJECT
+- Both parties’ gaze is visibly directed toward the object during exchange
+
+C) SCORE REPORTING (OUTPUT COMPATIBILITY)
+
+Keep the existing score keys:
+policy_scores = {
+  "money_likelihood": 0-40,
+  "hand_to_hand": 0-40,
+  "safe_drawer": 0-40,
+  "non_cash_penalty": -60..0,
+  "total_score": (sum)
+}
+
+Important:
+- These scores are for reporting/confidence only.
+- Do NOT decide validity using total_score thresholds.
+- STRONG evidence MUST map to at least one score reaching 40 (see below).
+  If you cannot justify a 40 score from visible STRONG evidence, you MUST output NONE.
+
+Score mapping (discrete and enforceable):
+
+money_likelihood:
+- 0 if H1 fails
+- 25 if H1 passes with visible banknote-like printing/color but single bill only
+- 40 if S_STRONG_2 passes (multiple bills counted/peeled/aligned by staff)
+
+hand_to_hand:
+- 0 if H2 fails
+- 35 if customer→staff transfer is clearly visible with continuity after separation
+- 40 if S_STRONG_3 passes (change visibly given back)
+
+safe_drawer:
+- 0 if S_STRONG_1 does NOT pass
+- 40 if S_STRONG_1 passes (drawer open/insert visible)
+
+NON-CASH penalty (apply conservatively):
+- non_cash_penalty = -60 if a smartphone/card/tablet is clearly visible as the exchanged object
+- non_cash_penalty = -20 if a thin object is present but looks like a plain white slip with no banknote features
+- non_cash_penalty = 0 otherwise
+
+total_score =
+  money_likelihood + hand_to_hand + safe_drawer + non_cash_penalty
+
+D) FINAL DECISION (HARD-GATE + STRONG REQUIRED)
+
+If ANY HARD RULE fails:
+- Choose NONE (do not validate cash)
+
+If ALL HARD RULES pass:
+- Validate CASH_TRANSACTION ONLY if:
+  (at least 1 STRONG soft rule passes)
+  AND
+  (total soft rules passed >= 2, counting STRONG+WEAK)
+
+ABSOLUTE ENFORCEMENT (NO EXCEPTIONS):
+- If S_STRONG_1, S_STRONG_2, and S_STRONG_3 all FAIL → MUST output NONE.
+- If is_valid_event=true, then at least one of these MUST be true:
+  safe_drawer==40 OR money_likelihood==40 OR hand_to_hand==40
+  If none are 40 → MUST output NONE.
+
+E) OUTPUT FIELD MAPPING (KEEP GLOBAL SCHEMA)
+
+If validated CASH_TRANSACTION:
+- event_policy = CASH_TRANSACTION
+- event_type_detected = cash
+- is_valid_event = true
+- decision = TRUE_POSITIVE
+- severity_label = low
+- confidence: higher only when STRONG evidence is clearly visible
+
+If NOT validated:
+- event_policy = NONE
+- event_type_detected = none
+- is_valid_event = false
+- severity_label = none
+- decision:
+  - FALSE_POSITIVE if upstream detection_type is cash-like (cash/cash_object/potential_cash)
+  - NOT_APPLICABLE otherwise
+- confidence: low
+
+F) reason_bullets formatting (must remain factual)
+- Each bullet must describe a concrete visible fact.
+- Do NOT use speculative language ("appears", "likely", "consistent with", "suggests", "seems").
+- If CASH_TRANSACTION is validated, at least one bullet MUST describe the STRONG evidence as a factual observation:
+  (e.g., "The cash drawer is visibly open." / "Multiple bills are visibly counted." / "Coins/bills are visibly handed back as change.")
 
 =====================================================================
 POLICY 2) THREAT_TO_CASHIER
