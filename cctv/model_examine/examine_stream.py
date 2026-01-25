@@ -106,7 +106,7 @@ class ClipRecorder:
         if self._save_thread and self._save_thread.is_alive():
             self._save_thread.join(timeout=5)
 
-    def add_frame(self, overlay_frame: np.ndarray, frame_count: int):
+    def add_frame(self, frame: np.ndarray, frame_count: int):
         """Enqueue frame for background processing (non-blocking).
 
         IMPORTANT: Makes an immediate copy to prevent race condition.
@@ -118,7 +118,7 @@ class ClipRecorder:
 
         # CRITICAL: Copy immediately to prevent race condition
         # Without this, the main thread may overwrite the frame before worker copies it
-        frame_copy = overlay_frame.copy()
+        frame_copy = frame.copy()
 
         with self._frame_queue_lock:
             self._frame_queue.append((frame_copy, frame_count))
@@ -146,17 +146,17 @@ class ClipRecorder:
                 continue
 
             # Frame is already copied in add_frame() - no need to copy again
-            overlay_frame, _ = frame_data
+            frame, _ = frame_data
 
             # Add to pre-buffer (frame already copied, safe to use directly)
             with self._buffer_lock:
-                self._buffer_overlay.append(overlay_frame)
+                self._buffer_overlay.append(frame)
 
             # Add to post-buffers of pending events
             with self._pending_lock:
                 for event in self._pending_events:
                     if event.get('collecting_post', False):
-                        event['post_overlay'].append(overlay_frame)
+                        event['post_overlay'].append(frame)
 
     def _process_triggers(self):
         """Process queued event triggers."""
@@ -436,11 +436,14 @@ def run_stream(source: str, zone_config: str = None, setup_zones: bool = False,
     # Open video source
     is_live_stream = source.startswith('rtsp://') or source.startswith('http://')
     if is_live_stream:
-        # Use TCP for more reliable RTSP streaming
-        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
+        # RTSP options for low latency streaming:
+        # - rtsp_transport;tcp: Use TCP for reliable delivery
+        # - fflags;nobuffer: Reduce buffering
+        # - flags;low_delay: Minimize latency
+        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|fflags;nobuffer|flags;low_delay'
         cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
-        # Buffer size 3: balance between latency and stability
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+        # Buffer size 2: balance between latency and stability
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
     else:
         cap = cv2.VideoCapture(source)
 
@@ -590,6 +593,10 @@ def run_stream(source: str, zone_config: str = None, setup_zones: bool = False,
 
     while running:
         if not paused:
+            # Flush RTSP buffer to get the latest frame (prevent lag/teleporting)
+            # grab() discards 1 frame, keeping buffer at 1 (out of 2 max)
+            if is_live_stream:
+                cap.grab()  # Discard 1 buffered frame
             ret, frame = cap.read()
             if not ret:
                 if is_live_stream:
@@ -601,7 +608,7 @@ def run_stream(source: str, zone_config: str = None, setup_zones: bool = False,
                     cap.release()
                     time.sleep(1)
                     cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
                     continue
                 else:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -637,13 +644,18 @@ def run_stream(source: str, zone_config: str = None, setup_zones: bool = False,
                             except Exception as e:
                                 print(f"[Gemini] Video validation error: {e}")
 
-            # Create overlay for detection display
+            # Create full overlay for display
             overlay_display = detector.draw_overlay(frame.copy(), detections)
 
             # Add to rolling buffer FIRST (before adding display labels)
-            # Only saves overlay frames (not original) to reduce memory usage
+            # Save overlay frames (zones + hands only) for clips/Gemini
             if clip_recorder:
-                clip_recorder.add_frame(overlay_display, frame_count)
+                overlay_clip = detector.draw_overlay(
+                    frame.copy(),
+                    detections,
+                    overlay_mode="minimal"
+                )
+                clip_recorder.add_frame(overlay_clip, frame_count)
 
             # Now add display labels (these won't be in the saved clips)
             cv2.putText(frame, "Original", (10, 30),
