@@ -222,13 +222,15 @@ class UnifiedDetector:
 
         return detections
 
-    def draw_overlay(self, frame: np.ndarray, detections: List[Detection] = None) -> np.ndarray:
+    def draw_overlay(self, frame: np.ndarray, detections: List[Detection] = None,
+                     overlay_mode: str = "full") -> np.ndarray:
         """
         Draw detection overlay on frame
 
         Args:
             frame: Input frame
             detections: Optional list of detections to draw
+            overlay_mode: "full" or "minimal"
 
         Returns:
             Frame with overlay drawn
@@ -242,9 +244,10 @@ class UnifiedDetector:
             cv2.fillPoly(temp, [pts], (255, 200, 0))
             cv2.addWeighted(temp, 0.15, overlay, 0.85, 0, overlay)
             cv2.polylines(overlay, [pts], True, (255, 200, 0), 2)
-            zx, zy = self.cashier_zone[0]
-            cv2.putText(overlay, "Cashier Zone", (int(zx), int(zy) - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 0), 2)
+            if overlay_mode != "minimal":
+                zx, zy = self.cashier_zone[0]
+                cv2.putText(overlay, "Cashier Zone", (int(zx), int(zy) - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 0), 2)
 
         # Draw Cash Drawer Zone
         if self.cash_drawer_zone and len(self.cash_drawer_zone) >= 3:
@@ -253,15 +256,19 @@ class UnifiedDetector:
             cv2.fillPoly(temp, [pts], (0, 255, 0))
             cv2.addWeighted(temp, 0.2, overlay, 0.8, 0, overlay)
             cv2.polylines(overlay, [pts], True, (0, 255, 0), 2)
-            dx, dy = self.cash_drawer_zone[0]
-            cv2.putText(overlay, "Cash Drawer", (int(dx), int(dy) - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            if overlay_mode != "minimal":
+                dx, dy = self.cash_drawer_zone[0]
+                cv2.putText(overlay, "Cash Drawer", (int(dx), int(dy) - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Draw skeleton and people
-        self._draw_skeletons(overlay)
+        if overlay_mode != "minimal":
+            self._draw_skeletons(overlay)
+        else:
+            self._draw_hand_positions(overlay)
 
         # Draw tracking status
-        if self.cash_detector:
+        if overlay_mode != "minimal" and self.cash_detector:
             status = self.cash_detector.get_tracking_status()
             if status['tracking']:
                 text = f"Track2: {status['frames_since_touch']}/{status['max_frames']}"
@@ -269,7 +276,7 @@ class UnifiedDetector:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
         # Draw detections
-        if detections:
+        if overlay_mode != "minimal" and detections:
             colors = {
                 'CASH': (0, 255, 255),      # Yellow
                 'VIOLENCE': (0, 0, 255),     # Red
@@ -297,7 +304,7 @@ class UnifiedDetector:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
 
         # Draw low-confidence cash object candidates (debug overlay)
-        if self.cash_detector:
+        if overlay_mode != "minimal" and self.cash_detector:
             debug_dets = self.cash_detector.get_debug_detections()
             if debug_dets:
                 threshold = getattr(self.cash_detector, 'cash_object_confidence', 0.7)
@@ -383,6 +390,23 @@ class UnifiedDetector:
                 hx, hy = int(hand_pos[0]), int(hand_pos[1])
                 hand_label = "L" if hand_name == 'left' else "R"
                 cv2.putText(overlay, hand_label, (hx + 12, hy + 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
+    def _draw_hand_positions(self, overlay: np.ndarray):
+        """Draw hand positions only (no skeletons/bboxes)."""
+        if not self._last_people:
+            return
+
+        HAND_COLOR = (0, 255, 0)  # Green for hands (BGR)
+
+        for person in self._last_people:
+            hands = person.get('hands', {})
+            for hand_name, hand_pos in hands.items():
+                hx, hy = int(hand_pos[0]), int(hand_pos[1])
+                cv2.circle(overlay, (hx, hy), 6, HAND_COLOR, -1)
+                cv2.circle(overlay, (hx, hy), 8, (255, 255, 255), 1)
+                hand_label = "L" if hand_name == 'left' else "R"
+                cv2.putText(overlay, hand_label, (hx + 10, hy + 4),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
 
     def get_status(self) -> Dict:
