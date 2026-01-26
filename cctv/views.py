@@ -443,10 +443,10 @@ def gemini_logs_page(request):
 
 @require_http_methods(["GET", "POST"])
 def api_branches(request):
-    """API for branches - Public access"""
-    # For public access, show all branches
+    """API for branches - Filter by user permissions"""
+    # Get branches accessible by user (respects PMS project filtering)
     if request.method == 'GET':
-        branches = Branch.objects.all().select_related('region')
+        branches = get_user_branches(request.user, request).select_related('region')
         data = [{
             'id': b.id,
             'name': b.name,
@@ -586,10 +586,11 @@ def api_branch_cameras(request, branch_id):
 
 @require_http_methods(["GET", "POST"])
 def api_cameras(request):
-    """API for all cameras - Public access"""
-    # For public access, show all cameras
+    """API for cameras - Filter by user permissions"""
     if request.method == 'GET':
-        cameras = Camera.objects.all().select_related('branch')
+        # Get user's accessible branches
+        user_branches = get_user_branches(request.user, request)
+        cameras = Camera.objects.filter(branch__in=user_branches).select_related('branch')
         
         # Get the full URL for video feeds
         scheme = 'https' if request.is_secure() else 'http'
@@ -725,8 +726,7 @@ def api_camera_detail(request, camera_id):
 
 
 def api_events(request):
-    """API for events - Public access"""
-    # For public access, show all events
+    """API for events - Filter by user permissions"""
     # Get filter parameters
     date_filter = request.GET.get('date')
     region_filter = request.GET.get('region')
@@ -735,7 +735,9 @@ def api_events(request):
     branch_id_filter = request.GET.get('branch_id')
     limit = int(request.GET.get('limit', 50))
     
-    events = Event.objects.all().select_related('branch', 'camera', 'branch__region')
+    # Filter events by user's accessible branches
+    user_branches = get_user_branches(request.user, request)
+    events = Event.objects.filter(branch__in=user_branches).select_related('branch', 'camera', 'branch__region')
     
     if date_filter:
         events = events.filter(created_at__date=date_filter)
