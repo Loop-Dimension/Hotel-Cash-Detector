@@ -1341,15 +1341,33 @@ def api_branch_accounts(request, branch_id):
 # ==================== VIDEO STREAMING ====================
 
 def get_detector_for_camera(camera):
-    """Get or create detector for a camera with camera-specific settings"""
+    """Get or create detector for a camera with camera-specific settings.
+
+    Supports two modes:
+    - Local mode (USE_ML_SERVICE=False): Uses UnifiedDetector directly
+    - ML Service mode (USE_ML_SERVICE=True): Uses MLDetectorProxy to call ML microservice
+    """
     global camera_detectors
-    
+
+    # Check if ML service mode is enabled
+    use_ml_service = getattr(settings, 'USE_ML_SERVICE', False)
+
+    if use_ml_service:
+        # Use ML service client
+        try:
+            from cctv.ml_client import get_detector_for_camera as ml_get_detector
+            return ml_get_detector(camera, use_ml_service=True)
+        except Exception as e:
+            print(f"[get_detector_for_camera] ML service failed: {e}, falling back to local")
+            # Fall through to local detector
+
+    # Local detector mode
     if not DETECTOR_AVAILABLE:
         return None
-    
+
     # Always update detector if settings changed
     cache_key = f"{camera.id}_{camera.updated_at.timestamp()}"
-    
+
     if camera.id not in camera_detectors or camera_detectors.get(f'{camera.id}_key') != cache_key:
         # Debug: Print polygon data being loaded
         polygon_points = camera.get_cashier_zone_polygon_points()
@@ -1360,7 +1378,7 @@ def get_detector_for_camera(camera):
         if polygon_points:
             print(f"Number of polygon points: {len(polygon_points)}")
         print(f"{'='*60}\n")
-        
+
         # Use camera-specific confidence thresholds
         config = {
             'models_dir': str(settings.DETECTION_CONFIG['MODELS_DIR']),
@@ -1397,7 +1415,7 @@ def get_detector_for_camera(camera):
         }
         camera_detectors[camera.id] = UnifiedDetector(config)
         camera_detectors[f'{camera.id}_key'] = cache_key
-    
+
     return camera_detectors[camera.id]
 
 
@@ -2350,6 +2368,45 @@ def get_translations_api(request):
     lang = request.session.get('lang', request.COOKIES.get('lang', 'ko'))
     translations = get_translation(lang)
     return JsonResponse(translations)
+
+
+def api_health(request):
+    """Health check endpoint for Docker/Kubernetes"""
+    from django.db import connection
+
+    health = {
+        'status': 'healthy',
+        'service': 'django-backend',
+        'database': 'unknown',
+        'ml_service': 'unknown',
+    }
+
+    # Check database connection
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+        health['database'] = 'connected'
+    except Exception as e:
+        health['database'] = f'error: {str(e)}'
+        health['status'] = 'degraded'
+
+    # Check ML service if enabled
+    if getattr(settings, 'USE_ML_SERVICE', False):
+        try:
+            from cctv.ml_client import MLServiceClient
+            client = MLServiceClient()
+            if client.health_check():
+                health['ml_service'] = 'connected'
+            else:
+                health['ml_service'] = 'unhealthy'
+                health['status'] = 'degraded'
+        except Exception as e:
+            health['ml_service'] = f'error: {str(e)}'
+            health['status'] = 'degraded'
+    else:
+        health['ml_service'] = 'disabled (local mode)'
+
+    return JsonResponse(health)
 
 
 # ==================== BACKGROUND WORKERS ====================

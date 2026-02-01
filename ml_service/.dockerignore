@@ -1,0 +1,51 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Temp files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Tests
+tests/
+pytest.ini
+.coverage
+htmlcov/
+
+# Cache
+.cache/
+.pytest_cache/
+
+# Documentation
+*.md
+
+# Models (mounted as volume)
+models/
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/

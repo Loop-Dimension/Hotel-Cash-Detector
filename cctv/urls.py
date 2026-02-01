@@ -36,7 +36,10 @@ urlpatterns = [
     # Language
     path('api/set-language/', views.set_language, name='set_language'),
     path('api/translations/', views.get_translations_api, name='get_translations'),
-    
+
+    # Health check endpoint (for Docker/Kubernetes)
+    path('api/health/', views.api_health, name='api_health'),
+
     # API endpoints - Branches
     path('api/branches/', views.api_branches, name='api_branches'),
     path('api/branches/<int:branch_id>/', views.api_branch_detail, name='api_branch_detail'),

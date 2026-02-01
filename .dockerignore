@@ -1,0 +1,65 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Temp files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Local data (will be mounted as volumes)
+db.sqlite3
+media/
+output/
+uploads/
+staticfiles/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Tests
+tests/
+pytest.ini
+.coverage
+htmlcov/
+
+# Cache
+.cache/
+.pytest_cache/
+
+# Environment files (secrets)
+.env
+.env.local
+.env.*.local
+
+# ML Service (built separately)
+ml_service/
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/

@@ -91,3 +91,4 @@ node_modules/
 /testing
 /media
 cash_23_20251229_010042_225504.jpg
+.env.docker

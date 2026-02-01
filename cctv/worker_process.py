@@ -38,6 +38,14 @@ except ImportError as e:
     DETECTOR_AVAILABLE = False
     print(f"Warning: Detectors not available - {e}")
 
+# Import ML client for microservice mode
+try:
+    from cctv.ml_client import MLDetectorProxy, MLServiceClient
+    ML_CLIENT_AVAILABLE = True
+except ImportError as e:
+    ML_CLIENT_AVAILABLE = False
+    print(f"Warning: ML client not available - {e}")
+
 # Import Gemini validator
 try:
     from detectors.gemini_validator import GeminiValidator
@@ -295,8 +303,25 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
         'detect_fire': camera.detect_fire,
         'cash_confidence': camera.cash_confidence,
     }
-    
-    detector = UnifiedDetector(detector_config)
+
+    # Check if ML service mode is enabled
+    use_ml_service = getattr(settings, 'USE_ML_SERVICE', False)
+
+    if use_ml_service and ML_CLIENT_AVAILABLE:
+        try:
+            # Use ML service for detection
+            client = MLServiceClient()
+            if client.health_check():
+                detector = MLDetectorProxy(config=detector_config, camera_id=camera_id)
+                print(f"[Worker-{camera_id}] Using ML Service for detection")
+            else:
+                print(f"[Worker-{camera_id}] ML Service unhealthy, falling back to local detector")
+                detector = UnifiedDetector(detector_config)
+        except Exception as e:
+            print(f"[Worker-{camera_id}] ML Service error: {e}, falling back to local detector")
+            detector = UnifiedDetector(detector_config)
+    else:
+        detector = UnifiedDetector(detector_config)
     
     # Connect to RTSP stream (using shared utility)
     shared_state['status'] = 'connecting'

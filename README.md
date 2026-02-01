@@ -77,6 +77,64 @@ python manage.py migrate
 python manage.py runserver 0.0.0.0:8000
 ```
 
+## Docker Deployment (Microservices)
+
+The system supports a microservices architecture with ML detection separated from the Django backend:
+
+```
+┌─────────────────┐     ┌─────────────────┐
+│  Django Backend │────▶│   ML Service    │
+│   (port 8000)   │     │   (port 8001)   │
+└────────┬────────┘     └────────┬────────┘
+         │                       │
+         ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐
+│   PostgreSQL    │     │   AI Models     │
+└─────────────────┘     └─────────────────┘
+```
+
+### Quick Start with Docker
+
+```bash
+# 1. Copy environment file
+cp .env.docker .env
+
+# 2. Edit .env with your settings
+#    - Set GEMINI_API_KEY
+#    - Set DB_PASSWORD
+#    - Set SECRET_KEY
+
+# 3. Start all services
+docker-compose up -d --build
+
+# 4. View logs
+docker-compose logs -f
+
+# 5. Access the application
+#    - Dashboard: http://localhost:80
+#    - ML Service: http://localhost:8001/health
+```
+
+### Services
+
+| Service | Port | Description |
+|---------|------|-------------|
+| nginx | 80, 443 | Reverse proxy |
+| django-backend | 8000 | Django web app |
+| ml-service | 8001 | FastAPI ML detection |
+| postgres | 5432 | PostgreSQL database |
+
+### Environment Variables
+
+```env
+# Enable ML microservice mode
+USE_ML_SERVICE=True
+ML_SERVICE_URL=http://ml-service:8001
+ML_SERVICE_TIMEOUT=30
+```
+
+For local development without Docker, set `USE_ML_SERVICE=False` to use local detectors.
+
 ## Documentation
 
 For complete documentation, see:

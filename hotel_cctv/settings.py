@@ -293,6 +293,24 @@ DETECTION_CONFIG = {
 # Supports both spellings (GEMINI and GIMINI for compatibility)
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', os.getenv('GIMINI_API_KEY', ''))
 
+# ==============================================================================
+# ML Service Configuration (Microservices Mode)
+# ==============================================================================
+# When USE_ML_SERVICE is True, detection processing is delegated to the ML
+# microservice instead of running locally. This allows better separation of
+# concerns and enables GPU-dedicated servers for inference.
+
+# Enable/disable ML service mode
+# - False (default): Use local detectors (models loaded in Django process)
+# - True: Use ML microservice for detection (requires ml-service container)
+USE_ML_SERVICE = os.getenv('USE_ML_SERVICE', 'False').lower() in ('true', '1', 'yes')
+
+# ML Service URL (only used when USE_ML_SERVICE is True)
+ML_SERVICE_URL = os.getenv('ML_SERVICE_URL', 'http://ml-service:8001')
+
+# Timeout for ML service requests (seconds)
+ML_SERVICE_TIMEOUT = int(os.getenv('ML_SERVICE_TIMEOUT', '30'))
+
 # Admin credentials from environment (for seed command)
 ADMIN_CREDENTIALS = {
     'username': os.getenv('ADMIN_USERNAME', 'admin'),
