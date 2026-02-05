@@ -308,20 +308,16 @@ def _run_worker_loop(camera_id, shared_state, command_queue, frame_queue, stop_f
     use_ml_service = getattr(settings, 'USE_ML_SERVICE', False)
 
     if use_ml_service and ML_CLIENT_AVAILABLE:
-        try:
-            # Use ML service for detection
-            client = MLServiceClient()
-            if client.health_check():
-                detector = MLDetectorProxy(config=detector_config, camera_id=camera_id)
-                print(f"[Worker-{camera_id}] Using ML Service for detection")
-            else:
-                print(f"[Worker-{camera_id}] ML Service unhealthy, falling back to local detector")
-                detector = UnifiedDetector(detector_config)
-        except Exception as e:
-            print(f"[Worker-{camera_id}] ML Service error: {e}, falling back to local detector")
-            detector = UnifiedDetector(detector_config)
+        # MLDetectorProxy handles fallback internally:
+        # - Tries ML service first
+        # - Falls back to local detector if ML service is down
+        # - Auto-reconnects to ML service when it comes back
+        # - Prints [MODE: ML_SERVICE] or [MODE: LOCAL] on every mode change
+        detector = MLDetectorProxy(config=detector_config, camera_id=camera_id)
+        print(f"[Worker-{camera_id}] Detector initialized (ML service mode enabled, current: {detector._get_mode_label()})")
     else:
         detector = UnifiedDetector(detector_config)
+        print(f"[Worker-{camera_id}] [MODE: LOCAL] Using local detector (ML service disabled)")
     
     # Connect to RTSP stream (using shared utility)
     shared_state['status'] = 'connecting'

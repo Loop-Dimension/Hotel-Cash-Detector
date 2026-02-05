@@ -256,11 +256,17 @@ class MLDetectorProxy:
     """
     Proxy class that mimics UnifiedDetector interface but uses ML service.
 
+    Automatically falls back to local UnifiedDetector when ML service is down,
+    and switches back when ML service recovers.
+
     This allows minimal changes to existing code - just replace:
         detector = UnifiedDetector(config)
     with:
         detector = MLDetectorProxy(config, camera_id)
     """
+
+    # How often to check if ML service recovered (in frames)
+    RECONNECT_CHECK_INTERVAL = 100
 
     def __init__(self, config: Dict = None, camera_id: int = None):
         self.config = config or {}
@@ -274,9 +280,18 @@ class MLDetectorProxy:
         self.detect_violence = self.config.get('detect_violence', True)
         self.detect_fire = self.config.get('detect_fire', True)
 
+        # Mode tracking
+        self._using_ml_service = False
+        self._local_detector = None
+        self._frames_since_reconnect_check = 0
+
         # Initialize on ML service
         if camera_id:
             self._initialize_remote()
+
+    def _get_mode_label(self) -> str:
+        """Get current mode label for logging"""
+        return "ML_SERVICE" if self._using_ml_service else "LOCAL"
 
     def _initialize_remote(self):
         """Initialize detector on ML service"""
@@ -303,10 +318,40 @@ class MLDetectorProxy:
         try:
             self.client.initialize_detector(self.camera_id, detector_config)
             self.is_initialized = True
-            print(f"[MLDetectorProxy] Initialized detector for camera {self.camera_id}")
+            self._using_ml_service = True
+            print(f"[Camera-{self.camera_id}] [MODE: ML_SERVICE] Connected to ML service successfully")
         except Exception as e:
-            print(f"[MLDetectorProxy] Failed to initialize: {e}")
-            self.is_initialized = False
+            print(f"[Camera-{self.camera_id}] ML service unavailable: {e}")
+            self._using_ml_service = False
+            self._load_local_detector()
+
+    def _load_local_detector(self):
+        """Load local UnifiedDetector as fallback"""
+        if self._local_detector is not None:
+            return  # Already loaded
+
+        try:
+            from detectors import UnifiedDetector
+            self._local_detector = UnifiedDetector(self.config)
+            self._local_detector.initialize()
+            self.is_initialized = True
+            self._using_ml_service = False
+            print(f"[Camera-{self.camera_id}] [MODE: LOCAL] Loaded local detector as fallback")
+        except Exception as e:
+            print(f"[Camera-{self.camera_id}] [ERROR] Failed to load local detector: {e}")
+
+    def _try_reconnect_ml_service(self):
+        """Periodically check if ML service is back online"""
+        try:
+            if self.client.health_check():
+                # ML service is back! Re-initialize remote detector
+                self._initialize_remote()
+                if self._using_ml_service:
+                    print(f"[Camera-{self.camera_id}] [MODE: ML_SERVICE] ML service recovered, switching back from LOCAL")
+                    return True
+        except Exception:
+            pass
+        return False
 
     def initialize(self) -> bool:
         """Initialize detector (compatibility method)"""
@@ -316,49 +361,78 @@ class MLDetectorProxy:
 
     def process_frame(self, frame: np.ndarray, draw_overlay: bool = True) -> Dict:
         """
-        Process frame through ML service.
+        Process frame through ML service with automatic fallback to local detector.
         Returns same format as UnifiedDetector.process_frame()
         """
         self.frame_count += 1
+        self._frames_since_reconnect_check += 1
 
-        try:
-            return self.client.process_frame(
-                camera_id=self.camera_id,
-                frame=frame,
-                draw_overlay=draw_overlay,
-                return_frame=draw_overlay,
-                frame_number=self.frame_count
-            )
-        except Exception as e:
-            print(f"[MLDetectorProxy] process_frame error: {e}")
-            return {
-                'frame': frame,
-                'detections': [],
-                'alerts': [],
-                'frame_number': self.frame_count
-            }
+        # If using local detector, periodically check if ML service is back
+        if not self._using_ml_service and self._frames_since_reconnect_check >= self.RECONNECT_CHECK_INTERVAL:
+            self._frames_since_reconnect_check = 0
+            self._try_reconnect_ml_service()
+
+        # Try ML service first
+        if self._using_ml_service:
+            try:
+                result = self.client.process_frame(
+                    camera_id=self.camera_id,
+                    frame=frame,
+                    draw_overlay=draw_overlay,
+                    return_frame=draw_overlay,
+                    frame_number=self.frame_count
+                )
+                return result
+            except Exception as e:
+                print(f"[Camera-{self.camera_id}] [MODE: ML_SERVICE -> LOCAL] ML service failed: {e}")
+                self._using_ml_service = False
+                self._frames_since_reconnect_check = 0
+                self._load_local_detector()
+
+        # Use local detector (fallback)
+        if self._local_detector is not None:
+            try:
+                return self._local_detector.process_frame(frame, draw_overlay)
+            except Exception as e:
+                print(f"[Camera-{self.camera_id}] [MODE: LOCAL] Local detector error: {e}")
+
+        # Both failed - return empty result
+        return {
+            'frame': frame,
+            'detections': [],
+            'alerts': [],
+            'frame_number': self.frame_count
+        }
 
     def set_cashier_zone_polygon(self, polygon: List):
         """Update cashier zone"""
-        try:
-            self.client.update_zones(self.camera_id, {
-                'cashier_zone_polygon': polygon
-            })
-        except Exception as e:
-            print(f"[MLDetectorProxy] set_cashier_zone_polygon error: {e}")
+        if self._using_ml_service:
+            try:
+                self.client.update_zones(self.camera_id, {
+                    'cashier_zone_polygon': polygon
+                })
+            except Exception as e:
+                print(f"[Camera-{self.camera_id}] set_cashier_zone_polygon ML error: {e}")
+        if self._local_detector and hasattr(self._local_detector, 'set_cashier_zone_polygon'):
+            self._local_detector.set_cashier_zone_polygon(polygon)
 
     def set_cash_drawer_zone_polygon(self, polygon: List):
         """Update cash drawer zone"""
-        try:
-            self.client.update_zones(self.camera_id, {
-                'cash_drawer_zone_polygon': polygon
-            })
-        except Exception as e:
-            print(f"[MLDetectorProxy] set_cash_drawer_zone_polygon error: {e}")
+        if self._using_ml_service:
+            try:
+                self.client.update_zones(self.camera_id, {
+                    'cash_drawer_zone_polygon': polygon
+                })
+            except Exception as e:
+                print(f"[Camera-{self.camera_id}] set_cash_drawer_zone_polygon ML error: {e}")
+        if self._local_detector and hasattr(self._local_detector, 'set_cash_drawer_zone_polygon'):
+            self._local_detector.set_cash_drawer_zone_polygon(polygon)
 
     def reset(self):
         """Reset detector state"""
         self.frame_count = 0
+        if self._local_detector and hasattr(self._local_detector, 'reset'):
+            self._local_detector.reset()
 
 
 # ==================== Factory Function ====================
@@ -417,31 +491,26 @@ def get_detector_for_camera(camera, use_ml_service: bool = None) -> Any:
     if camera.id in _detector_cache and _detector_cache_keys.get(camera.id) == cache_key:
         return _detector_cache[camera.id]
 
-    # Try ML service first if enabled
+    # Try ML service if enabled (MLDetectorProxy handles fallback internally)
     if use_ml_service:
-        try:
-            client = MLServiceClient()
-            if client.health_check():
-                detector = MLDetectorProxy(config=config, camera_id=camera.id)
-                _detector_cache[camera.id] = detector
-                _detector_cache_keys[camera.id] = cache_key
-                return detector
-            else:
-                print(f"[get_detector_for_camera] ML Service unhealthy, falling back to local detector")
-        except Exception as e:
-            print(f"[get_detector_for_camera] ML Service error: {e}, falling back to local detector")
+        print(f"[Camera-{camera.id}] ML service mode enabled, creating MLDetectorProxy...")
+        detector = MLDetectorProxy(config=config, camera_id=camera.id)
+        _detector_cache[camera.id] = detector
+        _detector_cache_keys[camera.id] = cache_key
+        return detector
 
-    # Fallback to local detector
+    # Local detector mode
     try:
         from detectors import UnifiedDetector
 
         detector = UnifiedDetector(config)
         detector.initialize()
+        print(f"[Camera-{camera.id}] [MODE: LOCAL] Using local detector (ML service disabled)")
         _detector_cache[camera.id] = detector
         _detector_cache_keys[camera.id] = cache_key
         return detector
     except ImportError as e:
-        print(f"[get_detector_for_camera] Local detectors not available: {e}")
+        print(f"[Camera-{camera.id}] Local detectors not available: {e}")
         raise
 
 
