@@ -24,13 +24,13 @@ class DetectorConfig(BaseModel):
     pose_confidence: float = 0.5
 
     # Zone configurations
-    cashier_zone_polygon: Optional[List[List[int]]] = None
-    cash_drawer_zone_polygon: Optional[List[List[int]]] = None
+    cashier_zone_polygon: Optional[List[List[float]]] = None
+    cash_drawer_zone_polygon: Optional[List[List[float]]] = None
     cashier_zone_enabled: bool = True
     cash_drawer_zone_enabled: bool = True
 
     # Detection parameters
-    hand_touch_distance: int = 100
+    hand_touch_distance: float = 100
     min_transaction_frames: int = 1
     min_violence_frames: int = 10
     min_fire_frames: int = 3
@@ -42,8 +42,8 @@ class DetectorConfig(BaseModel):
 
 class ZoneUpdate(BaseModel):
     """Zone polygon update"""
-    cashier_zone_polygon: Optional[List[List[int]]] = None
-    cash_drawer_zone_polygon: Optional[List[List[int]]] = None
+    cashier_zone_polygon: Optional[List[List[float]]] = None
+    cash_drawer_zone_polygon: Optional[List[List[float]]] = None
 
 
 # ==================== Frame Data ====================
