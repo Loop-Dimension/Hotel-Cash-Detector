@@ -2558,7 +2558,7 @@ class BackgroundCameraWorker:
     def create_detector(self, camera):
         if not DETECTOR_AVAILABLE:
             return None
-        
+
         # Debug: Print polygon data being loaded
         polygon_points = camera.get_cashier_zone_polygon_points()
         print(f"\n{'='*60}")
@@ -2568,7 +2568,7 @@ class BackgroundCameraWorker:
         if polygon_points:
             print(f"Number of polygon points: {len(polygon_points)}")
         print(f"{'='*60}\n")
-        
+
         config = {
             'models_dir': str(self.models_dir),
             # GPU/CPU setting from environment
@@ -2596,6 +2596,22 @@ class BackgroundCameraWorker:
             'detect_fire': camera.detect_fire,
             'cash_confidence': camera.cash_confidence,
         }
+
+        # Check if ML service mode is enabled
+        use_ml_service = getattr(settings, 'USE_ML_SERVICE', False)
+        if use_ml_service:
+            try:
+                from cctv.ml_client import MLDetectorProxy
+                # MLDetectorProxy handles fallback internally:
+                # - Tries ML service first
+                # - Falls back to local detector if ML service is down
+                # - Auto-reconnects when ML service comes back
+                # - Prints [MODE: ML_SERVICE] or [MODE: LOCAL] on every change
+                return MLDetectorProxy(config=config, camera_id=camera.id)
+            except ImportError as e:
+                print(f"[Camera-{camera.id}] ML client not available: {e}, using local detector")
+
+        print(f"[Camera-{camera.id}] [MODE: LOCAL] Using local detector (ML service disabled)")
         return UnifiedDetector(config)
     
     def convert_to_json_serializable(self, obj):
