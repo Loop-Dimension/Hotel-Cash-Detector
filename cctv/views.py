@@ -2911,7 +2911,12 @@ class BackgroundCameraWorker:
         
         last_settings_check = time.time()
         
-        print(f"[Detection] Started detection loop for camera {camera.camera_id}")
+        # Show which detection mode is active
+        if hasattr(self.detector, '_get_mode_label'):
+            mode = self.detector._get_mode_label()
+            print(f"[Detection] Started detection loop for camera {camera.camera_id} [MODE: {mode}]")
+        else:
+            print(f"[Detection] Started detection loop for camera {camera.camera_id} [MODE: LOCAL]")
         
         while self.running:
             try:
@@ -2950,7 +2955,11 @@ class BackgroundCameraWorker:
                 
                 # Track frames processed
                 self.frames_processed += 1
-                
+
+                # Log current detection mode every 500 frames
+                if self.frames_processed % 500 == 0 and hasattr(self.detector, '_get_mode_label'):
+                    print(f"[Detection] Camera {camera.camera_id} | Frame #{self.frames_processed} | [MODE: {self.detector._get_mode_label()}]")
+
             except Exception as e:
                 self.last_error = f"Detection error: {str(e)}"
                 continue
