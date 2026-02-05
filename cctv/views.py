@@ -2956,8 +2956,8 @@ class BackgroundCameraWorker:
                 # Track frames processed
                 self.frames_processed += 1
 
-                # Log current detection mode every 500 frames
-                if self.frames_processed % 500 == 0 and hasattr(self.detector, '_get_mode_label'):
+                # Log current detection mode every 100 frames
+                if self.frames_processed % 100 == 0 and hasattr(self.detector, '_get_mode_label'):
                     print(f"[Detection] Camera {camera.camera_id} | Frame #{self.frames_processed} | [MODE: {self.detector._get_mode_label()}]")
 
             except Exception as e:
