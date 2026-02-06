@@ -6,12 +6,13 @@ Complete guide for local development and production setup.
 
 1. [Prerequisites](#prerequisites)
 2. [Local Development Setup](#local-development-setup)
-3. [AI Model Downloads](#ai-model-downloads)
-4. [Database Setup](#database-setup)
-5. [Environment Configuration](#environment-configuration)
-6. [RTSP Camera Testing](#rtsp-camera-testing)
-7. [Running the Application](#running-the-application)
-8. [Production Setup](#production-setup)
+3. [ML Service Setup](#ml-service-setup)
+4. [AI Model Downloads](#ai-model-downloads)
+5. [Database Setup](#database-setup)
+6. [Environment Configuration](#environment-configuration)
+7. [RTSP Camera Testing](#rtsp-camera-testing)
+8. [Running the Application](#running-the-application)
+9. [Production Setup](#production-setup)
 
 ---
 
@@ -138,7 +139,19 @@ For CPU-only (no GPU):
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ```
 
-### Step 4: Verify PyTorch CUDA
+### Step 4: Configure ML Service Environment Variables
+
+Add to `.env`:
+```env
+# ML Service
+USE_ML_SERVICE=True
+ML_SERVICE_URL=http://localhost:8001
+ML_SERVICE_TIMEOUT=30
+```
+
+Set `USE_ML_SERVICE=False` to use local detectors without the ML service.
+
+### Step 5: Verify PyTorch CUDA
 
 ```bash
 # Run Python and check CUDA
@@ -174,6 +187,61 @@ PyTorch version: 2.0.0+cpu
 CUDA available: False
 CUDA version: None
 ```
+
+---
+
+## ML Service Setup
+
+The ML service is a standalone FastAPI application that handles AI detection. It has its own virtual environment and dependencies.
+
+### Step 1: Create ML Service Virtual Environment
+
+```bash
+cd ml_service
+
+# Create virtual environment
+python3 -m venv venv
+
+# Activate
+source venv/bin/activate  # Linux/Mac
+# or
+.\venv\Scripts\Activate.ps1  # Windows
+```
+
+### Step 2: Install ML Service Dependencies
+
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### Step 3: Start ML Service
+
+```bash
+cd ml_service
+source venv/bin/activate
+
+# Start with uvicorn
+uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+```
+
+**Expected Output**:
+```
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     Started reloader process
+```
+
+### Step 4: Verify ML Service
+
+```bash
+# Health check
+curl http://localhost:8001/health
+
+# Status (shows GPU info)
+curl http://localhost:8001/status
+```
+
+**Note**: The ML service must be running before starting Django (if `USE_ML_SERVICE=True`). If Django starts and ML service is unavailable, it will automatically fall back to local detection.
 
 ---
 
@@ -566,10 +634,17 @@ python test_rtsp.py
 
 ## Running the Application
 
-### Step 1: Start Django Development Server
+### Step 1: Start ML Service (Terminal 1)
 
 ```bash
-cd django_app
+cd ml_service
+source venv/bin/activate
+uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+```
+
+### Step 2: Start Django Development Server (Terminal 2)
+
+```bash
 source venv/bin/activate
 
 # Run Django server
@@ -653,48 +728,30 @@ worker.start()
 
 ## Production Setup
 
-### Option 1: Systemd Service (Ubuntu)
+### Option 1: Dual Systemd Services (Ubuntu)
 
-Create systemd service file:
+Production requires **two systemd services**: `hotel-cctv` (Django) and `hotel-ml-service` (FastAPI).
 
+See [08-deployment.md](08-deployment.md) for complete systemd service configurations.
+
+**Quick Start**:
 ```bash
-sudo nano /etc/systemd/system/hotel-cctv.service
-```
-
-```ini
-[Unit]
-Description=Hotel Cash Detector - CCTV System
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/Hotel-Cash-Detector/django_app
-Environment="PATH=/home/ubuntu/Hotel-Cash-Detector/django_app/venv/bin"
-ExecStart=/home/ubuntu/Hotel-Cash-Detector/django_app/venv/bin/python manage.py runserver 0.0.0.0:8000
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**Start Service**:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable hotel-cctv
+# Start both services
+sudo systemctl start hotel-ml-service
 sudo systemctl start hotel-cctv
 
 # Check status
 sudo systemctl status hotel-cctv
+sudo systemctl status hotel-ml-service
 
 # View logs
-sudo journalctl -u hotel-cctv -f
+sudo journalctl -u hotel-cctv -f        # Django + detection MODE indicators
+sudo journalctl -u hotel-ml-service -f   # ML service
 ```
 
-### Option 2: Docker Deployment
+### Option 2: Docker Compose
 
-See [08-deployment.md](08-deployment.md) for Docker configuration.
+See [08-deployment.md](08-deployment.md) for Docker Compose configuration with all services (Django, ML Service, PostgreSQL, Nginx).
 
 ### Option 3: AWS EC2 with GPU
 
@@ -706,6 +763,7 @@ See [08-deployment.md](08-deployment.md) for AWS g4dn instance setup.
 
 After setup, verify:
 
+- ✅ ML service runs: `curl http://localhost:8001/health`
 - ✅ Django server runs: `python manage.py runserver`
 - ✅ Admin panel accessible: [http://localhost:8000/admin](http://localhost:8000/admin)
 - ✅ Database migrations applied: `python manage.py showmigrations`
@@ -713,6 +771,7 @@ After setup, verify:
 - ✅ YOLO models downloaded: Check `~/.cache/ultralytics/`
 - ✅ RTSP camera connects: Test with VLC or Python script
 - ✅ Detection worker starts: Access Monitor page
+- ✅ MODE indicator shows: Check logs for `[MODE: ML_SERVICE]` or `[MODE: LOCAL]`
 - ✅ Events are logged: Check Event Logs after detection
 
 ---
@@ -721,21 +780,20 @@ After setup, verify:
 
 **Development Workflow**:
 ```bash
-# 1. Activate virtual environment
-cd django_app
-source venv/bin/activate  # Linux/Mac
-# or
-.\venv\Scripts\Activate.ps1  # Windows
+# Terminal 1: Start ML Service
+cd ml_service
+source venv/bin/activate
+uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 
-# 2. Start Django server
+# Terminal 2: Start Django
+cd Hotel-Cash-Detector
+source venv/bin/activate
 python manage.py runserver 0.0.0.0:8000
 
-# 3. Open browser
-# http://localhost:8000
-
+# 3. Open browser: http://localhost:8000
 # 4. Log in with admin credentials
-
 # 5. Add camera and start monitoring
+# 6. Check logs for [MODE: ML_SERVICE] indicator
 ```
 
 ---
