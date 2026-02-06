@@ -21,36 +21,42 @@ Production deployment guide for AWS EC2, Docker, and GPU instances.
 ### Recommended Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    AWS EC2 Instance                      │
-│                 (GPU-enabled g4dn.xlarge)                │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │           Nginx Reverse Proxy (Port 80/443)        │  │
-│  └─────────────────────┬──────────────────────────────┘  │
-│                        │                                 │
-│  ┌─────────────────────▼──────────────────────────────┐  │
-│  │      Gunicorn/Django Application (Port 8000)       │  │
-│  │  - 4 Workers                                       │  │
-│  │  - Background Camera Workers (8+ cameras)          │  │
-│  └─────────────────────┬──────────────────────────────┘  │
-│                        │                                 │
-│  ┌─────────────────────▼──────────────────────────────┐  │
-│  │          PostgreSQL Database (Port 5432)           │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │     Media Storage (/home/ubuntu/.../media/)        │  │
-│  │  - clips/ (30s video files)                        │  │
-│  │  - thumbnails/ (event thumbnails)                  │  │
-│  │  - json/ (event metadata)                          │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │           GPU (NVIDIA Tesla T4)                    │  │
-│  │  - YOLOv8 Inference                                │  │
-│  │  - 15GB VRAM                                       │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    AWS EC2 Instance                           │
+│                 (GPU-enabled g4dn.xlarge)                     │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │           Nginx Reverse Proxy (Port 80/443)             │ │
+│  └──────────────────────┬──────────────────────────────────┘ │
+│                         │                                    │
+│  ┌──────────────────────▼────────────────────────────────┐   │
+│  │       Gunicorn/Django Application (Port 8000)         │   │
+│  │  - 4 Workers, Background Camera Workers (8+ cameras)  │   │
+│  │  - MLDetectorProxy → REST calls to ML Service         │   │
+│  └──────────────────────┬────────────────────────────────┘   │
+│                         │ HTTP (REST API)                    │
+│  ┌──────────────────────▼────────────────────────────────┐   │
+│  │       FastAPI ML Service (Port 8001)                  │   │
+│  │  - UnifiedDetector, CashDetector, ViolenceDetector    │   │
+│  │  - FireDetector, GeminiValidator                      │   │
+│  └──────────────────────┬────────────────────────────────┘   │
+│                         │                                    │
+│  ┌──────────────────────▼────────────────────────────────┐   │
+│  │          PostgreSQL Database (Port 5432)               │   │
+│  └───────────────────────────────────────────────────────┘   │
+│                                                              │
+│  ┌───────────────────────────────────────────────────────┐   │
+│  │     Media Storage (/var/www/.../media/)                │   │
+│  │  - clips/ (30s video files)                           │   │
+│  │  - thumbnails/ (event thumbnails)                     │   │
+│  │  - json/ (event metadata)                             │   │
+│  └───────────────────────────────────────────────────────┘   │
+│                                                              │
+│  ┌───────────────────────────────────────────────────────┐   │
+│  │           GPU (NVIDIA Tesla T4)                       │   │
+│  │  - YOLOv8 Inference (used by ML Service)              │   │
+│  │  - 15GB VRAM                                          │   │
+│  └───────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────┘
                         ▲
                         │
           ┌─────────────┼─────────────┐
@@ -63,8 +69,8 @@ Production deployment guide for AWS EC2, Docker, and GPU instances.
 
 **Deployment Options**:
 1. **AWS EC2 with GPU** (Recommended) - g4dn.xlarge or g4dn.2xlarge
-2. **Docker Container** - Portable, consistent environment
-3. **Systemd Service** - Native Linux service management
+2. **Docker Compose** - Django + ML Service + PostgreSQL + Nginx
+3. **Dual Systemd Services** - `hotel-cctv` (Django) + `hotel-ml-service` (FastAPI)
 
 ---
 
@@ -290,27 +296,29 @@ python manage.py collectstatic --noinput
 
 ---
 
-## Systemd Service
+## Systemd Services
 
-### Create Systemd Service File
+Production deployments use **two systemd services**: one for Django and one for the ML service.
+
+### Service 1: Django Backend (`hotel-cctv`)
 
 ```bash
 sudo nano /etc/systemd/system/hotel-cctv.service
 ```
 
-**Service Configuration**:
 ```ini
 [Unit]
-Description=Hotel Cash Detector - CCTV AI Detection System
-After=network.target postgresql.service
+Description=Hotel Cash Detector - Django Backend
+After=network.target postgresql.service hotel-ml-service.service
 
 [Service]
 Type=simple
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=/home/ubuntu/Hotel-Cash-Detector/django_app
-Environment="PATH=/home/ubuntu/Hotel-Cash-Detector/django_app/venv/bin"
-ExecStart=/home/ubuntu/Hotel-Cash-Detector/django_app/venv/bin/gunicorn \
+User=root
+WorkingDirectory=/var/www/Hotel-Cash-Detector
+Environment="PATH=/var/www/Hotel-Cash-Detector/venv/bin"
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONWARNINGS=ignore"
+ExecStart=/var/www/Hotel-Cash-Detector/venv/bin/gunicorn \
     --workers 4 \
     --bind 0.0.0.0:8000 \
     --timeout 120 \
@@ -324,25 +332,84 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-**Create Log Directory**:
+**Important**: `PYTHONUNBUFFERED=1` is required for background thread `print()` statements (like MODE indicators) to appear in real-time in `journalctl`.
+
+### Service 2: ML Service (`hotel-ml-service`)
+
 ```bash
-sudo mkdir -p /var/log/hotel-cctv
-sudo chown ubuntu:ubuntu /var/log/hotel-cctv
+sudo nano /etc/systemd/system/hotel-ml-service.service
 ```
 
-**Enable and Start Service**:
+```ini
+[Unit]
+Description=Hotel Cash Detector - ML Detection Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/Hotel-Cash-Detector/ml_service
+Environment="PATH=/var/www/Hotel-Cash-Detector/ml_service/venv/bin"
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/var/www/Hotel-Cash-Detector/ml_service/venv/bin/uvicorn \
+    app.main:app \
+    --host 0.0.0.0 \
+    --port 8001 \
+    --workers 1
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Enable and Start Both Services
+
 ```bash
+# Create log directory
+sudo mkdir -p /var/log/hotel-cctv
+sudo chown root:root /var/log/hotel-cctv
+
+# Reload and enable
 sudo systemctl daemon-reload
-sudo systemctl enable hotel-cctv
+sudo systemctl enable hotel-ml-service hotel-cctv
+sudo systemctl start hotel-ml-service
 sudo systemctl start hotel-cctv
 ```
 
-**Check Status**:
-```bash
-sudo systemctl status hotel-cctv
+### Managing Services
 
-# View logs
+```bash
+# Check status
+sudo systemctl status hotel-cctv
+sudo systemctl status hotel-ml-service
+
+# View Django logs (includes MODE indicators)
 sudo journalctl -u hotel-cctv -f
+
+# View ML service logs
+sudo journalctl -u hotel-ml-service -f
+
+# Restart both
+sudo systemctl restart hotel-ml-service && sudo systemctl restart hotel-cctv
+
+# Test ML service health
+curl http://localhost:8001/health
+```
+
+### ML Service Setup
+
+The ML service has its own Python virtual environment:
+
+```bash
+cd /var/www/Hotel-Cash-Detector/ml_service
+
+# Create venv
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
 ---
@@ -501,7 +568,37 @@ ssl_certificate_key /etc/ssl/private/cctv-selfsigned.key;
 
 ## Docker Deployment
 
-### Dockerfile
+### ML Service Dockerfile
+
+Create `ml_service/Dockerfile`:
+
+```dockerfile
+FROM python:3.10-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy and install requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+EXPOSE 8001
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+```
+
+**Note**: Use `libgl1` not `libgl1-mesa-glx` (newer Debian/Ubuntu).
+
+### Django Dockerfile
 
 Create `Dockerfile` in project root:
 
@@ -511,30 +608,21 @@ FROM python:3.10-slim
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements
-COPY django_app/requirements.txt .
-
-# Install Python dependencies
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
-# Copy application code
-COPY django_app/ .
-
-# Create media directories
+COPY . .
 RUN mkdir -p media/clips media/thumbnails media/json
 
-# Expose port
 EXPOSE 8000
 
-# Run migrations and start Gunicorn
 CMD python manage.py migrate && \
     python manage.py collectstatic --noinput && \
     gunicorn --workers 4 --bind 0.0.0.0:8000 --timeout 120 hotel_cctv.wsgi:application
@@ -545,34 +633,53 @@ CMD python manage.py migrate && \
 Create `docker-compose.yml`:
 
 ```yaml
-version: '3.8'
-
 services:
-  web:
+  ml-service:
+    build: ./ml_service
+    container_name: hotel-ml-service
+    ports:
+      - "8001:8001"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - USE_GPU=auto
+    volumes:
+      - ./models:/app/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  django-backend:
     build: .
-    image: hotel-cctv:latest
     container_name: hotel-cctv-web
     ports:
       - "8000:8000"
     environment:
       - DEBUG=False
       - ALLOWED_HOSTS=cctv.hio.ai.kr,localhost
+      - USE_ML_SERVICE=True
+      - ML_SERVICE_URL=http://ml-service:8001
+      - ML_SERVICE_TIMEOUT=30
       - DB_ENGINE=postgresql
       - DB_NAME=cctv
       - DB_USER=orange
       - DB_PASSWORD=00oo00oo
-      - DB_HOST=db
+      - DB_HOST=postgres
       - DB_PORT=5432
-      - USE_GPU=cpu  # Set to 'cuda' if using GPU
+      - PYTHONUNBUFFERED=1
     volumes:
-      - ./django_app/media:/app/media
-      - ./django_app/models:/app/models
+      - ./media:/app/media
+      - ./models:/app/models
     depends_on:
-      - db
+      - ml-service
+      - postgres
     restart: unless-stopped
 
-  db:
-    image: postgres:16
+  postgres:
+    image: postgres:15-alpine
     container_name: hotel-cctv-db
     environment:
       - POSTGRES_DB=cctv
@@ -583,33 +690,48 @@ services:
     restart: unless-stopped
 
   nginx:
-    image: nginx:latest
+    image: nginx:alpine
     container_name: hotel-cctv-nginx
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf
-      - ./django_app/static:/static
-      - ./django_app/media:/media
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./static:/static
+      - ./media:/media
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
     depends_on:
-      - web
+      - django-backend
     restart: unless-stopped
 
 volumes:
   postgres_data:
 ```
 
+**Note**: Do not use the `version:` attribute in `docker-compose.yml` (it's obsolete in modern Docker Compose).
+
 **Run with Docker Compose**:
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 **View Logs**:
 ```bash
-docker-compose logs -f web
+# All services
+docker compose logs -f
+
+# ML service only
+docker compose logs -f ml-service
+
+# Django only
+docker compose logs -f django-backend
+```
+
+**Verify ML Service**:
+```bash
+curl http://localhost:8001/health
+curl http://localhost:8001/status
 ```
 
 ---
@@ -786,27 +908,53 @@ crontab -e
 
 ### Updates and Rollback
 
-**Update Application**:
+**Automated Update Script** (`update_server.sh`):
+
+The project includes an `update_server.sh` script that handles updating both Django and ML service:
+
 ```bash
-cd ~/Hotel-Cash-Detector
+./update_server.sh
+```
+
+This script:
+1. Pulls latest code from `main` branch
+2. Installs Django dependencies
+3. Runs database migrations
+4. Installs ML service dependencies (in `ml_service/venv/`)
+5. Restarts both systemd services
+
+**Manual Update**:
+```bash
+cd /var/www/Hotel-Cash-Detector
 git pull origin main
 
-cd django_app
+# Update Django
 source venv/bin/activate
 pip install -r requirements.txt
-
 python manage.py migrate
 python manage.py collectstatic --noinput
 
+# Update ML Service
+cd ml_service
+source venv/bin/activate
+pip install -r requirements.txt
+cd ..
+
+# Restart both services
+sudo systemctl restart hotel-ml-service
 sudo systemctl restart hotel-cctv
 ```
 
 **Rollback**:
 ```bash
 git checkout <previous-commit-hash>
-source venv/bin/activate
-pip install -r requirements.txt
+
+# Reinstall deps for both services
+source venv/bin/activate && pip install -r requirements.txt
+cd ml_service && source venv/bin/activate && pip install -r requirements.txt && cd ..
+
 python manage.py migrate
+sudo systemctl restart hotel-ml-service
 sudo systemctl restart hotel-cctv
 ```
 

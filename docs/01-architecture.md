@@ -18,7 +18,35 @@ Technical architecture and system design.
 
 ## High-Level Architecture
 
-The system follows a layered architecture with background workers for real-time video processing.
+The system follows a **microservice architecture** with a Django backend for web/API, a separate FastAPI ML service for AI detection, and background workers for real-time video processing.
+
+### Microservice Overview
+
+```
+                    ┌─────────────────┐
+                    │     Nginx       │
+                    │   (port 80/443) │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+    ┌─────────▼─────────┐         ┌─────────▼─────────┐
+    │  Django Backend    │  REST   │   ML Service      │
+    │    (port 8000)     │◄───────►│   (port 8001)     │
+    │                    │         │                   │
+    │ - User auth        │         │ - UnifiedDetector │
+    │ - Database ops     │         │ - CashDetector    │
+    │ - Video streaming  │         │ - ViolenceDetector│
+    │ - Event storage    │         │ - FireDetector    │
+    │ - API endpoints    │         │ - GeminiValidator │
+    └─────────┬──────────┘         └─────────┬─────────┘
+              │                              │
+    ┌─────────▼──────────┐         ┌─────────▼─────────┐
+    │    PostgreSQL       │         │   GPU / Models    │
+    └────────────────────┘         └───────────────────┘
+```
+
+### Detailed Architecture Diagram
 
 ```mermaid
 graph TB
@@ -28,7 +56,7 @@ graph TB
         Admin[Admin Dashboard]
     end
 
-    subgraph Django["DJANGO WEB LAYER"]
+    subgraph Django["DJANGO WEB LAYER (port 8000)"]
         Views[Views<br/>HTML Rendering]
         API[REST API<br/>JSON]
         Streaming[Video Streaming<br/>MJPEG/MP4]
@@ -40,6 +68,12 @@ graph TB
         WorkerN[Camera Worker N<br/>RTSP → Detect → Save]
     end
 
+    subgraph MLService["ML SERVICE (port 8001)"]
+        MLProxy[MLDetectorProxy<br/>Auto-fallback]
+        FastAPI[FastAPI Server<br/>REST API]
+        DetectorMgr[DetectorManager<br/>Lifecycle]
+    end
+
     subgraph Detection["DETECTION LAYER"]
         Cash[Cash Detector<br/>Pose-based]
         Violence[Violence Detector<br/>Motion + Pose]
@@ -48,7 +82,7 @@ graph TB
     end
 
     subgraph Data["DATA LAYER"]
-        DB[(SQLite/PostgreSQL<br/>Database)]
+        DB[(PostgreSQL<br/>Database)]
         Media[Media Files<br/>Clips + Thumbnails]
         Models[AI Models<br/>YOLO Weights]
     end
@@ -61,9 +95,16 @@ graph TB
     API --> Worker2
     Streaming --> WorkerN
 
-    Worker1 --> Cash
-    Worker2 --> Violence
-    WorkerN --> Fire
+    Worker1 --> MLProxy
+    Worker2 --> MLProxy
+    WorkerN --> MLProxy
+
+    MLProxy -->|ML Service ON| FastAPI
+    MLProxy -->|ML Service DOWN| Cash
+    FastAPI --> DetectorMgr
+    DetectorMgr --> Cash
+    DetectorMgr --> Violence
+    DetectorMgr --> Fire
 
     Cash --> YOLO
     Violence --> YOLO
@@ -76,15 +117,26 @@ graph TB
     style Client fill:#e3f2fd
     style Django fill:#fff3e0
     style Workers fill:#f3e5f5
+    style MLService fill:#e0f7fa
     style Detection fill:#e8f5e9
     style Data fill:#fce4ec
 ```
 
 **Architectural Patterns**:
-- **Layered Architecture**: Clear separation of concerns (client, web, detection, data)
-- **Background Workers**: Independent processes per camera for concurrent processing
+- **Microservice Architecture**: Django backend + FastAPI ML service, communicating via REST API
+- **Auto-Fallback**: `MLDetectorProxy` transparently falls back to local detection if ML service is down
+- **Auto-Recovery**: Periodic reconnection attempts (every 100 frames) to ML service when running locally
+- **Background Workers**: Independent threads per camera for concurrent processing
 - **Event-Driven**: Detection events trigger asynchronous clip saving
 - **Modular Detectors**: Cash, Violence, Fire detectors are independent, swappable modules
+
+### Detection Mode Indicators
+
+The system logs which detection mode is active for each camera:
+- `[MODE: ML_SERVICE]` - Using remote ML service for detection
+- `[MODE: LOCAL]` - Using local UnifiedDetector (fallback)
+- `[MODE: ML_SERVICE -> LOCAL]` - ML service failed, switching to local
+- `[MODE: ML_SERVICE] ML service recovered` - Switching back from local to ML service
 
 ---
 
@@ -95,8 +147,10 @@ graph TB
 | Component | Technology | Version | Purpose |
 |-----------|------------|---------|---------|
 | **Web Framework** | Django | 5.2.7 | MVC framework, ORM, admin panel |
+| **ML Service** | FastAPI | Latest | AI detection microservice |
 | **Python** | Python | 3.10+ | Core programming language |
-| **ASGI Server** | Daphne | Latest | Async request handling (optional) |
+| **WSGI Server** | Gunicorn | Latest | Production Django server |
+| **ASGI Server** | Uvicorn | Latest | Production FastAPI server |
 | **Threading** | Threading | Built-in | Background worker management |
 
 ### AI/ML Stack
@@ -139,58 +193,92 @@ graph TB
 
 ```
 Hotel-Cash-Detector/
-├── django_app/                    # Main Django application
-│   ├── manage.py                  # Django management script
-│   ├── db.sqlite3                 # SQLite database (dev)
-│   ├── .env                       # Environment variables
-│   │
-│   ├── hotel_cctv/                # Django project settings
-│   │   ├── settings.py            # Configuration
-│   │   ├── urls.py                # Root URL routing
-│   │   ├── wsgi.py                # WSGI entry point (Apache/Gunicorn)
-│   │   └── asgi.py                # ASGI entry point (Daphne/Uvicorn)
-│   │
-│   ├── cctv/                      # Main CCTV application
-│   │   ├── models.py              # Database models (User, Camera, Event)
-│   │   ├── views.py               # Views and API endpoints
-│   │   ├── urls.py                # App URL routing
-│   │   ├── admin.py               # Admin panel configuration
-│   │   ├── translations.py        # Multi-language support (EN/KO/TH/VI/ZH)
-│   │   └── context_processors.py  # Template context (language, user)
-│   │
-│   ├── templates/cctv/            # HTML templates (Django templates)
-│   │   ├── base.html              # Base template (navigation, footer)
-│   │   ├── home.html              # Dashboard (region/branch overview)
-│   │   ├── monitor_all.html       # Multi-camera live view
-│   │   ├── monitor_local.html     # Single camera with debug overlay
-│   │   ├── camera_settings.html   # Camera configuration UI
-│   │   ├── video_logs.html        # Event logs with filters
-│   │   └── ...
-│   │
-│   ├── static/                    # Static assets
-│   │   ├── css/style.css          # Dark theme styles
-│   │   └── js/main.js             # Interactive components
-│   │
-│   ├── media/                     # User-generated content
-│   │   ├── clips/                 # Event video clips (30s MP4)
-│   │   ├── thumbnails/            # Event thumbnails (JPG)
-│   │   └── json/                  # Event metadata (JSON)
-│   │
-│   └── models/                    # AI model weights
-│       ├── yolov8s.pt             # YOLOv8 Small (person detection)
-│       ├── yolov8s-pose.pt        # YOLOv8 Pose (hand tracking)
-│       └── fire_smoke_yolov8.pt   # Fire/smoke detection
+├── manage.py                      # Django management script
+├── .env                           # Environment variables
+├── docker-compose.yml             # Docker Compose (all services)
+├── update_server.sh               # Server deployment script
 │
-└── detectors/                     # Detection modules (root level)
-    ├── base_detector.py           # BaseDetector abstract class
-    ├── unified_detector.py        # UnifiedDetector + BackgroundCameraWorker
-    ├── cash_detector.py           # CashDetector (pose-based)
-    ├── violence_detector.py       # ViolenceDetector (motion + pose)
-    └── fire_detector.py           # FireDetector (YOLO + color)
+├── hotel_cctv/                    # Django project settings
+│   ├── settings.py                # Configuration
+│   ├── urls.py                    # Root URL routing
+│   ├── wsgi.py                    # WSGI entry point (Gunicorn)
+│   └── asgi.py                    # ASGI entry point
+│
+├── cctv/                          # Main CCTV application
+│   ├── models.py                  # Database models (User, Camera, Event)
+│   ├── views.py                   # Views, API endpoints, BackgroundWorker
+│   ├── ml_client.py               # ML Service client + MLDetectorProxy
+│   ├── urls.py                    # App URL routing
+│   ├── admin.py                   # Admin panel configuration
+│   ├── translations.py            # Multi-language support (EN/KO/TH/VI/ZH)
+│   └── context_processors.py      # Template context (language, user)
+│
+├── detectors/                     # Detection modules (used by Django local fallback)
+│   ├── __init__.py                # Exports + get_device() + get_device_info()
+│   ├── base_detector.py           # BaseDetector abstract class
+│   ├── unified_detector.py        # UnifiedDetector
+│   ├── cash_detector.py           # CashDetector (pose-based)
+│   ├── violence_detector.py       # ViolenceDetector (motion + pose)
+│   ├── fire_detector.py           # FireDetector (YOLO + color)
+│   └── gemini_validator.py        # Gemini AI validation
+│
+├── ml_service/                    # FastAPI ML Microservice
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main.py                # FastAPI entry point
+│   │   ├── config.py              # ML service settings
+│   │   ├── models/
+│   │   │   └── schemas.py         # Pydantic request/response models
+│   │   ├── api/
+│   │   │   └── routes.py          # API endpoints
+│   │   └── services/
+│   │       └── detector_manager.py # Detector lifecycle management
+│   ├── detectors/                 # Copied from root detectors/
+│   │   ├── __init__.py            # Includes get_device() + get_device_info()
+│   │   ├── base_detector.py
+│   │   ├── unified_detector.py
+│   │   ├── cash_detector.py
+│   │   ├── violence_detector.py
+│   │   ├── fire_detector.py
+│   │   └── gemini_validator.py
+│   ├── requirements.txt           # ML service dependencies
+│   └── Dockerfile                 # ML service container
+│
+├── templates/cctv/                # HTML templates
+│   ├── base.html                  # Base template (navigation, footer)
+│   ├── home.html                  # Dashboard (region/branch overview)
+│   ├── monitor_all.html           # Multi-camera live view
+│   ├── monitor_local.html         # Single camera with debug overlay
+│   ├── camera_settings.html       # Camera configuration UI
+│   └── video_logs.html            # Event logs with filters
+│
+├── static/                        # Static assets
+│   ├── css/style.css              # Dark theme styles
+│   └── js/main.js                 # Interactive components
+│
+├── media/                         # User-generated content
+│   ├── clips/                     # Event video clips (30s MP4)
+│   ├── thumbnails/                # Event thumbnails (JPG)
+│   └── json/                      # Event metadata (JSON)
+│
+├── models/                        # AI model weights
+│   ├── yolov8s.pt                 # YOLOv8 Small (person detection)
+│   ├── yolov8s-pose.pt            # YOLOv8 Pose (hand tracking)
+│   └── fire_smoke_yolov8.pt       # Fire/smoke detection
+│
+├── docs/                          # Documentation
+│   ├── 00-overview.md
+│   ├── 01-architecture.md
+│   └── ...
+│
+└── nginx/                         # Nginx configuration
+    └── nginx.conf                 # Reverse proxy config
 ```
 
 **Key Design Decisions**:
-- **Detectors at Root**: Allows importing from Django app and potential standalone use
+- **Microservice Separation**: ML detectors run in a separate FastAPI service for independent scaling
+- **Auto-Fallback**: `MLDetectorProxy` in `cctv/ml_client.py` handles ML service ↔ local detector switching
+- **Duplicated Detectors**: `ml_service/detectors/` is a copy of root `detectors/` for ML service independence
 - **Media Separation**: Clips, thumbnails, JSON kept separate for easy backup/cleanup
 - **Template-Based UI**: Server-side rendering for simplicity and SEO
 - **Static Models**: Model weights stored locally (no runtime downloads in production)
@@ -207,24 +295,27 @@ sequenceDiagram
     participant Views as Django Views
     participant Models as Django Models
     participant Worker as Background Worker
-    participant Detector as UnifiedDetector
+    participant Proxy as MLDetectorProxy
+    participant ML as ML Service (8001)
+    participant Local as Local Detector
     participant DB as Database
 
     User->>Views: GET /monitor/CAM001/
     Views->>Models: Camera.objects.get(id=1)
     Models-->>Views: Camera object
     Views->>Worker: Start worker if not running
-    Worker->>Detector: Initialize detectors
-    Detector-->>Worker: Ready
+    Worker->>Proxy: Initialize (camera_id)
+    Proxy->>ML: POST /detectors/{id}/initialize
+    alt ML Service Available
+        ML-->>Proxy: 200 OK [MODE: ML_SERVICE]
+    else ML Service Down
+        Proxy->>Local: Load UnifiedDetector [MODE: LOCAL]
+    end
     Worker->>Worker: Loop: Read RTSP stream
-    Worker->>Detector: Process frame
-    Detector-->>Worker: Detection result
+    Worker->>Proxy: process_frame(frame)
+    Proxy-->>Worker: Detection result
     Worker->>DB: Save event if detected
     Views-->>User: Render monitor.html
-    User->>Views: GET /api/stream/CAM001/
-    Views->>Worker: Get latest frame
-    Worker-->>Views: MJPEG frame
-    Views-->>User: Stream MJPEG
 ```
 
 ### URL Routing
@@ -346,14 +437,42 @@ graph LR
     FFmpeg --> DB[(Database)]
 ```
 
-### UnifiedDetector
+### MLDetectorProxy (Primary)
 
-**Main Detector Class** that coordinates all detection types:
+When `USE_ML_SERVICE=True`, the **MLDetectorProxy** is used as a drop-in replacement for `UnifiedDetector`. It delegates frame processing to the ML service via HTTP and automatically falls back to a local detector if the service goes down.
+
+```python
+class MLDetectorProxy:
+    RECONNECT_CHECK_INTERVAL = 100  # Check ML service every 100 frames
+
+    def __init__(self, config, camera_id):
+        self.client = MLServiceClient()       # HTTP client for ML service
+        self._using_ml_service = False         # Mode flag
+        self._local_detector = None            # Fallback detector
+        self._initialize_remote()              # Try ML service first
+
+    def process_frame(self, frame, draw_overlay=True):
+        # Periodic reconnect check when running locally
+        if not self._using_ml_service and frames >= RECONNECT_CHECK_INTERVAL:
+            self._try_reconnect_ml_service()
+
+        if self._using_ml_service:
+            try:
+                return self.client.process_frame(...)  # ML service call
+            except Exception:
+                self._using_ml_service = False
+                self._load_local_detector()            # Auto-fallback
+
+        return self._local_detector.process_frame(frame, draw_overlay)
+```
+
+### UnifiedDetector (Fallback / Local Mode)
+
+**Main Detector Class** that coordinates all detection types locally:
 
 ```python
 class UnifiedDetector:
-    def __init__(self, camera):
-        self.camera = camera
+    def __init__(self, config):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         # Load AI models
@@ -362,34 +481,17 @@ class UnifiedDetector:
         self.fire_model = YOLO('models/fire_smoke_yolov8.pt').to(self.device)
 
         # Initialize detectors
-        self.cash_detector = CashDetector(camera)
-        self.violence_detector = ViolenceDetector(camera)
-        self.fire_detector = FireDetector(camera)
+        self.cash_detector = CashDetector(config)
+        self.violence_detector = ViolenceDetector(config)
+        self.fire_detector = FireDetector(config)
 
     def process_frame(self, frame):
         """Process single frame through all enabled detectors."""
-        results = {
-            'cash': None,
-            'violence': None,
-            'fire': None
-        }
-
         # Run YOLO inference once for efficiency
         yolo_results = self.yolo_model(frame, device=self.device, verbose=False)
         pose_results = self.pose_model(frame, device=self.device, verbose=False)
 
-        # Cash detection (if enabled)
-        if self.camera.detect_cash:
-            results['cash'] = self.cash_detector.detect(frame, pose_results)
-
-        # Violence detection (if enabled)
-        if self.camera.detect_violence:
-            results['violence'] = self.violence_detector.detect(frame, pose_results)
-
-        # Fire detection (if enabled)
-        if self.camera.detect_fire:
-            results['fire'] = self.fire_detector.detect(frame, yolo_results)
-
+        # Run enabled detectors...
         return results
 ```
 

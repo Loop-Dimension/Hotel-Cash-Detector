@@ -4,14 +4,139 @@ Common issues, solutions, and debugging strategies.
 
 ## Table of Contents
 
-1. [RTSP Stream Issues](#rtsp-stream-issues)
-2. [Detection Problems](#detection-problems)
-3. [Performance Issues](#performance-issues)
-4. [GPU/CUDA Issues](#gpucuda-issues)
-5. [Database Issues](#database-issues)
-6. [Video Clip Issues](#video-clip-issues)
-7. [Debug Mode](#debug-mode)
-8. [Log Locations](#log-locations)
+1. [ML Service Issues](#ml-service-issues)
+2. [RTSP Stream Issues](#rtsp-stream-issues)
+3. [Detection Problems](#detection-problems)
+4. [Performance Issues](#performance-issues)
+5. [GPU/CUDA Issues](#gpucuda-issues)
+6. [Database Issues](#database-issues)
+7. [Video Clip Issues](#video-clip-issues)
+8. [Debug Mode](#debug-mode)
+9. [Log Locations](#log-locations)
+
+---
+
+## ML Service Issues
+
+### ML Service Not Starting
+
+**Symptom**: `hotel-ml-service` systemd service fails to start.
+
+**Check Status**:
+```bash
+sudo systemctl status hotel-ml-service
+sudo journalctl -u hotel-ml-service -n 50
+```
+
+**Common Causes**:
+
+1. **Missing `get_device()` in ML service detectors**:
+   ```
+   ImportError: cannot import name 'get_device' from 'detectors'
+   ```
+   **Fix**: Ensure `ml_service/detectors/__init__.py` includes `get_device()` and `get_device_info()` functions (copied from main `detectors/__init__.py`).
+
+2. **Missing dependencies**:
+   ```bash
+   cd /var/www/Hotel-Cash-Detector/ml_service
+   source venv/bin/activate
+   pip install -r requirements.txt
+   ```
+
+3. **Wrong Python path**: Verify `venv/bin` path in systemd service file.
+
+---
+
+### ML Service Returns 422 Errors
+
+**Symptom**: Django logs show `422 Unprocessable Entity` when calling ML service.
+
+**Root Cause**: Pydantic schema type mismatch. Django sends `float` values for polygon coordinates but ML service expected `int`.
+
+**Fix**: Ensure `ml_service/app/models/schemas.py` uses `float` for polygon coordinates:
+```python
+# CORRECT
+cashier_zone_polygon: Optional[List[List[float]]] = None
+cash_drawer_zone_polygon: Optional[List[List[float]]] = None
+hand_touch_distance: float = 100
+
+# WRONG (will cause 422)
+cashier_zone_polygon: Optional[List[List[int]]] = None
+hand_touch_distance: int = 100
+```
+
+---
+
+### All Cameras Showing [MODE: LOCAL]
+
+**Symptom**: Django logs show all cameras using local detection even though `USE_ML_SERVICE=True`.
+
+**Checklist**:
+
+1. **ML service running?**:
+   ```bash
+   curl http://localhost:8001/health
+   # Should return: {"status": "healthy", ...}
+   ```
+
+2. **Settings correct?**:
+   ```bash
+   # Check Django .env
+   grep ML_ .env
+   # Should show:
+   # USE_ML_SERVICE=True
+   # ML_SERVICE_URL=http://localhost:8001
+   ```
+
+3. **ML service errors?**:
+   ```bash
+   sudo journalctl -u hotel-ml-service -f
+   ```
+
+4. **Auto-fallback active**: If ML service was down at startup, Django auto-falls back to local. Restart Django after ML service is healthy:
+   ```bash
+   sudo systemctl restart hotel-cctv
+   ```
+
+---
+
+### No MODE Indicators in Logs
+
+**Symptom**: `journalctl -u hotel-cctv -f` shows detection is running but no `[MODE: ML_SERVICE]` or `[MODE: LOCAL]` messages.
+
+**Root Cause**: Missing `PYTHONUNBUFFERED=1` in systemd service.
+
+**Fix**: Add to `/etc/systemd/system/hotel-cctv.service`:
+```ini
+[Service]
+Environment="PYTHONUNBUFFERED=1"
+```
+
+Then:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart hotel-cctv
+```
+
+**Explanation**: Python buffers stdout from background threads by default. `PYTHONUNBUFFERED=1` forces immediate output, so `print()` statements from `BackgroundWorker` threads appear in `journalctl` in real-time.
+
+---
+
+### ML Service Recovery Not Working
+
+**Symptom**: ML service is back up but cameras still show `[MODE: LOCAL]`.
+
+**Explanation**: The `MLDetectorProxy` checks for ML service recovery every **100 frames**. With ML service HTTP latency (~50ms per frame), this means a reconnect check approximately every 5 seconds.
+
+**Force immediate reconnect**: Restart Django:
+```bash
+sudo systemctl restart hotel-cctv
+```
+
+**Expected log on recovery**:
+```
+[Camera-32] [MODE: ML_SERVICE] ML service recovered, switching back from LOCAL
+```
 
 ---
 
@@ -813,9 +938,10 @@ django.db.utils.OperationalError: could not connect to server: Connection refuse
 | Log Type | Location | Access |
 |----------|----------|--------|
 | **Django Server** | Console/stdout | Terminal where `runserver` was started |
+| **Django Systemd** | journald | `sudo journalctl -u hotel-cctv -f` |
+| **ML Service** | journald | `sudo journalctl -u hotel-ml-service -f` |
 | **Detection Logs** | Console/stdout | Terminal (if `ENABLE_DETECTION_LOGS=True`) |
-| **Worker Logs** | Console/stdout | Terminal or systemd journal |
-| **Systemd Logs** | `/var/log/syslog` | `sudo journalctl -u hotel-cctv -f` |
+| **MODE Indicators** | Django stdout | `sudo journalctl -u hotel-cctv -f` (requires `PYTHONUNBUFFERED=1`) |
 | **PostgreSQL Logs** | `/var/log/postgresql/` | `sudo tail -f /var/log/postgresql/*.log` |
 | **Nginx Logs** | `/var/log/nginx/` | `sudo tail -f /var/log/nginx/error.log` |
 

@@ -17,13 +17,15 @@ End-to-end workflows and sequence diagrams for detection processes.
 
 ### Complete Detection Sequence
 
+The detection flow now supports two modes: **ML Service** (remote) and **Local** (fallback). The `MLDetectorProxy` handles this transparently.
+
 ```mermaid
 sequenceDiagram
     participant Worker as Background Worker
     participant RTSP as RTSP Camera
-    participant Detector as UnifiedDetector
-    participant Pose as YOLOv8-Pose Model
-    participant Cash as CashDetector
+    participant Proxy as MLDetectorProxy
+    participant ML as ML Service (port 8001)
+    participant Local as Local UnifiedDetector
     participant DB as Database
     participant FS as File System
 
@@ -32,44 +34,22 @@ sequenceDiagram
 
     Worker->>Worker: Add to buffer<br/>(last 900 frames)
 
-    Worker->>Detector: process_frame(frame)
+    Worker->>Proxy: process_frame(frame)
 
-    Detector->>Pose: Run inference
-    Pose-->>Detector: Keypoints (17 per person)
-
-    Detector->>Cash: detect(frame, pose_results)
-
-    Cash->>Cash: Extract people with keypoints
-    Cash->>Cash: Calculate center points<br/>(hip or shoulder)
-
-    loop For each person
-        Cash->>Cash: Classify zone:<br/>IN (cashier) or OUT (customer)
+    alt MODE: ML_SERVICE
+        Proxy->>ML: POST /detect<br/>(base64 frame)
+        ML->>ML: YOLOv8-Pose → Cash/Violence/Fire
+        ML-->>Proxy: DetectionResponse {<br/>  detections, alerts,<br/>  processed_frame_base64<br/>}
+    else MODE: LOCAL (fallback)
+        Proxy->>Local: process_frame(frame)
+        Local->>Local: YOLOv8-Pose → Cash/Violence/Fire
+        Local-->>Proxy: Detection results
     end
 
-    Cash->>Cash: Extract hand positions<br/>(wrists)
-
-    loop For each person pair
-        Cash->>Cash: Check XOR:<br/>(p1_in XOR p2_in)?
-
-        alt Valid pair (cashier-customer)
-            Cash->>Cash: Measure hand distance:<br/>√((x1-x2)² + (y1-y2)²)
-
-            alt Distance < threshold
-                Cash->>Cash: Increment consecutive_frames
-
-                alt consecutive_frames >= min_frames
-                    Cash-->>Detector: Detection {<br/>  cashier: {...},<br/>  customer: {...},<br/>  distance: 87.3<br/>}
-                end
-            else Distance >= threshold
-                Cash->>Cash: Reset consecutive_frames
-            end
-        else Invalid pair (skip)
-            Cash->>Cash: Skip (both IN or both OUT)
-        end
-    end
+    Note over Proxy: Every 100 frames (when LOCAL):<br/>Try reconnecting to ML service
 
     alt Detection triggered
-        Detector-->>Worker: Event detected
+        Proxy-->>Worker: Event detected
 
         Worker->>DB: Create Event record
         DB-->>Worker: event_id

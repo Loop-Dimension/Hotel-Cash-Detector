@@ -5,22 +5,28 @@ Complete reference for all external system integrations.
 ## Table of Contents
 
 1. [Integration Overview](#integration-overview)
-2. [HotelPMS Integration](#hotelpms-integration)
-3. [RTSP Camera Integration](#rtsp-camera-integration)
-4. [GPU/CUDA Integration](#gpucuda-integration)
-5. [Troubleshooting](#troubleshooting)
+2. [ML Service Integration](#ml-service-integration)
+3. [HotelPMS Integration](#hotelpms-integration)
+4. [RTSP Camera Integration](#rtsp-camera-integration)
+5. [GPU/CUDA Integration](#gpucuda-integration)
+6. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Integration Overview
 
-The CCTV system integrates with three main components:
+The CCTV system integrates with four main components:
 
 ```mermaid
 graph TB
     subgraph CCTV["Hotel Cash Detector"]
-        Django[Django Application]
+        Django[Django Backend<br/>port 8000]
+        MLProxy[MLDetectorProxy]
         Workers[Background Workers]
+    end
+
+    subgraph Services["Internal Services"]
+        MLService[ML Service<br/>FastAPI port 8001]
         Detector[AI Detectors]
     end
 
@@ -32,17 +38,121 @@ graph TB
 
     Django -.->|"Optional<br/>Project Sync"| PMS
     Workers -->|"RTSP/TCP<br/>Video Streams"| Cameras
+    MLProxy -->|"REST API<br/>HTTP"| MLService
+    MLService --> Detector
     Detector -->|"CUDA<br/>Inference"| GPU
 
     style CCTV fill:#e8f5e9
+    style Services fill:#e0f7fa
     style External fill:#ffe0b2
 ```
 
 | Integration | Purpose | Required | Protocol |
 |------------|---------|----------|----------|
+| ML Service | AI detection microservice | ⚠️ Recommended | REST API (HTTP) |
 | HotelPMS | Central authentication, project sync | ❌ Optional | REST API |
 | RTSP Cameras | Real-time video streams | ✅ Yes | RTSP over TCP |
 | GPU/CUDA | AI model acceleration | ⚠️ Recommended | CUDA API |
+
+---
+
+## ML Service Integration
+
+### Overview
+
+The **ML Service** is a standalone FastAPI microservice that handles all AI detection (cash, violence, fire). Django communicates with it via REST API through the `MLDetectorProxy` class.
+
+### Architecture
+
+```mermaid
+sequenceDiagram
+    participant Worker as Django BackgroundWorker
+    participant Proxy as MLDetectorProxy
+    participant ML as ML Service (port 8001)
+    participant Local as Local UnifiedDetector
+
+    Worker->>Proxy: Initialize(camera_id, config)
+    Proxy->>ML: POST /detectors/{camera_id}/initialize
+    alt ML Service Available
+        ML-->>Proxy: 200 OK
+        Note right of Proxy: [MODE: ML_SERVICE]
+    else ML Service Down
+        Proxy->>Local: Load UnifiedDetector
+        Note right of Proxy: [MODE: LOCAL]
+    end
+
+    loop Every frame
+        Worker->>Proxy: process_frame(frame)
+        alt Using ML Service
+            Proxy->>ML: POST /detect (base64 frame)
+            ML-->>Proxy: DetectionResponse
+        else Using Local
+            Proxy->>Local: process_frame(frame)
+            Local-->>Proxy: Detection result
+        end
+        Proxy-->>Worker: Detections + alerts
+    end
+
+    Note over Proxy: Every 100 frames (when LOCAL):<br/>Try reconnecting to ML service
+```
+
+### Configuration
+
+**Environment Variables**:
+```env
+# In Django .env
+USE_ML_SERVICE=True
+ML_SERVICE_URL=http://localhost:8001
+ML_SERVICE_TIMEOUT=30
+```
+
+### ML Service API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/status` | GET | Service status + GPU info |
+| `/detectors/{camera_id}/initialize` | POST | Initialize detector for camera |
+| `/detectors/{camera_id}` | DELETE | Remove detector |
+| `/detectors` | GET | List active detectors |
+| `/detect` | POST | Process single frame |
+| `/detect/batch` | POST | Process multiple frames |
+| `/validate` | POST | Gemini image validation |
+| `/validate/video` | POST | Gemini video validation |
+| `/detectors/{camera_id}/zones` | POST | Update zone polygons |
+
+### Auto-Fallback Behavior
+
+The `MLDetectorProxy` (in `cctv/ml_client.py`) provides transparent fallback:
+
+1. **Startup**: Tries to connect to ML service first
+2. **ML Service Available**: All frames sent to ML service via HTTP (`[MODE: ML_SERVICE]`)
+3. **ML Service Fails**: Automatically loads local `UnifiedDetector` (`[MODE: LOCAL]`)
+4. **Periodic Reconnect**: Every 100 frames, checks if ML service recovered
+5. **Recovery**: Switches back to ML service when available (`[MODE: ML_SERVICE] ML service recovered`)
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `cctv/ml_client.py` | `MLServiceClient` (HTTP) + `MLDetectorProxy` (fallback logic) |
+| `ml_service/app/main.py` | FastAPI application entry point |
+| `ml_service/app/api/routes.py` | API endpoint handlers |
+| `ml_service/app/services/detector_manager.py` | Detector lifecycle management |
+| `ml_service/app/models/schemas.py` | Pydantic request/response schemas |
+
+### Testing ML Service
+
+```bash
+# Health check
+curl http://localhost:8001/health
+
+# Service status
+curl http://localhost:8001/status
+
+# List active detectors
+curl http://localhost:8001/detectors
+```
 
 ---
 

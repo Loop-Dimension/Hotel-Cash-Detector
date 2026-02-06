@@ -39,8 +39,10 @@ The **Hotel Cash Detector** is an AI-powered CCTV monitoring system designed for
 
 ### System Architecture
 
+- **Microservice architecture**: Django backend (port 8000) + FastAPI ML service (port 8001)
 - **Real-time RTSP video stream processing** via TCP
 - **Background detection workers** (one per camera)
+- **Auto-fallback detection**: ML service with automatic fallback to local detectors
 - **Multi-camera support** (8+ simultaneous streams)
 - **Event logging with video clip recording** (30-second clips)
 - **Multi-language support** (English, Korean, Thai, Vietnamese, Chinese)
@@ -350,8 +352,9 @@ The **Hotel Cash Detector** is an AI-powered CCTV monitoring system designed for
 
 **Ports**:
 - 8000 (Django web server)
+- 8001 (FastAPI ML service)
 - 554 (RTSP from cameras)
-- 443 (HTTPS in production)
+- 80/443 (Nginx reverse proxy in production)
 
 ---
 
@@ -359,9 +362,10 @@ The **Hotel Cash Detector** is an AI-powered CCTV monitoring system designed for
 
 The CCTV system integrates with:
 
-1. **HotelPMS** - Central authentication and project synchronization
-2. **RTSP Cameras** - Real-time video streams
-3. **GPU** - CUDA acceleration for AI inference
+1. **ML Service** - FastAPI microservice for AI detection (port 8001)
+2. **HotelPMS** - Central authentication and project synchronization
+3. **RTSP Cameras** - Real-time video streams
+4. **GPU** - CUDA acceleration for AI inference (used by ML service)
 
 For detailed integration documentation, see:
 - [06 - Integrations](06-integrations.md)

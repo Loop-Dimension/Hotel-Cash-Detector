@@ -34,6 +34,13 @@ SECRET_KEY=your-super-secret-key-change-in-production
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1,192.168.1.100
 
+# =============================================================================
+# ML Service Configuration
+# =============================================================================
+USE_ML_SERVICE=True
+ML_SERVICE_URL=http://localhost:8001
+ML_SERVICE_TIMEOUT=30
+
 # Gemini AI Configuration (Optional Validation)
 GEMINI_API_KEY=your-gemini-api-key-here
 GEMINI_VALIDATION_ENABLED=True
@@ -70,7 +77,7 @@ MIN_FIRE_FRAMES=10
 MIN_FIRE_AREA=3000
 FIRE_COOLDOWN=60
 
-# Model Paths (relative to django_app/)
+# Model Paths (relative to project root)
 YOLO_MODEL=models/yolov8s.pt
 POSE_MODEL=models/yolov8s-pose.pt
 FIRE_MODEL=models/fire_smoke_yolov8.pt
@@ -124,6 +131,47 @@ python -c "import secrets; print(secrets.token_hex(32))"
 - **Required**: ✅ Yes (production)
 - **Default**: `localhost,127.0.0.1`
 - **Example**: `localhost,cctv.hio.ai.kr,192.168.1.100`
+
+---
+
+### ML Service Configuration
+
+#### USE_ML_SERVICE
+
+- **Value**: `True` | `False`
+- **Purpose**: Enable/disable the FastAPI ML microservice for detection
+- **Required**: ❌ No
+- **Default**: `False`
+- **Note**: When `True`, Django delegates detection to the ML service. When `False`, uses local detectors.
+
+**Behavior**:
+- `True`: Django creates `MLDetectorProxy` which sends frames to ML service via HTTP
+- `False`: Django creates `UnifiedDetector` locally (original behavior)
+- Auto-fallback: If ML service goes down, automatically switches to local detection
+
+#### ML_SERVICE_URL
+
+- **Value**: URL string
+- **Purpose**: Base URL of the FastAPI ML service
+- **Required**: ✅ Yes (when `USE_ML_SERVICE=True`)
+- **Default**: `http://localhost:8001`
+- **Examples**:
+  - Local: `http://localhost:8001`
+  - Docker: `http://ml-service:8001`
+  - Remote: `http://192.168.1.100:8001`
+
+#### ML_SERVICE_TIMEOUT
+
+- **Value**: Integer (seconds)
+- **Purpose**: HTTP request timeout for ML service calls
+- **Required**: ❌ No
+- **Default**: `30`
+- **Recommended**: `10-60`
+
+**Notes**:
+- Higher values for slow networks or large frames
+- Lower values for faster fallback to local detection
+- Frame processing typically takes 20-50ms on GPU
 
 ---
 
@@ -413,6 +461,11 @@ print(torch.cuda.get_device_name(0))  # GPU name
 SECRET_KEY=<GENERATE-WITH-secrets.token_hex-32>
 DEBUG=False
 ALLOWED_HOSTS=cctv.hio.ai.kr,your-ip-address
+
+# ML Service (Production)
+USE_ML_SERVICE=True
+ML_SERVICE_URL=http://localhost:8001
+ML_SERVICE_TIMEOUT=30
 
 # Gemini AI (Optional)
 GEMINI_API_KEY=<YOUR-GEMINI-KEY>
