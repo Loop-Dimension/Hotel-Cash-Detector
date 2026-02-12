@@ -173,8 +173,7 @@ sequenceDiagram
 
     Admin->>PMS: Create/update project
     PMS->>PMS: Save to PMS database
-    PMS->>CCTV: POST /api/pms/sync-project/
-    Note right of PMS: {<br/>  api_key: "...",<br/>  project: {...}<br/>}
+    PMS->>CCTV: POST /api/pms/sync-project/<br/>(api_key, project data)
     CCTV->>CCTV: Verify API key
     CCTV->>DB: INSERT/UPDATE Branch
     CCTV-->>PMS: {success: true}
