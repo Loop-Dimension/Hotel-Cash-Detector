@@ -75,10 +75,10 @@ sequenceDiagram
     Proxy->>ML: POST /detectors/{camera_id}/initialize
     alt ML Service Available
         ML-->>Proxy: 200 OK
-        Note right of Proxy: [MODE: ML_SERVICE]
+        Proxy->>Proxy: Set MODE = ML_SERVICE
     else ML Service Down
         Proxy->>Local: Load UnifiedDetector
-        Note right of Proxy: [MODE: LOCAL]
+        Proxy->>Proxy: Set MODE = LOCAL
     end
 
     loop Every frame
