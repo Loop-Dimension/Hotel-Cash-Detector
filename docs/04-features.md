@@ -47,7 +47,7 @@ flowchart TB
     Pairs -->|Both OUT zone| Skip2[Skip:<br/>Customer-Customer]
     Pairs -->|XOR: One IN,<br/>One OUT| Valid[Valid Pair:<br/>Cashier-Customer]
 
-    Valid --> Distance[Measure Hand Distance:<br/>√((x1-x2)² + (y1-y2)²)]
+    Valid --> Distance["Measure Hand Distance:<br/>√( (x1-x2)² + (y1-y2)² )"]
 
     Distance --> Threshold{Distance <br/> Threshold?}
 
